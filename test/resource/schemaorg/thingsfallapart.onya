@@ -1,0 +1,34 @@
+[//]: # (-*- mode: markdown -*- )
+[//]: # (Established syntax for comments in Markdown)
+
+# @docheader
+
+* @iri:
+  * @base: http://example.org/classics/
+  * @resource-type: https://schema.org/
+  * @schema: https://schema.org/
+
+# TFA [Book]
+
+* name: Things Fall Apart
+* image: http://example.org/classics/tfa-book-cover.jpg
+* isbn: 9781841593272
+* format -> Paperback
+* author -> CAchebe
+* publisher -> Heinemann
+  * when: 1958
+  * where: London  <!-- Should properly be reified to a node, but in post-processing -->
+    * country: UK
+
+# CAchebe [Person]
+
+* name: Chinụalụmọgụ Achebe
+* birthDate: 1930
+
+# Heinemann [Organization]
+
+* name: William Heinemann Ltd.
+* birthDate: 1930
+
+# Paperback [BookFormat]
+
