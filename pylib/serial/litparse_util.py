@@ -42,7 +42,7 @@ HEADER_PAT = re.compile('h\\d')
 
 class parser:
     '''
-    Reusable object for parsing Versa Literate
+    Reusable object for parsing Onya Literate
 
     Note (and to go in doc) such as doc/literate_format.md
 
@@ -63,16 +63,15 @@ class parser:
         if config: self.handle_config()
         self.encoding = encoding
         self.comment_ext = mkdcomments.CommentsExtension()
-        # Used to resolve relative URI references
-        # XXX These get reset in run(). Do we need to set them here? Maybe just for clarity of data members?
-        self.schemabase = None
+        # Remaining data members reset in run(), but explicitly set here for clarity
+        self.schemabase = None # For resolving relative URI references to properties, classes, etc.
         self.rtbase = None
-        # Source URI of a document being parsed
-        # XXX Do we need a separate doc base?
-        self.document_iri = None
+        self.document_iri = None # Source URI of the document being parsed. Also used to resolve relative resource IDs
 
     def handle_config(self):
-        # Set up configuration to interpret the conventions for the Markdown
+        '''
+        Configure parser for conventions used to interpret Markdown patterns
+        '''
         # Mapping takes syntactical elements such as header levels in Markdown and associates a resource type with the specified resources
         self.syntaxtypemap = {}
         if self.config.get('autotype-h1'): self.syntaxtypemap['h1'] = self.config.get('autotype-h1')
@@ -82,11 +81,14 @@ class parser:
         self.setup_interpretations(interp_stanza)
 
     def setup_interpretations(self, interp):
+        '''
+        Parse interpretations stanza in markdown format to update parser config
+        '''
         self.interpretations = {}
-        #Map the interpretation IRIs to functions to do the data prep
+        # Map interpretation IRIs to functions that perform the data prep at runtime
         for prop, interp_key in interp.items():
             if interp_key.startswith('@'):
-                interp_key = iri.absolutize(interp_key[1:], VERSA_BASEIRI)
+                interp_key = iri.absolutize(interp_key[1:], ONYA)
             if interp_key in PREP_METHODS:
                 self.interpretations[prop] = PREP_METHODS[interp_key]
             else:
@@ -121,6 +123,9 @@ class parser:
         self.base = self.schemabase = self.rtbase = \
             self.document_iri = self.default_lang = None
         self.new_nodes = set()
+        self.target_graph = g
+        self.docheader_node = None
+        self.new_nodes = set()
 
         # Parse the Markdown
         # Alternately:
@@ -134,6 +139,7 @@ class parser:
         tb = treebuilder()
         h = '<html>' + h + '</html>'
         root = html5.parse(h)
+        print(root.xml_encode())
         # Each section contains one resource description, but the special one named @docheader contains info to help interpret the rest
         first_h1 = next(select_name(descendants(root), 'h1'))
 
@@ -166,25 +172,39 @@ class parser:
                 rtype = self.syntaxtypemap.get(sect.xml_name)
 
             # We have enough info to init the node this section represents
-            new_node = node(rid, rtype)
+            new_node = self.target_graph.node(rid, rtype)
+            self.new_nodes.add(new_node)
 
-            fields(sect, new_node, schema)
+            self.fields(sect, new_node)
 
-        return self.document_iri
+        return self.docheader_node, self.new_nodes # self.document_iri
+
+    def fields(self, sect, node):
+        '''
+        Each section represents a resource and contains a list with its properties
+        This generator parses the list and yields the key value pairs representing the properties
+        Some properties have attributes, expressed in markdown as a nested list. If present these attributes
+        Are yielded as well, else None is yielded
+        '''
+        # Pull all the list elements until the next header. This accommodates multiple lists in a section
+        try:
+            sect_body_items = itertools.takewhile(lambda x: HEADER_PAT.match(x.xml_name) is None, select_elements(following_siblings(sect)))
+        except StopIteration:
+            return
+
+        self.process_block(sect_body_items, node, recognize_edges=True)
 
     def handle_docheader(self, docheader_elem):
         # Special node to hold document header info for processing
         # FIXME: reconsider ID & type
-        docheader_node = node(ONYA('docheader'), ONYA('docheader'))
+        self.docheader_node = node(ONYA('docheader'), ONYA('docheader'))
 
         iris = {}
 
         # Gather document-level metadata from the @docheader section
-        fields(docheader_elem, docheader_node, None)
+        fields(docheader_elem, self.docheader_node, None)
 
-
-
-        for prop in docheader_node.properties:
+        for prop in self.docheader_node.properties:
             # @iri section is where key IRI prefixes can be set
             if prop == '@iri':
                 for (k, uri, typeindic) in subfield_list:
@@ -206,62 +226,58 @@ class parser:
                 self.setup_interpretations(interp)
             # Setting an IRI for this very document being parsed
             elif prop == '@document':
-                document_iri = val
+                self.document_iri = val
             elif prop == '@language':
-                default_lang = val
+                self.default_lang = val
             # If we have a resource to which to attach them, just attach all other properties
-            elif document_iri or base:
-                rid = document_iri or base
-                fullprop = I(iri.absolutize(prop, schemabase or base))
+            elif self.document_iri or self.base:
+                rid = self.document_iri or self.base
+                fullprop = I(iri.absolutize(prop, self.schemabase or self.base))
                 if fullprop in self.interpretations:
-                    val = self.interpretations[fullprop](val, rid=rid, fullprop=fullprop, base=base, model=model)
-                    if val is not None: model.add(rid, fullprop, val)
+                    val = self.interpretations[fullprop](val, rid=rid, fullprop=fullprop, base=base)
+                    if val is not None: self.docheader_node.add_property(fullprop, val)
                 else:
-                    model.add(rid, fullprop, val)
+                    self.docheader_node.add_property(fullprop, val)
 
         # Default IRI prefixes if @iri/@base is set
         if not self.schemabase: self.schemabase = base
         if not self.rtbase: self.rtbase = base
         if not self.document_iri: self.document_iri = base
 
-        schema = (base, schemabase, rtbase, document_iri, default_lang)
+    def process_block(self, block, stem, recognize_edges=False):
+        block_text = get_block_text(next(block))
+        print('GRIPPO', (block_text,))
+        label, val, typeindic = parse_block(block_text)
+        if label:
+            label = expand_iri(label, self.base)
+            # Err, what's this logic again?
+            # valmatch = URI_ABBR_PAT.match(aval)
+            # if valmatch:
+            #     uri = iris[valmatch.group(1)]
+            #     attrs[fullaprop] = URI_ABBR_PAT.sub(uri + '\\2\\3', aval)
+            if typeindic == RES_VAL:
+                val = expand_iri(val, self.res_base)
+            elif typeindic == TEXT_VAL:
+                # FIXME: Handle default lang
+                # if '@lang' not in attrs: attrs['@lang'] = default_lang
+                pass
+            elif typeindic == UNKNOWN_VAL:
+                val_iri_match = URI_EXPLICIT_PAT.match(val)
+                if val_iri_match:
+                    val = expand_iri(val, self.res_base)
+                # elif label in self.interpretations:
+                #     val = self.interpretations[label](val, rid=rid, fullprop=fullprop, base=base)
 
+            prop = stem.add_property(label, val)
 
-def handle_resourcelist(ltext, **kwargs):
-    '''
-    Helper converts lists of resources from text (i.e. Markdown),
-    including absolutizing relative IRIs
-    '''
-    base = kwargs.get('base', ONYA)
-    model = kwargs.get('model')
-    iris = ltext.strip().split()
-    newlist = model.generate_resource()
-    for i in iris:
-        model.add(newlist, ONYA('item'), base(i))
-    return newlist
+            # Nested list expresses attributes on a property
+            li_iter = ( li for elem in select_name(block, 'ul') for li in select_name(elem, 'li') )
 
+            for li in li_iter:
+                # Notice recognize_edges is only true at top level
+                process_block(li, prop)
 
-def handle_resourceset(ltext, **kwargs):
-    '''
-    Helper converts lists of resources from text (i.e. Markdown),
-    including absolutizing relative IRIs
-    '''
-    fullprop=kwargs.get('fullprop')
-    rid=kwargs.get('rid')
-    base=kwargs.get('base', ONYA)
-    model=kwargs.get('model')
-    iris = ltext.strip().split()
-    for i in iris:
-        model.add(rid, fullprop, I(iri.absolutize(i, base)))
-    return None
-
-
-PREP_METHODS = {
-    ONYA('text'): lambda x, **kwargs: x,
-    ONYA('resource'): lambda x, base=ONYA, **kwargs: I(iri.absolutize(x, base)),
-    ONYA('resourceset'): handle_resourceset,
-}
-
+        return
 
 def get_block_text(block):
     '''
@@ -285,7 +301,7 @@ def parse_block(btext):
     '''
     Parse each list item into a property pair
     '''
-    if pair.strip():
+    if btext.strip():
         matched = REL_PAT.match(btext)
         if not matched:
             raise ValueError(_('Syntax error in relationship expression: {0}'.format(pair)))
@@ -311,58 +327,6 @@ def parse_block(btext):
     return None, None, None
 
 
-def process_block(block, stem, schema, recognize_edges=False):
-    (base, schemabase, rtbase, document_iri, default_lang) = schema
-    block_text = get_block_text(block)
-    label, val, typeindic = parse_block(block_text)
-    if label:
-        label = expand_iri(label, schema.base)
-        # Err, what's this logic again?
-        # valmatch = URI_ABBR_PAT.match(aval)
-        # if valmatch:
-        #     uri = iris[valmatch.group(1)]
-        #     attrs[fullaprop] = URI_ABBR_PAT.sub(uri + '\\2\\3', aval)
-        if typeindic == RES_VAL:
-            val = expand_iri(val, schema.res_base)
-        elif typeindic == TEXT_VAL:
-            # FIXME: Handle default lang
-            # if '@lang' not in attrs: attrs['@lang'] = default_lang
-            pass
-        elif typeindic == UNKNOWN_VAL:
-            val_iri_match = URI_EXPLICIT_PAT.match(val)
-            if val_iri_match:
-                val = expand_iri(val, schema.res_base)
-            # elif label in self.interpretations:
-            #     val = self.interpretations[label](val, rid=rid, fullprop=fullprop, base=base, model=model)
-
-        prop = stem.add_property(label, val)
-
-        # Nested list expresses attributes on a property
-        li_iter = ( li for elem in select_name(block, 'ul') for li in select_name(elem, 'li') )
-
-        for li in li_iter:
-            # Notice recognize_edges is only true at top level
-            process_block(li, prop)
-
-    return
-
-
-def fields(sect, node, schema):
-    '''
-    Each section represents a resource and contains a list with its properties
-    This generator parses the list and yields the key value pairs representing the properties
-    Some properties have attributes, expressed in markdown as a nested list. If present these attributes
-    Are yielded as well, else None is yielded
-    '''
-    # Pull all the list elements until the next header. This accommodates multiple lists in a section
-    try:
-        sect_body_items = itertools.takewhile(lambda x: HEADER_PAT.match(x.xml_name) is None, select_elements(following_siblings(sect)))
-    except StopIteration:
-        return
-
-    process_block(sect_body_items, node, schema, recognize_edges=True)
-
-
 def expand_iri(iri_in, base):
     if iri_in.startswith('@'):
         return ONYA(iri_in[1:])
@@ -376,4 +340,42 @@ def expand_iri(iri_in, base):
     else:
         fulliri = I(iri.absolutize(iri_in, base))
     return fulliri
+
+
+# FIXME: Rethink. Uses anonymous nodes
+def handle_resourcelist(ltext, **kwargs):
+    '''
+    Helper converts lists of resources from text (i.e. Markdown),
+    including absolutizing relative IRIs
+    '''
+    base = kwargs.get('base', ONYA)
+    g = kwargs.get('graph')
+    iris = ltext.strip().split()
+    newlist = g.node()
+    for i in iris:
+        model.add(newlist, ONYA('item'), base(i))
+    return newlist
+
+
+# FIXME: Rethink. Uses anonymous nodes
+def handle_resourceset(ltext, **kwargs):
+    '''
+    Helper converts lists of resources from text (i.e. Markdown),
+    including absolutizing relative IRIs
+    '''
+    fullprop=kwargs.get('fullprop')
+    rid=kwargs.get('rid')
+    base=kwargs.get('base', ONYA)
+    model=kwargs.get('model')
+    iris = ltext.strip().split()
+    for i in iris:
+        model.add(rid, fullprop, I(iri.absolutize(i, base)))
+    return None
+
+
+PREP_METHODS = {
+    ONYA('text'): lambda x, **kwargs: x,
+    ONYA('resource'): lambda x, base=ONYA, **kwargs: I(iri.absolutize(x, base)),
+    ONYA('resourceset'): handle_resourceset,
+}
 

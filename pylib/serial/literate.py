@@ -14,11 +14,11 @@ from amara3 import iri
 from versa import I, VERSA_BASEIRI, ORIGIN, RELATIONSHIP, TARGET
 from versa.util import all_origins
 
-from .markdown_parse import parse
+# from onya.serial.litparse_util import parse
 
 TYPE_REL = I(iri.absolutize('type', VERSA_BASEIRI))
 
-__all__ = ['parse', 'parse_iter', 'write',
+__all__ = ['read', 'read_coro', 'write',
     # Non-standard
     'longtext',
 ]
@@ -102,3 +102,6 @@ def write(model, out=sys.stdout, base=None, propertybase=None, shorteners=None):
 
         out.write('\n')
     return
+
+
+def read(fp, g):

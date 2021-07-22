@@ -9,7 +9,7 @@ pytest -s test/py/test_serial_literate.py
 # import functools
 
 # Requires pytest-mock
-import pytest
+# import pytest
 
 from amara3.iri import I
 
@@ -48,6 +48,6 @@ TFA_1 = '''\
 def test_parse_tfa_1():
     g = graph()
     op = parser()
-    nodes = op.run(TFA_1, g)
+    docheader, nodes = op.run(TFA_1, g)
 
     assert len(nodes) == 3
