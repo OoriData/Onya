@@ -1,5 +1,9 @@
+
+# -*- coding: utf-8 -*-
 '''
-The main body of the Onya Literate (Markdown flavor) parser
+The main body of the Onya Literate parser
+
+Onya Literate, or Onya Lit, is a Markdown-based format
 
 Proper entry point of use is onya.serial.literate
 
@@ -7,20 +11,108 @@ see: doc/literate_format.md
 
 '''
 
+'''
+Tab set:
+https://github.com/dabeaz/ply/blob/master/docs/ply.rst
+https://github.com/ligurio/lark-grammars/blob/master/lark_grammars/grammars/yaml.lark
+https://github.com/ligurio/lark-grammars/blob/master/lark_grammars/grammars/rfc_1738.lark
+https://www.cloudbees.com/blog/yaml-tutorial-everything-you-need-get-started
+https://www.google.com/search?q=python+lark+url+pattern&oq=python+lark+url+pattern&aqs=chrome..69i57j33i160.7551j0j7&sourceid=chrome&ie=UTF-8
+
+Python/SLY
+
+https://sly.readthedocs.io/en/latest/sly.html#introduction
+
+'''
+
+# Borowing from the YAML grammar https://github.com/ligurio/lark-grammars/blob/master/lark_grammars/grammars/yaml.lark
+LARK_GRAMMAR = '''\
+start		: onyalit
+
+onyalit		: resource*
+
+resource    : header properties
+
+header      : "#" resid "[" restype "]"
+
+scalar		: ( number | string | date | BOOLEAN | NIL )
+sequence	: ( inline_seq| indented_seq ) 
+mapping		: ( inline_map | indented_map )
+
+inline_seq	: "[" data ( "," data )* "]"
+indented_seq	: OPTIONAL_TAB "-" data ( "\n" OPTIONAL_TAB "-" data )*
+inline_map	: "{" key ":" data ( "," key ":" data )* "}"
+indented_map	: TAB key ":" data ( "\n" TAB key ":" data )*
+
+alpha		: LCASE_LETTER | UCASE_LETTER
+alphanum	: alpha | DIGIT
+string		: "\"" alphanum*  "\"" | alphanum+
+key		: scalar
+number		: ("+" | "-")? DIGIT+ ("." DIGIT+)?
+date		: DIGIT~4 "-" DIGIT~2 "-" DIGIT~2 ( DIGIT~2 ":" DIGIT~2 ":" DIGIT~2 )?
+
+LCASE_LETTER	: "a".."z"
+UCASE_LETTER	: "A".."Z"
+DIGIT		: "0".."9"
+BOOLEAN		: "true" | "false"
+NIL		: "~"
+SPACE		: " "
+OPTIONAL_TAB	: SPACE*
+TAB		: SPACE+
+'''
+
 import re
-import itertools
+from sly import Lexer  # pip install sly
 
-import markdown
-
-from amara3 import iri # for absolutize & matches_uri_syntax
-from amara3.iri import I
-from amara3.uxml import html5
-from amara3.uxml.tree import treebuilder, element, text
-from amara3.uxml.treeutil import *
-
-from onya.contrib import mkdcomments
 from onya.terms import ONYA, ONYA_TYPE
 from onya.graph import graph, node
+
+class lit_lexer(Lexer):
+    # Set of token names.   This is always required
+    tokens = { URLREF, COLON, ARROW, HASH, ID_OR_STRLIT, STRLIT,
+               BULLET, LPAREN, RPAREN, RBRACK, LBRACK }
+
+    # String containing ignored characters between tokens
+    # ignore = ' \t'
+
+    # Regular expression rules for tokens
+    # ID      = r'[a-zA-Z_][a-zA-Z0-9_]*'
+    #URLREF  = r'((<(.+)>)|([@\-_\w#/]+)):\s*((<(.+)>)|("(.*)")|(\'(.*)\ ')|(.*))'
+    ID_OR_STRLIT = r'[^\n]+'
+    URLREF  = r'<(.+)>'
+    HASH  = r'[#]'
+    ARROW = r'->|→' # U+2192
+    COLON  = r':'
+    BULLET  = r'*'
+
+    LBRACK  = r'\['
+    RBRACK  = r'\]'
+
+    @_(r"\"[^\"]*\"|'[^']*'")
+    def STRLIT(self, t):
+        t.value = t.value[1:-1]
+        return t
+
+    LITERAL_SEQUENCE  = r'[^\n]+(?=\n)'
+
+
+
+def ID_OR_STRLIT(self, t):
+    if t.value.startswith('0x'):
+        t.value = int(t.value[2:], 16)
+    else:
+        t.value = int(t.value)
+    return t
+
+
+if __name__ == '__main__':
+    data = 'x = 3 + 42 * (s - t)'
+    lexer = CalcLexer()
+    for tok in lexer.tokenize(data):
+        print('type=%r, value=%r' % (tok.type, tok.value))
+
+
+
 
 TEXT_VAL, RES_VAL, UNKNOWN_VAL = 1, 2, 3
 
