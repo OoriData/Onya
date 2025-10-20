@@ -1,7 +1,7 @@
-
 # -*- coding: utf-8 -*-
+# onya.serial.literate_lex.py
 '''
-The main body of the Onya Literate parser
+Main body of the Onya Literate parser
 
 Onya Literate, or Onya Lit, is a Markdown-based format
 
@@ -11,453 +11,304 @@ see: doc/literate_format.md
 
 '''
 
-'''
-Tab set:
-https://github.com/dabeaz/ply/blob/master/docs/ply.rst
-https://github.com/ligurio/lark-grammars/blob/master/lark_grammars/grammars/yaml.lark
-https://github.com/ligurio/lark-grammars/blob/master/lark_grammars/grammars/rfc_1738.lark
-https://www.cloudbees.com/blog/yaml-tutorial-everything-you-need-get-started
-https://www.google.com/search?q=python+lark+url+pattern&oq=python+lark+url+pattern&aqs=chrome..69i57j33i160.7551j0j7&sourceid=chrome&ie=UTF-8
-
-Python/SLY
-
-https://sly.readthedocs.io/en/latest/sly.html#introduction
-
-'''
-
-# Borowing from the YAML grammar https://github.com/ligurio/lark-grammars/blob/master/lark_grammars/grammars/yaml.lark
-LARK_GRAMMAR = '''\
-start		: onyalit
-
-onyalit		: resource*
-
-resource    : header properties
-
-header      : "#" resid "[" restype "]"
-
-scalar		: ( number | string | date | BOOLEAN | NIL )
-sequence	: ( inline_seq| indented_seq ) 
-mapping		: ( inline_map | indented_map )
-
-inline_seq	: "[" data ( "," data )* "]"
-indented_seq	: OPTIONAL_TAB "-" data ( "\n" OPTIONAL_TAB "-" data )*
-inline_map	: "{" key ":" data ( "," key ":" data )* "}"
-indented_map	: TAB key ":" data ( "\n" TAB key ":" data )*
-
-alpha		: LCASE_LETTER | UCASE_LETTER
-alphanum	: alpha | DIGIT
-string		: "\"" alphanum*  "\"" | alphanum+
-key		: scalar
-number		: ("+" | "-")? DIGIT+ ("." DIGIT+)?
-date		: DIGIT~4 "-" DIGIT~2 "-" DIGIT~2 ( DIGIT~2 ":" DIGIT~2 ":" DIGIT~2 )?
-
-LCASE_LETTER	: "a".."z"
-UCASE_LETTER	: "A".."Z"
-DIGIT		: "0".."9"
-BOOLEAN		: "true" | "false"
-NIL		: "~"
-SPACE		: " "
-OPTIONAL_TAB	: SPACE*
-TAB		: SPACE+
-'''
-
 import re
-from sly import Lexer  # pip install sly
+from dataclasses import dataclass
+from enum import Enum
 
-from onya.terms import ONYA, ONYA_TYPE
-from onya.graph import graph, node
+from amara import iri  # for absolutize & matches_uri_syntax
 
-class lit_lexer(Lexer):
-    # Set of token names.   This is always required
-    tokens = { URLREF, COLON, ARROW, HASH, ID_OR_STRLIT, STRLIT,
-               BULLET, LPAREN, RPAREN, RBRACK, LBRACK }
+from pyparsing import * # pip install pyparsing
+ParserElement.setDefaultWhitespaceChars(' \t')
 
-    # String containing ignored characters between tokens
-    # ignore = ' \t'
+from onya import I, ONYA_BASEIRI, ONYA_NULL
 
-    # Regular expression rules for tokens
-    # ID      = r'[a-zA-Z_][a-zA-Z0-9_]*'
-    #URLREF  = r'((<(.+)>)|([@\-_\w#/]+)):\s*((<(.+)>)|("(.*)")|(\'(.*)\ ')|(.*))'
-    ID_OR_STRLIT = r'[^\n]+'
-    URLREF  = r'<(.+)>'
-    HASH  = r'[#]'
-    ARROW = r'->|→' # U+2192
-    COLON  = r':'
-    BULLET  = r'*'
-
-    LBRACK  = r'\['
-    RBRACK  = r'\]'
-
-    @_(r"\"[^\"]*\"|'[^']*'")
-    def STRLIT(self, t):
-        t.value = t.value[1:-1]
-        return t
-
-    LITERAL_SEQUENCE  = r'[^\n]+(?=\n)'
-
-
-
-def ID_OR_STRLIT(self, t):
-    if t.value.startswith('0x'):
-        t.value = int(t.value[2:], 16)
-    else:
-        t.value = int(t.value)
-    return t
-
-
-if __name__ == '__main__':
-    data = 'x = 3 + 42 * (s - t)'
-    lexer = CalcLexer()
-    for tok in lexer.tokenize(data):
-        print('type=%r, value=%r' % (tok.type, tok.value))
-
-
-
-
-TEXT_VAL, RES_VAL, UNKNOWN_VAL = 1, 2, 3
-
-# Does not support the empty URL <> as a property name
-# REL_PAT = re.compile('((<(.+)>)|([@\\-_\\w#/]+)):\s*((<(.+)>)|("(.*?)")|(\'(.*?)\')|(.*))', re.DOTALL)
-REL_PAT = re.compile('((<(.+)>)|([@\\-_\\w#/]+)):\s*((<(.+)>)|("(.*)")|(\'(.*)\')|(.*))', re.DOTALL)
-
-# Abbreviated URL patterns
 URI_ABBR_PAT = re.compile('@([\\-_\\w]+)([#/@])(.+)', re.DOTALL)
 URI_EXPLICIT_PAT = re.compile('<(.+)>', re.DOTALL)
 
-# Does not support the empty URL <> as a property name
-RESOURCE_STR = '([^\s\\[\\]]+)?\s?(\\[([^\s\\[\\]]*?)\\])?'
-RESOURCE_PAT = re.compile(RESOURCE_STR)
-AB_RESOURCE_PAT = re.compile('<\s*' + RESOURCE_STR + '\s*>')
+TYPE_REL = ONYA_BASEIRI('type')
 
-HEADER_PAT = re.compile('h\\d')
-
-
-class parser:
+class value_type(Enum):
     '''
-    Reusable object for parsing Onya Literate
-
-    Note (and to go in doc) such as doc/literate_format.md
-
-    There are two main base IRIs for relative resolution, schema base and doc base
-    schema base is used to resolve schematic/vocabulary elements (i.e. classes and properties)
-    doc base is used to resolve entities defined within the doc
-
+    Basic typing info for values (really just text vs resource)
     '''
-    def __init__(self, config=None, encoding='utf-8'):
-        '''
-        Translate Onya Literate (Markdown syntax) into an Onya graph
+    TEXT_VAL = 1
+    RES_VAL = 2
+    UNKNOWN_VAL = 3
 
-        md -- markdown source text
-        g -- Onya graph to take the output relationship
-        encoding -- character encoding (defaults to UTF-8)
-        '''
-        self.config = config or {}
-        if config: self.handle_config()
-        self.encoding = encoding
-        self.comment_ext = mkdcomments.CommentsExtension()
-        # Remaining data members reset in run(), but explicitly set here for clarity
-        self.schemabase = None # For resolving relative URI references to properties, classes, etc.
-        self.rtbase = None
-        self.document_iri = None # Source URI of the document being parsed. Also used to resolve relative resource IDs
 
-    def handle_config(self):
-        '''
-        Configure parser for conventions used to interpret Markdown patterns
-        '''
-        # Mapping takes syntactical elements such as header levels in Markdown and associates a resource type with the specified resources
-        self.syntaxtypemap = {}
-        if self.config.get('autotype-h1'): self.syntaxtypemap['h1'] = self.config.get('autotype-h1')
-        if self.config.get('autotype-h2'): self.syntaxtypemap['h2'] = self.config.get('autotype-h2')
-        if self.config.get('autotype-h3'): self.syntaxtypemap['h3'] = self.config.get('autotype-h3')
-        interp_stanza = self.config.get('interpretations', {})
-        self.setup_interpretations(interp_stanza)
+# For parse trees
+@dataclass
+class prop_info:
+    indent: int = None      # 
+    key: str = None         # 
+    value: list = None      # 
+    children: list = None   # 
 
-    def setup_interpretations(self, interp):
-        '''
-        Parse interpretations stanza in markdown format to update parser config
-        '''
-        self.interpretations = {}
-        # Map interpretation IRIs to functions that perform the data prep at runtime
-        for prop, interp_key in interp.items():
-            if interp_key.startswith('@'):
-                interp_key = iri.absolutize(interp_key[1:], ONYA)
-            if interp_key in PREP_METHODS:
-                self.interpretations[prop] = PREP_METHODS[interp_key]
-            else:
-                #just use the identity, i.e. no-op
-                self.interpretations[prop] = lambda x, **kwargs: x
 
-    def run(self, littext, g):
-        """
-        Translate Onya Literate (Markdown syntax) into an Onya graph
+@dataclass
+class doc_info:
+    iri: str = None         # iri of the doc being parsed, itself
+    resbase: str = None     # used to resolve relative resource IRIs
+    schemabase: str = None  # used to resolve relative schema IRIs
+    rtbase: str = None      # used to resolve relative resource type IRIs. 
+    lang: str = None        # other IRI abbreviations
+    iris: dict = None       # iterpretations of untyped values (e.g. string vs list of strs vs IRI)
 
-        md -- markdown source text
-        g -- Onya graph to take the output relationship
-        encoding -- character encoding (defaults to UTF-8)
 
-        Returns: Set of nodes defined in the source
+@dataclass
+class value_info:
+    verbatim: int = None    # Literal value input text
+    typeindic: int = None   # Value type indicator (from value_type enum)
 
-        Note: One of the nodes usually represents the graph itself. It should be the
-        only node of type @graph (Onya graph). If there are multiple such nodes
-        a warning will be issued.
-        
-        Each generated graph has a propety (`@base`) with the overall base URI specified
-        in the Markdown file. If there is no such specification this propety is omitted
 
-        >>> from onya.graph import graph
-        >>> from onya.serial.literate import parse
-        >>> g = graph()
-        >>> parse(open('test/resource/poetry.md').read(), g)
-        ...
-        >>> len(g)
-        3
-        """
-        self.base = self.schemabase = self.rtbase = \
-            self.document_iri = self.default_lang = None
-        self.new_nodes = set()
-        self.target_graph = g
-        self.docheader_node = None
-        self.new_nodes = set()
-
-        # Parse the Markdown
-        # Alternately:
-        # from xml.sax.saxutils import escape, unescape
-        # h = markdown.markdown(escape(md.decode(encoding)), output_format='html5')
-        # Note: even using safe_mode this should not be presumed safe from tainted input
-        # h = markdown.markdown(md.decode(encoding), safe_mode='escape', output_format='html5')
-        h = markdown.markdown(littext, safe_mode='escape', output_format='html5', extensions=[self.comment_ext])
-
-        # doc = html.markup_fragment(inputsource.text(h.encode('utf-8')))
-        tb = treebuilder()
-        h = '<html>' + h + '</html>'
-        root = html5.parse(h)
-        print(root.xml_encode())
-        # Each section contains one resource description, but the special one named @docheader contains info to help interpret the rest
-        first_h1 = next(select_name(descendants(root), 'h1'))
-
-        # Doc header element, if any
-        docheader = next(select_value(select_name(descendants(root), 'h1'), '@docheader'), None) # //h1[.="@docheader"]
-        sections = filter(lambda x: x.xml_value != '@docheader',
-                        select_name_pattern(descendants(root), HEADER_PAT)) # //h1[not(.="@docheader")]|h2[not(.="@docheader")]|h3[not(.="@docheader")]
-
-        print(docheader)
-        if docheader is not None:
-            self.handle_docheader(docheader)
-
-        # Go through the resources expressed in remaining sections
-        for sect in sections:
-            # header in one of 4 forms: "ResourceID" "ResourceID [ResourceType]" "[ResourceType]" or "[]"
-            # 3rd & 4th forms have no ID given in file (type specified or not). One will be assigned
-            # XXX Should we require a resource ID?
-            matched = RESOURCE_PAT.match(sect.xml_value)
-            if not matched:
-                raise ValueError(_('Syntax error in resource header: {0}'.format(sect.xml_value)))
-            rid = matched.group(1)
-            rtype = matched.group(3)
-            if rtype and self.schemabase:
-                rtype = self.schemabase(rtype)
-
-            if self.base: rid = self.base(rid)
-
-            # Resource type might be set by syntax config
-            if not rtype:
-                rtype = self.syntaxtypemap.get(sect.xml_name)
-
-            # We have enough info to init the node this section represents
-            new_node = self.target_graph.node(rid, rtype)
-            self.new_nodes.add(new_node)
-
-            self.fields(sect, new_node)
-
-        return self.docheader_node, self.new_nodes # self.document_iri
-
-    def fields(self, sect, node):
-        '''
-        Each section represents a resource and contains a list with its properties
-        This generator parses the list and yields the key value pairs representing the properties
-        Some properties have attributes, expressed in markdown as a nested list. If present these attributes
-        Are yielded as well, else None is yielded
-        '''
-        # Pull all the list elements until the next header. This accommodates multiple lists in a section
-        try:
-            sect_body_items = itertools.takewhile(lambda x: HEADER_PAT.match(x.xml_name) is None, select_elements(following_siblings(sect)))
-        except StopIteration:
-            return
-
-        self.process_block(sect_body_items, node, recognize_edges=True)
-
-    def handle_docheader(self, docheader_elem):
-        # Special node to hold document header info for processing
-        # FIXME: reconsider ID & type
-        self.docheader_node = node(ONYA('docheader'), ONYA('docheader'))
-
-        iris = {}
-
-        # Gather document-level metadata from the @docheader section
-        fields(docheader_elem, self.docheader_node, None)
-
-        for prop in self.docheader_node.properties:
-            # @iri section is where key IRI prefixes can be set
-            if prop == '@iri':
-                for (k, uri, typeindic) in subfield_list:
-                    if k == '@base':
-                        self.base = self.schemabase = self.rtbase = uri
-                    # @property is legacy
-                    elif k == '@schema' or k == '@property':
-                        self.schemabase = uri
-                    elif k == '@resource-type':
-                        self.rtbase = uri
-                    else:
-                        iris[k] = uri
-            # @interpretations section is where defaults can be set as to the primitive types of values from the Markdown, based on the relevant property/relationship
-            elif prop == '@interpretations':
-                #Iterate over items from the @docheader/@interpretations section to set up for further parsing
-                interp = {}
-                for k, v, x in subfield_list:
-                    interp[I(iri.absolutize(k, schemabase))] = v
-                self.setup_interpretations(interp)
-            # Setting an IRI for this very document being parsed
-            elif prop == '@document':
-                self.document_iri = val
-            elif prop == '@language':
-                self.default_lang = val
-            # If we have a resource to which to attach them, just attach all other properties
-            elif self.document_iri or self.base:
-                rid = self.document_iri or self.base
-                fullprop = I(iri.absolutize(prop, self.schemabase or self.base))
-                if fullprop in self.interpretations:
-                    val = self.interpretations[fullprop](val, rid=rid, fullprop=fullprop, base=base)
-                    if val is not None: self.docheader_node.add_property(fullprop, val)
-                else:
-                    self.docheader_node.add_property(fullprop, val)
-
-        # Default IRI prefixes if @iri/@base is set
-        if not self.schemabase: self.schemabase = base
-        if not self.rtbase: self.rtbase = base
-        if not self.document_iri: self.document_iri = base
-
-    def process_block(self, block, stem, recognize_edges=False):
-        block_text = get_block_text(next(block))
-        print('GRIPPO', (block_text,))
-        label, val, typeindic = parse_block(block_text)
-        if label:
-            label = expand_iri(label, self.base)
-            # Err, what's this logic again?
-            # valmatch = URI_ABBR_PAT.match(aval)
-            # if valmatch:
-            #     uri = iris[valmatch.group(1)]
-            #     attrs[fullaprop] = URI_ABBR_PAT.sub(uri + '\\2\\3', aval)
-            if typeindic == RES_VAL:
-                val = expand_iri(val, self.res_base)
-            elif typeindic == TEXT_VAL:
-                # FIXME: Handle default lang
-                # if '@lang' not in attrs: attrs['@lang'] = default_lang
-                pass
-            elif typeindic == UNKNOWN_VAL:
-                val_iri_match = URI_EXPLICIT_PAT.match(val)
-                if val_iri_match:
-                    val = expand_iri(val, self.res_base)
-                # elif label in self.interpretations:
-                #     val = self.interpretations[label](val, rid=rid, fullprop=fullprop, base=base)
-
-            prop = stem.add_property(label, val)
-
-            # Nested list expresses attributes on a property
-            li_iter = ( li for elem in select_name(block, 'ul') for li in select_name(elem, 'li') )
-
-            for li in li_iter:
-                # Notice recognize_edges is only true at top level
-                process_block(li, prop)
-
-        return
-
-def get_block_text(block):
+def _make_tree(string, location, tokens):
     '''
-    Get simplified contents of an block
-
-    a/href embedded in the block comes from Markdown such as `<link_text>`.
-    Restore the angle brackets as expected by the li parser
-    Also exclude child uls (to be processed separately)
+    Parse action to return a parsed tree node from tokens
     '''
-    return ''.join([
-        ( ch if isinstance(ch, text) else (
-            '<' + ch.xml_value + '>' if isinstance(ch, element) and ch.xml_name == 'a' else '')
-        )
-        for ch in itertools.takewhile(
-            lambda x: not (isinstance(x, element) and x.xml_name == 'ul'), block.xml_children
-        )
-    ])
+    return prop_info(indent=len(tokens[0]), key=tokens[1],
+                        value=tokens[2], children=None)
 
 
-def parse_block(btext):
+def _make_value(string, location, tokens):
     '''
-    Parse each list item into a property pair
+    Parse action to make sure the right type of value is created during parse
     '''
-    if btext.strip():
-        matched = REL_PAT.match(btext)
-        if not matched:
-            raise ValueError(_('Syntax error in relationship expression: {0}'.format(pair)))
-        if matched.group(3): prop = matched.group(3).strip()
-        if matched.group(4): prop = matched.group(4).strip()
-        if matched.group(7):
-            val = matched.group(7).strip()
-            typeindic = RES_VAL
-        elif matched.group(9):
-            val = matched.group(9).strip()
-            typeindic = TEXT_VAL
-        elif matched.group(11):
-            val = matched.group(11).strip()
-            typeindic = TEXT_VAL
-        elif matched.group(12):
-            val = matched.group(12).strip()
-            typeindic = UNKNOWN_VAL
-        else:
-            val = ''
-            typeindic = UNKNOWN_VAL
-        # prop, val = [ part.strip() for part in U(li.xml_select('string(.)')).split(':', 1) ]
-        return prop, val, typeindic
-    return None, None, None
+    val = tokens[0]
+    # Must check IRI first, since it is a subclass of str
+    if isinstance(val, I):
+        typeindic = value_type.RES_VAL
+    elif isinstance(val, LITERAL):
+        typeindic = value_type.TEXT_VAL
+    elif isinstance(val, str):
+        val = val.strip()
+        typeindic = value_type.UNKNOWN_VAL
+
+    return value_info(verbatim=val, typeindic=typeindic)
 
 
-def expand_iri(iri_in, base):
+def literal_parse_action(toks):
+    '''
+    Parse action to coerce to literal value
+    '''
+    return LITERAL(toks[0])
+
+
+def iriref_parse_action(toks):
+    '''
+    Parse action to coerce to IRI reference value
+    '''
+    return I(toks[0])
+
+RIGHT_ARROW     = Literal('->') | Literal('→')  # U+2192
+
+COMMENT         = cpp_style_comment | htmlComment
+OPCOMMENT       = Optional(COMMENT)
+IDENT           = Word(alphas, alphanums + '_' + '-')
+IDENT_KEY       = Combine(Optional('@') + IDENT).leaveWhitespace()
+# EXPLICIT_IRI    = QuotedString('<', end_quote_char='>')
+QUOTED_STRING   = MatchFirst((QuotedString('"', escChar='\\'), QuotedString("'", escChar='\\'))) \
+                    .setParseAction(literal_parse_action)
+# See: https://rdflib.readthedocs.io/en/stable/_modules/rdflib/plugins/sparql/parser.html
+IRIREF          = Regex(r'[^<>"{}|^`\\\[\]%s]*' % "".join(
+                        "\\x%02X" % i for i in range(33)
+                    )) \
+                    .setParseAction(iriref_parse_action)
+#REST_OF_LINE = rest_of_line.leave_whitespace()
+
+blank_to_eol    = ZeroOrMore(COMMENT) + White('\n')
+explicit_iriref = Combine(Suppress("<") + IRIREF + Suppress(">")) \
+                    .setParseAction(iriref_parse_action)
+
+value_expr      = ( explicit_iriref + Suppress(ZeroOrMore(COMMENT)) ) | ( QUOTED_STRING + Suppress(ZeroOrMore(COMMENT)) ) | rest_of_line
+prop            = Optional(White(' \t').leaveWhitespace(), '') + Suppress('*' + White()) + \
+                    ( explicit_iriref | IDENT_KEY | IRIREF ) + Suppress(':') + Optional(value_expr, None)
+edge            = Optional(White(' \t').leaveWhitespace(), '') + Suppress('*' + White()) + \
+                    ( explicit_iriref | IDENT_KEY | IRIREF ) + Suppress(RIGHT_ARROW) + Optional(value_expr, None)
+propset         = Group(delimited_list(prop | edge | COMMENT, delim='\n'))
+resource_header = Word('#') + Optional(IRIREF, None) + Optional(QuotedString('[', end_quote_char=']'), None)
+resource_block  = Forward()
+resource_block  << Group(resource_header + White('\n').suppress() + Suppress(ZeroOrMore(blank_to_eol)) + propset)
+
+# Start symbol
+resource_seq    = OneOrMore(
+                    Suppress(ZeroOrMore(blank_to_eol)) + \
+                        resource_block + White('\n').suppress() + \
+                            Suppress(ZeroOrMore(blank_to_eol))
+                    )
+
+prop.setParseAction(_make_tree)
+edge.setParseAction(_make_tree)
+value_expr.setParseAction(_make_value)
+# subprop.setParseAction(_make_tree)
+
+
+def parse(lit_text, model, encoding='utf-8'):
+    """
+    Translate Onya Literate text into Onya model relationships
+
+    lit_text -- Onya Literate source text
+    model -- Onya model to take the output relationship
+    encoding -- character encoding (defaults to UTF-8)
+
+    Returns: The overall base URI (`@base`), as specified in the model, or None
+
+    >>> from onya.driver.memory import newmodel
+    >>> from onya.serial.literate import parse # Delegates to literate_lex.parse
+    >>> m = newmodel()
+    >>> parse(open('test/resource/poetry.onya').read(), m)
+    'http://uche.ogbuji.net/poems/'
+    >>> m.size()
+    40
+    >>> next(m.match(None, 'http://uche.ogbuji.net/poems/updated', '2013-10-15'))
+    (I(http://uche.ogbuji.net/poems/1), I(http://uche.ogbuji.net/poems/updated), '2013-10-15', {})
+    """
+    # Set up document parameters
+    doc = doc_info()
+
+    parsed = resource_seq.parseString(lit_text, parseAll=True)
+
+    for resblock in parsed:
+        process_resblock(resblock, model, doc)
+
+    return doc.iri
+
+
+def expand_iri(iri_in, base, relcontext=None):
+    if iri_in is None:
+        return ONYA_NULL
+    # Abreviation for special, Onya-specific properties
     if iri_in.startswith('@'):
-        return ONYA(iri_in[1:])
-    iri_match = URI_EXPLICIT_PAT.match(iri_in)
-    if iri_match:
-        return base(iri_match.group(1))
-    iri_match = URI_ABBR_PAT.match(iri_in)
-    if iri_match:
+        return I(iri.absolutize(iri_in[1:], ONYA_BASEIRI))
+
+    # Is it an explicit IRI (i.e. with <…>)?
+    if iri_match := URI_EXPLICIT_PAT.match(iri_in):
+        return iri_match.group(1) if base is None else I(iri.absolutize(iri_match.group(1), base))
+
+    # XXX Clarify this bit?
+    if iri_match := URI_ABBR_PAT.match(iri_in):
         uri = iris[iri_match.group(1)]
         fulliri = URI_ABBR_PAT.sub(uri + '\\2\\3', iri_in)
     else:
-        fulliri = I(iri.absolutize(iri_in, base))
-    return fulliri
+        # Replace upstream ValueError with our own
+        if relcontext and not(iri.matches_uri_ref_syntax(iri_in)):
+            # FIXME: Replace with a Onya-specific error
+            raise ValueError(f'Invalid IRI reference provided for relation {relcontext}: "{iri_in}"')
+        fulliri = iri_in if base is None else I(iri.absolutize(iri_in, base))
+    return I(fulliri)
 
 
-# FIXME: Rethink. Uses anonymous nodes
-def handle_resourcelist(ltext, **kwargs):
-    '''
-    Helper converts lists of resources from text (i.e. Markdown),
-    including absolutizing relative IRIs
-    '''
-    base = kwargs.get('base', ONYA)
-    g = kwargs.get('graph')
-    iris = ltext.strip().split()
-    newlist = g.node()
-    for i in iris:
-        model.add(newlist, ONYA('item'), base(i))
-    return newlist
+def process_resblock(resblock, model, doc):
+    headermarks, rid, rtype, props = resblock
+    headdepth = len(headermarks)
+    print('RESBLOCK:', resblock)
+
+    if rid == '@docheader':
+        process_docheader(props, model, doc)
+        return
+
+    rid = expand_iri(rid, doc.resbase)
+    # typeindic = RES_VAL | TEXT_VAL | UNKNOWN_VAL
+    # FIXME: Use syntaxtypemap
+    if rtype:
+        model.add(rid, TYPE_REL, expand_iri(rtype, doc.schemabase))
+
+    outer_indent = -1
+    current_outer_prop = None
+    for prop in props:
+        print('PROP:', prop)
+        if isinstance(prop, str):
+            #Just a comment. Skip.
+            continue
+
+        # @iri section is where key IRI prefixes can be set
+        # First property encountered determines outer indent
+        if outer_indent == -1:
+            outer_indent = prop.indent
+
+        if prop.indent == outer_indent:
+            if current_outer_prop:
+                model.add(rid, current_outer_prop.key, current_outer_prop.value, attrs)
+
+            current_outer_prop = prop
+            attrs = {}
+
+            pname = prop.key
+            prop.key = expand_iri(pname, doc.schemabase)
+            if prop.value:
+                prop.value, typeindic = prop.value.verbatim, prop.value.typeindic
+                if typeindic == value_type.RES_VAL:
+                    prop.value = expand_iri(prop.value, doc.rtbase, relcontext=prop.key)
+                elif typeindic == value_type.TEXT_VAL:
+                    prop.value = str(prop.value)
+                    if '@lang' not in attrs and doc.lang:
+                        attrs['@lang'] = doc.lang
+
+        else:
+            aprop, aval, atype = prop.key, prop.value, value_type.UNKNOWN_VAL
+            aval, typeindic = aval.verbatim, aval.typeindic
+            fullaprop = expand_iri(aprop, doc.schemabase)
+            if atype == value_type.RES_VAL:
+                aval = expand_iri(aval, doc.rtbase)
+                valmatch = URI_ABBR_PAT.match(aval)
+                if valmatch:
+                    uri = doc.iris[I(valmatch.group(1))]
+                    attrs[fullaprop] = I(URI_ABBR_PAT.sub(uri + '\\2\\3', aval))
+                else:
+                    attrs[fullaprop] = I(iri.absolutize(aval, doc.rtbase))
+            elif atype == value_type.TEXT_VAL:
+                attrs[fullaprop] = str(aval)
+            elif atype == value_type.UNKNOWN_VAL:
+                val_iri_match = URI_EXPLICIT_PAT.match(str(aval))
+                if val_iri_match:
+                    aval = expand_iri(aval, doc.rtbase)
+                else:
+                    aval = str(aval)
+                if aval is not None:
+                    attrs[fullaprop] = aval
+
+    # Don't forget the final fencepost property
+    if current_outer_prop:
+        model.add(rid, current_outer_prop.key, current_outer_prop.value, attrs)
 
 
-# FIXME: Rethink. Uses anonymous nodes
+def process_docheader(props, model, doc):
+    outer_indent = -1
+    current_outer_prop = None
+    for prop in props:
+        # @iri section is where key IRI prefixes can be set
+        # First property encountered determines outer indent
+        if outer_indent == -1:
+            outer_indent = prop.indent
+        if prop.indent == outer_indent:
+            current_outer_prop = prop
+            #Setting an IRI for this very document being parsed
+            if prop.key == '@document':
+                doc.iri = prop.value.verbatim
+            elif prop.key == '@language':
+                doc.lang = prop.value.verbatim
+            #If we have a resource to which to attach them, just attach all other properties
+            elif doc.iri:
+                fullprop = I(iri.absolutize(prop.key, doc.schemabase))
+                model.add(doc.iri, fullprop, prop.value.verbatim)
+        elif current_outer_prop.key == '@iri':
+            k, uri = prop.key, prop.value.verbatim
+            if k == '@base':
+                doc.resbase = doc.rtbase = uri
+            elif k == '@schema':
+                doc.schemabase = uri
+            elif k == '@resource-type':
+                doc.rtbase = uri
+            else:
+                doc.iris[k] = uri
+    return
+
+
+'''
 def handle_resourceset(ltext, **kwargs):
-    '''
-    Helper converts lists of resources from text (i.e. Markdown),
-    including absolutizing relative IRIs
-    '''
+    'Helper that converts sets of resources from a textual format such as Markdown, including absolutizing relative IRIs'
     fullprop=kwargs.get('fullprop')
     rid=kwargs.get('rid')
-    base=kwargs.get('base', ONYA)
+    base=kwargs.get('base', ONYA_BASEIRI)
     model=kwargs.get('model')
     iris = ltext.strip().split()
     for i in iris:
@@ -466,8 +317,87 @@ def handle_resourceset(ltext, **kwargs):
 
 
 PREP_METHODS = {
-    ONYA('text'): lambda x, **kwargs: x,
-    ONYA('resource'): lambda x, base=ONYA, **kwargs: I(iri.absolutize(x, base)),
-    ONYA('resourceset'): handle_resourceset,
+    ONYA_BASEIRI + 'text': lambda x, **kwargs: x,
+    # '@text': lambda x, **kwargs: x,
+    ONYA_BASEIRI + 'resource': lambda x, base=ONYA_BASEIRI, **kwargs: I(iri.absolutize(x, base)),
+    ONYA_BASEIRI + 'resourceset': handle_resourceset,
 }
 
+    from onya.driver.memory import newmodel
+    m = newmodel()
+    parse(open('/tmp/poetry.md').read(), m)
+    print(m.size())
+    import pprint; pprint.pprint(list(m.match()))
+    # next(m.match(None, 'http://uche.ogbuji.net/poems/updated', '2013-10-15'))
+'''
+
+'''
+
+for s in [  ' "quick-brown-fox"',
+            ' "quick-brown-fox"\n',
+            ' <quick-brown-fox>',
+            ' <quick-brown-fox>\n',
+            ' <quick-brown-fox> <!-- COMMENT -->',
+            ' "quick-brown-fox" <!-- COMMENT -->',
+            '"\"1\""',
+            ]:
+    parsed = value_expr.parseString(s, parseAll=True)
+    print(s, '∴', parsed)
+
+for s in [  '# resX\n<!-- COMMENT -->\n\n  * a-b-c: <quick-brown-fox>',
+            ]:
+    print(s, end='')
+    parsed = resource_block.parseString(s, parseAll=True)
+    print('∴', parsed)
+
+for s in [  '  * a-b-c: <quick-brown-fox>',
+            '  * a-b-c:  quick brown fox',
+            '  * a-b-c: " quick brown fox"',
+            ]:
+    parsed = prop.parseString(s, parseAll=True)
+    print(s, '∴', parsed)
+
+for s in [  '# resX\n  * a-b-c: <quick-brown-fox>',
+            '# resX [Person]\n  * a-b-c: <quick-brown-fox>',
+            '# resX [Person]\n  * a-b-c: <quick-brown-fox>\n  * d-e-f: "lazy dog"',
+            ]:
+    parsed = resource_block.parseString(s, parseAll=True)
+    print(s, '∴', parsed)
+
+for s in [  '# resX\n  * a-b-c: <quick-brown-fox>\n    lang: en',
+            ]:
+    parsed = resource_block.parseString(s, parseAll=True)
+    print(s, '∴', parsed)
+
+for s in [  '# res1\n<!-- COMMENT -->\n\n  * a-b-c: <quick-brown-fox>\n\n\n# res2\n\n  * d-e-f: <jumps-over>\n\n\n',
+            ]:
+    print(s, end='')
+    parsed = resource_block.parseString(s, parseAll=True)
+    print('∴', parsed)
+
+for s in [  '# res1\n<!-- COMMENT -->\n\n  * a-b-c: <quick-brown-fox>\n\n\n\n\n# res2\n\n  * d-e-f: <jumps-over>\n\n\n',
+            ]:
+    print(s, end='')
+    parsed = resource_seq.parseString(s, parseAll=True)
+    print('∴', parsed)
+
+'''
+
+
+'''
+
+  a-b-c: <quick-brown-fox> ∴ [prop_info(key='a-b-c', value=ParseResults([I(quick-brown-fox)], {}), children=[ParseResults([], {})])]
+  a-b-c:  quick brown fox ∴ [prop_info(key='a-b-c', value=ParseResults(['quick brown fox'], {}), children=[ParseResults([], {})])]
+  a-b-c: " quick brown fox" ∴ [prop_info(key='a-b-c', value=ParseResults([LITERAL(' quick brown fox')], {}), children=[ParseResults([], {})])]
+# resX
+  a-b-c: <quick-brown-fox> ∴ [I(resX), None, prop_info(key='a-b-c', value=ParseResults([I(quick-brown-fox)], {}), children=[ParseResults([], {})])]
+# resX [Person]
+  a-b-c: <quick-brown-fox> ∴ [I(resX), 'Person', prop_info(key='a-b-c', value=ParseResults([I(quick-brown-fox)], {}), children=[ParseResults([], {})])]
+# resX [Person]
+  a-b-c: <quick-brown-fox>
+  d-e-f: "lazy dog" ∴ [I(resX), 'Person', prop_info(key='a-b-c', value=ParseResults([I(quick-brown-fox)], {}), children=[ParseResults([prop_info(key='d-e-f', value=LITERAL('lazy dog'), children=[])], {})])]
+# resX
+  a-b-c: <quick-brown-fox>
+    lang: en ∴ [I(resX), None, prop_info(key='a-b-c', value=ParseResults([I(quick-brown-fox)], {}), children=[ParseResults([prop_info(key='lang', value='en', children=[])], {})])]
+
+'''

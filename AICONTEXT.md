@@ -1,0 +1,38 @@
+Additional context on this repository for AI tools & coding agents
+
+- Python 3.12+ code, unless otherwise specified
+- Python code uses single outer quotes
+- prefer absolute imports to relative imports
+- Use a decent amount of comments
+  - not *too* many, just enough that anybody familiar with the code can use them as a reference point. Not meant to teach somebody new every intricacy of the code, just help keep the reader oriented.
+- if it saves a line, put a comment after a line rather than above it
+  - use the standard two spaces before the comment character, eg. `CODE  # COMMENT`
+- Try to stick to 120 characters per line
+  - if one of those comments would break this guideline, just put that comment above the line instead, as is standard convention
+- Reusable Python code modules are developed in the `pylib` folder, and installed using e.g. `uv pip install -U .`, which includes proper naming in Python library space via `tool.hatch.build.sources`. Yes this means editable and "dev mode" environments are not really supported. Layer-efficient dockerization is our go-to if that's needed.
+- **Project structure pattern**: Source code goes in `pylib/` directory, gets mapped to package namespace (e.g., `amara`) via build sources. This keeps source organization separate from installed package structure.
+- Use uv, but with the above in consideration
+- **Build system preferences**: Prefer hatchling over setuptools. Avoid setuptools as much as possible. Use `[tool.hatch.build.sources]` to map source directories to package namespaces (e.g., `"pylib" = "amara"`).
+- **Package installation**: Always use `pip install -U .` for full installation, never editable installs (`pip install -e`). This ensures proper testing of the actual distribution.
+- **Debugging package issues**: When modules aren't importing correctly after installation, check:
+  - Package structure in site-packages (e.g., `ls -la /path/to/site-packages/package_name/`)
+  - Version import paths in `__init__.py` (use relative imports like `from .__about__ import __version__`)
+  - Build system configuration matches the source directory structure
+- Use async (e.g. asyncio) wherever it makes sense. Avoid multithreading, though multiprocessing is OK. Multiprocess for CPU-bound concurrency, and asyncIO for I/O bound, cooperative etc.
+- Be pythonic. Avoid e.g. complex abstract class hierarchies for the sake of them, though classes are also fine in many usage patterns. We love dictionaries, dynamic dispatch, etc.
+  - I don't consider Pydantic very Pythonic, so we can tolerate it if need be (e.g. we're using a toolkit that strictly works with Pydantic), but otherwise, simple dataclasses are better.
+- use iterator patterns as much as practical. Also functional programming approaches, including partials (currying) and decorators
+- Prefereed tools:
+  - Logging: structlog
+  - Retries on failure: tenacity
+  - CLI config: fire
+  - CLI formatting: rich
+  - HTTP client: httpx (async)
+  - HTML/XML parsing: selectolax
+  - Browser-like Web crawling/scraping: Python playwright (with playwright_stealth if needed)
+  - pytest, as well as pytest-mock, pytest-httpx, pytest-asyncio
+  - rapidfuzz for fuzzy text matching
+- AVOID the following unless explicitly requested or otherwise unavoidable:
+  - langchain
+
+- Once again PREFER SINGLE QUOTES

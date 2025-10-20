@@ -11,7 +11,7 @@ pytest -s test/test_graphobj.py
 # Requires pytest-mock
 import pytest
 
-from amara3.iri import I
+from amara.iri import I
 
 from onya.graph import node, graph, property_, edge
 

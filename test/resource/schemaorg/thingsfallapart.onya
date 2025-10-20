@@ -17,8 +17,7 @@
 * author -> CAchebe
 * publisher -> Heinemann
   * when: 1958
-  * where: London  <!-- Should properly be reified to a node, but in post-processing -->
-    * country: UK
+  * where -> London
 
 # CAchebe [Person]
 
@@ -31,4 +30,6 @@
 * birthDate: 1930
 
 # Paperback [BookFormat]
+
+# London [City]
 

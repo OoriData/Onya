@@ -1,0 +1,60 @@
+[build-system]
+requires = ['hatchling>=1.13.0']
+build-backend = 'hatchling.build'
+
+[project]
+name = 'onya'
+description = 'Property graph model for Web resources'
+readme = 'README.md'
+authors = [
+    {name = 'Uche Ogbuji', email = 'uche@ogbuji.net'},
+]
+license = {text = 'Apache-2.0'}
+requires-python = '>=3.12'
+keywords = ['web', 'data', 'graph', 'rdf', 'linked-data']
+classifiers = [
+    'Programming Language :: Python',
+    'Programming Language :: Python :: 3',
+    'Programming Language :: Python :: 3.12',
+    'Programming Language :: Python :: 3.13',
+    'Development Status :: 3 - Alpha',
+    'Intended Audience :: Developers',
+    'License :: OSI Approved :: Apache Software License',
+    'Operating System :: OS Independent',
+    'Topic :: Software Development :: Libraries :: Python Modules',
+    'Topic :: Internet :: WWW/HTTP',
+]
+dynamic = ['version']
+
+dependencies = [
+    'Amara @ git+https://github.com/OoriData/Amara.git@main',
+    'pyparsing',   # Parser for Onya Literate format
+    'markdown',    # Markdown support
+]
+
+[project.optional-dependencies]
+dev = [
+    'pytest>=7.0',
+    'pytest-mock',
+    'pytest-asyncio',
+]
+demo = [
+    'fire',  # CLI framework
+]
+
+[project.urls]
+Homepage = 'https://github.com/uogbuji/onya'
+Repository = 'https://github.com/uogbuji/onya'
+Issues = 'https://github.com/uogbuji/onya/issues'
+
+[tool.hatch.version]
+path = 'pylib/__about__.py'
+
+[tool.hatch.build]
+include = ["*.toml", "*.py"]
+
+[tool.hatch.build.sources]  # Rewriting path in distribution
+"pylib" = "onya"
+
+[tool.hatch.metadata]
+allow-direct-references = true
