@@ -1,7 +1,7 @@
-# versa.serial.literate
+# onya.serial.literate
 
 """
-Serialize and deserialize between a Versa model and Versa Literate (Markdown)
+Serialize and deserialize between an Onya model and Onya Literate (Markdown)
 
 see: doc/literate_format.md
 
@@ -9,16 +9,15 @@ see: doc/literate_format.md
 
 import sys
 
-from amara3 import iri
+from amara import iri
 
-from versa import I, VERSA_BASEIRI, ORIGIN, RELATIONSHIP, TARGET
-from versa.util import all_origins
+from onya import I, ONYA_BASEIRI
 
-from .markdown_parse import parse
+# from onya.serial.litparse_util import parse
 
-TYPE_REL = I(iri.absolutize('type', VERSA_BASEIRI))
+TYPE_REL = I(iri.absolutize('type', ONYA_BASEIRI))
 
-__all__ = ['parse', 'parse_iter', 'write',
+__all__ = ['read', 'read_coro', 'write',
     # Non-standard
     'longtext',
 ]
@@ -26,12 +25,12 @@ __all__ = ['parse', 'parse_iter', 'write',
 
 def longtext(t):
     '''
-    Prepare long text to be e.g. included as a Versa literate property value,
+    Prepare long text to be e.g. included as an Onya literate property value,
     according to markdown rules
 
     Only use this function if you're Ok with possible whitespace-specific changes
 
-    >>> from versa.serial.literate import longtext
+    >>> from onya.serial.literate import longtext
     >>> longtext()
     '''
 # >>> markdown.markdown('* abc\ndef\nghi')
@@ -53,7 +52,7 @@ def abbreviate(rel, bases):
     for base in bases:
         abbr = iri.relativize(rel, base, subPathOnly=True)
         if abbr:
-            if base is VERSA_BASEIRI:
+            if base is ONYA_BASEIRI:
                 abbr = '@' + abbr
             return abbr
     return I(rel)
@@ -68,12 +67,12 @@ def value_format(val):
 
 def write(model, out=sys.stdout, base=None, propertybase=None, shorteners=None):
     '''
-    models - input Versa model from which output is generated
+    models - input Onya model from which output is generated
     '''
     shorteners = shorteners or {}
 
     all_propertybase = [propertybase] if propertybase else []
-    all_propertybase.append(VERSA_BASEIRI)
+    all_propertybase.append(ONYA_BASEIRI)
 
     if any((base, propertybase, shorteners)):
         out.write('# @docheader\n\n* @iri:\n')
@@ -84,7 +83,8 @@ def write(model, out=sys.stdout, base=None, propertybase=None, shorteners=None):
 
     out.write('\n\n')
 
-    origin_space = set(all_origins(model))
+    # Get all origin nodes from the model (all node IDs in the graph)
+    origin_space = set(model.keys()) if hasattr(model, 'keys') else set()
 
     for o in origin_space:
         out.write('# {0}\n\n'.format(o))
@@ -102,3 +102,14 @@ def write(model, out=sys.stdout, base=None, propertybase=None, shorteners=None):
 
         out.write('\n')
     return
+
+
+def read(fp, g):
+    '''
+    Read Onya Literate format from file pointer into graph
+
+    fp -- file pointer to read from
+    g -- graph to populate
+    '''
+    # TODO: Implement this using literate_lex.parse
+    pass

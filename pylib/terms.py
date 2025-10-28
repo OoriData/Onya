@@ -2,7 +2,7 @@
 Commonly used IRIs as vocabulary terms
 '''
 
-from amara3.iri import I
+from amara.iri import I
 
 # Onya
 
