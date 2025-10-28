@@ -4,7 +4,7 @@ build-backend = 'hatchling.build'
 
 [project]
 name = 'onya'
-description = 'Property graph model for Web resources'
+description = 'Knowledge graph (property graph-style) model and serialization for web resources'
 readme = 'README.md'
 authors = [
     {name = 'Uche Ogbuji', email = 'uche@ogbuji.net'},

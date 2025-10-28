@@ -51,3 +51,24 @@ def test_parse_tfa_1():
     docheader, nodes = op.run(TFA_1, g)
 
     assert len(nodes) == 3
+
+
+def test_parse_tfa_expanded():
+    '''Test the expanded Things Fall Apart example with docheader'''
+    from onya.graph import graph
+    from onya.serial import literate_lex
+    
+    # Read the file
+    with open('test/resource/schemaorg/thingsfallapart.onya') as f:
+        content = f.read()
+    
+    # Create a graph and parse into it
+    g = graph()
+    doc_iri = literate_lex.parse(content, g)
+    
+    # Verify we got document metadata
+    assert doc_iri == "http://example.org/classics/things-fall-apart"
+    # Should have parsed multiple nodes
+    assert len(g) > 0
+    # Check that document node exists
+    assert doc_iri in g

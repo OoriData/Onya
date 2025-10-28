@@ -1,35 +1,76 @@
-[//]: # (-*- mode: markdown -*- )
-[//]: # (These two lines use safest known syntax for comments in Markdown)
+<!-- -*- mode: markdown -*- -->
+<!-- Onya Literate format example: Things Fall Apart knowledge base -->
 
 # @docheader
 
-* @iri:
-  * @base: http://example.org/classics/
-  * @resource-type: https://schema.org/
-  * @schema: https://schema.org/
+* @document: http://example.org/classics/things-fall-apart
+* title: Achebe - Things Fall Apart knowledgebase
+* @base: http://example.org/classics/
+* @schema: https://schema.org/
+* @language: en
 
 # TFA [Book]
 
 * name: Things Fall Apart
+* alternateName: "TFA"
 * image: http://example.org/classics/tfa-book-cover.jpg
-* isbn: 9781841593272
-* format -> Paperback
+* isbn: "9781841593272"
+* datePublished: "1958-06"
+* bookFormat -> Paperback
 * author -> CAchebe
 * publisher -> Heinemann
-  * when: 1958
-  * where -> London
+* genre: "African Literature"
+* inLanguage: "en"
 
 # CAchebe [Person]
 
 * name: Chinụalụmọgụ Achebe
-* birthDate: 1930
+* alternateName: Chinua Achebe
+* birthDate: "1930-11-16"
+* birthPlace -> Ogidi
+* deathDate: "2013-03-21"
+* deathPlace -> Boston
+* jobTitle: "Novelist"
+* nationality -> Nigerian
 
 # Heinemann [Organization]
 
 * name: William Heinemann Ltd.
-* birthDate: 1930
+* foundingDate: "1930"
+* foundingLocation -> London
 
 # Paperback [BookFormat]
 
+* name: Paperback
+
 # London [City]
 
+* name: London
+* country -> UK
+
+# Ogidi [City]
+
+* name: Ogidi
+* country -> Nigeria
+
+# Boston [City]
+
+* name: Boston
+  * stateCode: "MA"
+  * country -> USA
+
+# USA [Country]
+
+* name: United States of America
+
+# UK [Country]
+
+* name: United Kingdom
+
+# Nigeria [Country]
+
+* name: Federal Republic of Nigeria
+
+# Nigerian [Country]
+
+* name: Federal Republic of Nigeria

@@ -29,7 +29,7 @@ TYPE_REL = ONYA_BASEIRI('type')
 
 class value_type(Enum):
     '''
-    Basic typing info for values (really just text vs resource)
+    Basic typing info for values (really just text vs node reference)
     '''
     TEXT_VAL = 1
     RES_VAL = 2
@@ -48,9 +48,9 @@ class prop_info:
 @dataclass
 class doc_info:
     iri: str = None         # iri of the doc being parsed, itself
-    resbase: str = None     # used to resolve relative resource IRIs
+    nodebase: str = None    # used to resolve relative node IRIs
     schemabase: str = None  # used to resolve relative schema IRIs
-    rtbase: str = None      # used to resolve relative resource type IRIs. 
+    typebase: str = None    # used to resolve relative type IRIs 
     lang: str = None        # other IRI abbreviations
     iris: dict = None       # iterpretations of untyped values (e.g. string vs list of strs vs IRI)
 
@@ -101,7 +101,7 @@ def iriref_parse_action(toks):
 
 RIGHT_ARROW     = Literal('->') | Literal('→')  # U+2192
 
-COMMENT         = cpp_style_comment | htmlComment
+COMMENT         = htmlComment  # Using HTML-style comments for cleaner markdown compatibility
 OPCOMMENT       = Optional(COMMENT)
 IDENT           = Word(alphas, alphanums + '_' + '-')
 IDENT_KEY       = Combine(Optional('@') + IDENT).leaveWhitespace()
@@ -125,32 +125,31 @@ prop            = Optional(White(' \t').leaveWhitespace(), '') + Suppress('*' + 
 edge            = Optional(White(' \t').leaveWhitespace(), '') + Suppress('*' + White()) + \
                     ( explicit_iriref | IDENT_KEY | IRIREF ) + Suppress(RIGHT_ARROW) + Optional(value_expr, None)
 propset         = Group(delimited_list(prop | edge | COMMENT, delim='\n'))
-resource_header = Word('#') + Optional(IRIREF, None) + Optional(QuotedString('[', end_quote_char=']'), None)
-resource_block  = Forward()
-resource_block  << Group(resource_header + White('\n').suppress() + Suppress(ZeroOrMore(blank_to_eol)) + propset)
+node_header = Word('#') + Optional(IRIREF, None) + Optional(QuotedString('[', end_quote_char=']'), None)
+node_block  = Forward()
+node_block  << Group(node_header + White('\n').suppress() + Suppress(ZeroOrMore(blank_to_eol)) + propset)
 
 # Start symbol
-resource_seq    = OneOrMore(
+node_seq    = OneOrMore(
                     Suppress(ZeroOrMore(blank_to_eol)) + \
-                        resource_block + White('\n').suppress() + \
+                        node_block + White('\n').suppress() + \
                             Suppress(ZeroOrMore(blank_to_eol))
                     )
 
 prop.setParseAction(_make_tree)
 edge.setParseAction(_make_tree)
 value_expr.setParseAction(_make_value)
-# subprop.setParseAction(_make_tree)
 
 
-def parse(lit_text, model, encoding='utf-8'):
+def parse(lit_text, graph_obj, encoding='utf-8'):
     """
-    Translate Onya Literate text into Onya model relationships
+    Translate Onya Literate text into Onya graph
 
     lit_text -- Onya Literate source text
-    model -- Onya model to take the output relationship
+    graph_obj -- Onya graph to populate
     encoding -- character encoding (defaults to UTF-8)
 
-    Returns: The overall base URI (`@base`), as specified in the model, or None
+    Returns: The document IRI from @document header, or None
 
     >>> from onya.driver.memory import newmodel
     >>> from onya.serial.literate import parse # Delegates to literate_lex.parse
@@ -164,16 +163,17 @@ def parse(lit_text, model, encoding='utf-8'):
     """
     # Set up document parameters
     doc = doc_info()
+    doc.iris = {}  # Initialize the iris dictionary
 
-    parsed = resource_seq.parseString(lit_text, parseAll=True)
+    parsed = node_seq.parseString(lit_text, parseAll=True)
 
-    for resblock in parsed:
-        process_resblock(resblock, model, doc)
+    for nodeblock in parsed:
+        process_nodeblock(nodeblock, graph_obj, doc)
 
     return doc.iri
 
 
-def expand_iri(iri_in, base, relcontext=None):
+def expand_iri(iri_in, base, nodecontext=None):
     if iri_in is None:
         return ONYA_NULL
     # Abreviation for special, Onya-specific properties
@@ -190,91 +190,101 @@ def expand_iri(iri_in, base, relcontext=None):
         fulliri = URI_ABBR_PAT.sub(uri + '\\2\\3', iri_in)
     else:
         # Replace upstream ValueError with our own
-        if relcontext and not(iri.matches_uri_ref_syntax(iri_in)):
+        if nodecontext and not(iri.matches_uri_ref_syntax(iri_in)):
             # FIXME: Replace with a Onya-specific error
-            raise ValueError(f'Invalid IRI reference provided for relation {relcontext}: "{iri_in}"')
+            raise ValueError(f'Invalid IRI reference provided for node context {nodecontext}: "{iri_in}"')
         fulliri = iri_in if base is None else I(iri.absolutize(iri_in, base))
     return I(fulliri)
 
 
-def process_resblock(resblock, model, doc):
-    headermarks, rid, rtype, props = resblock
+def process_nodeblock(nodeblock, graph_obj, doc):
+    headermarks, nid, ntype, props = nodeblock
     headdepth = len(headermarks)
-    print('RESBLOCK:', resblock)
+    print('NODEBLOCK:', nodeblock)
 
-    if rid == '@docheader':
-        process_docheader(props, model, doc)
+    if nid == '@docheader':
+        process_docheader(props, graph_obj, doc)
         return
 
-    rid = expand_iri(rid, doc.resbase)
-    # typeindic = RES_VAL | TEXT_VAL | UNKNOWN_VAL
-    # FIXME: Use syntaxtypemap
-    if rtype:
-        model.add(rid, TYPE_REL, expand_iri(rtype, doc.schemabase))
+    nid = expand_iri(nid, doc.nodebase)
+    
+    # Get or create the node
+    if nid not in graph_obj:
+        n = graph_obj.node(nid)
+    else:
+        n = graph_obj[nid]
+    
+    # Add type if specified
+    if ntype:
+        type_iri = expand_iri(ntype, doc.typebase)
+        n.types.add(type_iri)
 
+    # Track current assertion for nested assertions
     outer_indent = -1
-    current_outer_prop = None
-    for prop in props:
-        print('PROP:', prop)
-        if isinstance(prop, str):
-            #Just a comment. Skip.
+    current_assertion = None
+    
+    for prop_info in props:
+        print('PROP:', prop_info)
+        if isinstance(prop_info, str):
+            # Just a comment. Skip.
             continue
 
-        # @iri section is where key IRI prefixes can be set
-        # First property encountered determines outer indent
+        # First assertion encountered determines outer indent
         if outer_indent == -1:
-            outer_indent = prop.indent
+            outer_indent = prop_info.indent
 
-        if prop.indent == outer_indent:
-            if current_outer_prop:
-                model.add(rid, current_outer_prop.key, current_outer_prop.value, attrs)
+        # Expand the assertion label IRI
+        assertion_label = expand_iri(prop_info.key, doc.schemabase)
 
-            current_outer_prop = prop
-            attrs = {}
-
-            pname = prop.key
-            prop.key = expand_iri(pname, doc.schemabase)
-            if prop.value:
-                prop.value, typeindic = prop.value.verbatim, prop.value.typeindic
+        if prop_info.indent == outer_indent:
+            # This is a top-level assertion
+            if prop_info.value:
+                val, typeindic = prop_info.value.verbatim, prop_info.value.typeindic
+                
                 if typeindic == value_type.RES_VAL:
-                    prop.value = expand_iri(prop.value, doc.rtbase, relcontext=prop.key)
-                elif typeindic == value_type.TEXT_VAL:
-                    prop.value = str(prop.value)
-                    if '@lang' not in attrs and doc.lang:
-                        attrs['@lang'] = doc.lang
+                    # This is an edge (node to node)
+                    target_id = expand_iri(val, doc.typebase)
+                    # Get or create Janelaet node
+                    if target_id not in graph_obj:
+                        target_node = graph_obj.node(target_id)
+                    else:
+                        target_node = graph_obj[target_id]
+                    # Add edge and track it for nested assertions
+                    current_assertion = n.add_edge(assertion_label, target_node)
+                elif typeindic == value_type.TEXT_VAL or typeindic == value_type.UNKNOWN_VAL:
+                    # This is a property (node to string value)
+                    str_val = str(val)
+                    current_assertion = n.add_property(assertion_label, str_val)
 
         else:
-            aprop, aval, atype = prop.key, prop.value, value_type.UNKNOWN_VAL
-            aval, typeindic = aval.verbatim, aval.typeindic
-            fullaprop = expand_iri(aprop, doc.schemabase)
-            if atype == value_type.RES_VAL:
-                aval = expand_iri(aval, doc.rtbase)
-                valmatch = URI_ABBR_PAT.match(aval)
-                if valmatch:
-                    uri = doc.iris[I(valmatch.group(1))]
-                    attrs[fullaprop] = I(URI_ABBR_PAT.sub(uri + '\\2\\3', aval))
-                else:
-                    attrs[fullaprop] = I(iri.absolutize(aval, doc.rtbase))
-            elif atype == value_type.TEXT_VAL:
-                attrs[fullaprop] = str(aval)
-            elif atype == value_type.UNKNOWN_VAL:
-                val_iri_match = URI_EXPLICIT_PAT.match(str(aval))
-                if val_iri_match:
-                    aval = expand_iri(aval, doc.rtbase)
-                else:
-                    aval = str(aval)
-                if aval is not None:
-                    attrs[fullaprop] = aval
-
-    # Don't forget the final fencepost property
-    if current_outer_prop:
-        model.add(rid, current_outer_prop.key, current_outer_prop.value, attrs)
+            # This is a nested assertion on current_assertion
+            if current_assertion is None:
+                continue  # Skip nested without a parent
+            
+            if prop_info.value:
+                val, typeindic = prop_info.value.verbatim, prop_info.value.typeindic
+                if typeindic == value_type.RES_VAL:
+                    # Nested edge
+                    target_id = expand_iri(val, doc.typebase)
+                    if target_id not in graph_obj:
+                        target_node = graph_obj.node(target_id)
+                    else:
+                        target_node = graph_obj[target_id]
+                    current_assertion.add_edge(assertion_label, target_node)
+                elif typeindic == value_type.TEXT_VAL or typeindic == value_type.UNKNOWN_VAL:
+                    # Nested property
+                    str_val = str(val)
+                    current_assertion.add_property(assertion_label, str_val)
 
 
-def process_docheader(props, model, doc):
+def process_docheader(props, graph_obj, doc):
     outer_indent = -1
     current_outer_prop = None
     for prop in props:
+        # Skip comments
+        if isinstance(prop, str):
+            continue
+            
         # @iri section is where key IRI prefixes can be set
         # First property encountered determines outer indent
         if outer_indent == -1:
@@ -283,23 +293,38 @@ def process_docheader(props, model, doc):
             current_outer_prop = prop
             #Setting an IRI for this very document being parsed
             if prop.key == '@document':
-                doc.iri = prop.value.verbatim
+                doc.iri = prop.value.verbatim if prop.value else None
             elif prop.key == '@language':
-                doc.lang = prop.value.verbatim
-            #If we have a resource to which to attach them, just attach all other properties
+                doc.lang = prop.value.verbatim if prop.value else None
+            elif prop.key == '@base':
+                doc.nodebase = doc.typebase = prop.value.verbatim if prop.value else None
+            elif prop.key == '@schema':
+                doc.schemabase = prop.value.verbatim if prop.value else None
+            elif prop.key == '@resource-type' or prop.key == '@type-base':
+                doc.typebase = prop.value.verbatim if prop.value else None
+            #If we have a document node to which to attach them, just attach all other properties
             elif doc.iri:
+                # Create document node if needed
+                if doc.iri not in graph_obj:
+                    doc_node = graph_obj.node(doc.iri)
+                else:
+                    doc_node = graph_obj[doc.iri]
+                
                 fullprop = I(iri.absolutize(prop.key, doc.schemabase))
-                model.add(doc.iri, fullprop, prop.value.verbatim)
-        elif current_outer_prop.key == '@iri':
-            k, uri = prop.key, prop.value.verbatim
-            if k == '@base':
-                doc.resbase = doc.rtbase = uri
-            elif k == '@schema':
-                doc.schemabase = uri
-            elif k == '@resource-type':
-                doc.rtbase = uri
-            else:
-                doc.iris[k] = uri
+                if prop.value:
+                    doc_node.add_property(fullprop, prop.value.verbatim)
+        else:
+            # Handle nested properties (attributes)
+            if current_outer_prop and current_outer_prop.key == '@iri':
+                k, uri = prop.key, prop.value.verbatim if prop.value else None
+                if k == '@base':
+                    doc.nodebase = doc.typebase = uri
+                elif k == '@schema':
+                    doc.schemabase = uri
+                elif k == '@resource-type' or k == '@type-base':
+                    doc.typebase = uri
+                else:
+                    doc.iris[k] = uri
     return
 
 

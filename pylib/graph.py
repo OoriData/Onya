@@ -1,122 +1,146 @@
 '''
 Graph and other fundamental classes for Onya
+
+The Onya graph model:
+- A graph is a collection of nodes
+- Each node has:
+  - An identifier (IRI)
+  - A set of types (IRIs)
+  - A set of assertions (edges and properties)
+- Edges connect nodes to nodes via IRI labels
+- Properties connect nodes to string values via IRI labels
+- Both edges and properties are collectively called "assertions"
+- Each assertion is in effect an anonymous node defined by (origin IRI, assertion IRI)
+- Assertions can themselves be origins for further assertions (natural recursiveness)
 '''
 
 from __future__ import annotations
 from collections.abc import MutableMapping, Iterator
-from typing import Any
+from abc import ABC
 
 from amara.iri import I
 
 
-class properties_mixin:
-    def add_property(self, label, value):
+class assertions_mixin:
+    '''
+    Mixin for objects that can have assertions (edges and properties)
+    '''
+    def add_property(self, label: I | str, value: str):
         p = property_(self, label, value)
         self.properties.add(p)
         return p
 
-    def remove_property(self, prop):
-        self.properties.remove(prop)
-
-    def getprop(self, label):
-        for prop in self.properties:
-            if prop.label == label:
-                yield prop
-
-
-class node(properties_mixin):
-    '''
-    Basic unit of information in onya is a node. A node, also called
-    a vertex in graph theory, comprises an identifier (an IRI),
-    a sequence of properties and a sequence of edges.
-    '''
-    __slots__ = ['id', 'types', 'properties', 'edges']
-
-    # XXX Design decision: don't have containing graph as a property. Removes circularity that might not be needed. Keeps open popularity of node reuse across graphs.
-    def __init__(self, id_: I | str, types: str | list[str] | None = None):
-        self.id = id_
-        # self.graph = graph_
-        if isinstance(types, str):
-            types = [types]
-        self.types: set[str] = set(types) if types else set()
-        self.properties: set[property_] = set()
-        self.edges: set[edge] = set()
-    
-    def add_edge(self, label: I | str, target: node) -> edge:
+    def add_edge(self, label: I | str, target: 'node'):
         e = edge(self, label, target)
         self.edges.add(e)
         return e
 
-    def remove_edge(self, edge_: edge) -> None:
+    def remove_property(self, prop: 'property_'):
+        self.properties.remove(prop)
+
+    def remove_edge(self, edge_: 'edge'):
         self.edges.remove(edge_)
 
-    def traverse(self, label: I | str) -> Iterator[edge]:
+    def getprop(self, label: I | str):
+        '''Get properties with a given label'''
+        for prop in self.properties:
+            if prop.label == label:
+                yield prop
+    
+    def getedge(self, label: I | str):
+        '''Get edges with a given label'''
+        for edge_ in self.edges:
+            if edge_.label == label:
+                yield edge_
+
+
+class node(assertions_mixin):
+    '''
+    A node in the Onya graph.
+    
+    A node has an identifier (IRI), optional types (IRIs), and assertions
+    (edges and properties). Both edges and properties are sets, not sequences,
+    because pervasive ordering is not a core requirement of the model.
+    '''
+    __slots__ = ['id', 'types', 'properties', 'edges']
+
+    def __init__(self, id_: I | str, types: I | str | set[I | str] | None = None):
+        self.id = id_
+        if isinstance(types, str):
+            types = I(types)
+        if isinstance(types, I):
+            types = {types}
+        self.types: set[I | str] = set(types) if types else set()
+        self.properties: set['property_'] = set()
+        self.edges: set['edge'] = set()
+    
+    def traverse(self, label: I | str) -> Iterator['edge']:
+        '''Find edges with a given label'''
         for e in self.edges:
             if e.label == label:
                 yield e
 
-    def reverse(self, label: I | str) -> Iterator[edge]:
-        # Note: This method requires access to the containing graph
-        # which we don't have in the current design
-        for nid, nobj in self.graph.nodes.items():
+    def reverse(self, label: I | str, graph: 'graph') -> Iterator['edge']:
+        '''Find edges targeting this node with a given label (requires graph access)'''
+        for nid, nobj in graph.nodes.items():
             for e in nobj.traverse(label):
                 if e.target == self:
                     yield e
 
 
-class property_(properties_mixin):
+class assertion(assertions_mixin, ABC):
     '''
-    Means of imparting a value to a node
+    Abstract base class for assertions (edges and properties)
+    
+    Each assertion is an anonymous node defined by the combination of
+    its origin and its label IRI.
     '''
-    __slots__ = ['origin', 'label', 'value', 'properties']
-
-    def __init__(self, origin: node | property_ | edge, label: I | str, value: Any):
+    __slots__ = ['origin', 'label', 'properties', 'edges']
+    
+    def __init__(self, origin: 'node | assertion', label: I | str):
         self.origin = origin
         self.label = label
-        self.value = value
-        self.properties: set[property_] = set()
-
-    def add_property(self, label, value):
-        p = property_(self, label, value)
-        self.properties.add(p)
-
-    def remove_property(self, prop):
-        self.properties.remove(prop)
-
-    def getprop(self, label):
-        for prop in self.properties:
-            if prop.label == label:
-                yield prop
+        self.properties: set['property_'] = set()
+        self.edges: set['edge'] = set()
 
 
-class edge(properties_mixin):
+class property_(assertion):
     '''
-    Directional relationship between one node and another
+    A property assertion connects an origin to a string value via an IRI label.
+    
+    Properties in Onya are simple: they always have string values.
+    No numbers, dates, or other types at the core layer - those can be
+    handled by annotation systems built on top.
     '''
-    __slots__ = ['origin', 'label', 'target', 'properties']
+    __slots__ = ['value']
 
-    def __init__(self, origin: node, label: I | str, target: node):
-        self.origin = origin
-        self.label = label
-        self.target = target
-        self.properties: set[property_] = set()
+    def __init__(self, origin: 'node | assertion', label: I | str, value: str):
+        super().__init__(origin, label)
+        self.value: str = value
+    
+    def __repr__(self):
+        return f'property_({self.label}={self.value!r})'
 
-    def add_property(self, label, value):
-        p = property_(self, label, value)
-        self.properties.add(p)
 
-    def remove_property(self, prop):
-        self.properties.remove(prop)
+class edge(assertion):
+    '''
+    An edge assertion connects an origin node to a target node via an IRI label.
+    '''
+    __slots__ = ['target']
 
-    def getprop(self, label):
-        for prop in self.properties:
-            if prop.label == label:
-                yield prop
+    def __init__(self, origin: 'node | assertion', label: I | str, target: 'node'):
+        super().__init__(origin, label)
+        self.target: 'node' = target
+    
+    def __repr__(self):
+        return f'edge({self.label} -> {self.target.id})'
 
 
 class graph(MutableMapping):
     '''
-    Collection of nodes managed and queried together
+    A collection of nodes managed and queried together.
+    
+    This is the top-level container for an Onya graph.
     '''
     def __init__(self, nodes: list[node] = ()):
         self.nodes: dict[I | str, node] = {}
@@ -140,15 +164,18 @@ class graph(MutableMapping):
     def __repr__(self) -> str:
         return f'{type(self).__name__} with {len(self.nodes)} nodes'
 
-    def node(self, nid: I | str, types: str | list[str] | None = None, node_: type[node] = node) -> node:
+    def node(self, nid: I | str, types: I | str | set[I | str] | None = None) -> node:
         '''
         Convenience for constructing, then adding a new node to the graph
         '''
-        n = node_(nid, types)
+        n = node(nid, types)
         self[nid] = n
         return n
 
-    def typematch(self, types: set[str] | list[str]) -> Iterator[node]:
+    def typematch(self, types: I | str | set[I | str]) -> Iterator[node]:
+        '''Find nodes with matching types'''
+        if isinstance(types, (str, I)):
+            types = {types}
         types_set = set(types)
         for n in self.nodes.values():
             if n.types & types_set:
