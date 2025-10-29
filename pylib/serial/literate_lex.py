@@ -20,7 +20,7 @@ from amara import iri  # for absolutize & matches_uri_syntax
 from pyparsing import * # pip install pyparsing
 ParserElement.setDefaultWhitespaceChars(' \t')
 
-from onya import I, ONYA_BASEIRI, ONYA_NULL
+from onya import I, ONYA_BASEIRI, ONYA_NULL, LITERAL
 
 URI_ABBR_PAT = re.compile('@([\\-_\\w]+)([#/@])(.+)', re.DOTALL)
 URI_EXPLICIT_PAT = re.compile('<(.+)>', re.DOTALL)
@@ -43,6 +43,8 @@ class prop_info:
     key: str = None         # 
     value: list = None      # 
     children: list = None   # 
+    is_text_ref: bool = False  # True if this is a text reference (uses ::)
+    multiline_text: str = None  # For storing multiline text content
 
 
 @dataclass
@@ -53,6 +55,7 @@ class doc_info:
     typebase: str = None    # used to resolve relative type IRIs 
     lang: str = None        # other IRI abbreviations
     iris: dict = None       # iterpretations of untyped values (e.g. string vs list of strs vs IRI)
+    text_refs: dict = None  # text references defined with :name = """content"""
 
 
 @dataclass
@@ -100,6 +103,7 @@ def iriref_parse_action(toks):
     return I(toks[0])
 
 RIGHT_ARROW     = Literal('->') | Literal('→')  # U+2192
+DOUBLE_COLON    = Literal('::')  # For text references
 
 COMMENT         = htmlComment  # Using HTML-style comments for cleaner markdown compatibility
 OPCOMMENT       = Optional(COMMENT)
@@ -108,6 +112,9 @@ IDENT_KEY       = Combine(Optional('@') + IDENT).leaveWhitespace()
 # EXPLICIT_IRI    = QuotedString('<', end_quote_char='>')
 QUOTED_STRING   = MatchFirst((QuotedString('"', escChar='\\'), QuotedString("'", escChar='\\'))) \
                     .setParseAction(literal_parse_action)
+# Triple-quoted strings for text references - handle multiline properly
+TRIPLE_QUOTED_STRING = Regex(r'"""([^"]*(?:"[^"]*)*?)"""', re.DOTALL) \
+                        .setParseAction(lambda tokens: LITERAL(tokens[0]))
 # See: https://rdflib.readthedocs.io/en/stable/_modules/rdflib/plugins/sparql/parser.html
 IRIREF          = Regex(r'[^<>"{}|^`\\\[\]%s]*' % "".join(
                         "\\x%02X" % i for i in range(33)
@@ -119,25 +126,79 @@ blank_to_eol    = ZeroOrMore(COMMENT) + White('\n')
 explicit_iriref = Combine(Suppress("<") + IRIREF + Suppress(">")) \
                     .setParseAction(iriref_parse_action)
 
+# Text reference definition: :name = """content"""
+text_ref_def    = Suppress(':') + IDENT + Suppress('=') + TRIPLE_QUOTED_STRING
+
 value_expr      = ( explicit_iriref + Suppress(ZeroOrMore(COMMENT)) ) | ( QUOTED_STRING + Suppress(ZeroOrMore(COMMENT)) ) | rest_of_line
 prop            = Optional(White(' \t').leaveWhitespace(), '') + Suppress('*' + White()) + \
                     ( explicit_iriref | IDENT_KEY | IRIREF ) + Suppress(':') + Optional(value_expr, None)
+# Text reference property: label:: reference_name
+prop_text_ref   = Optional(White(' \t').leaveWhitespace(), '') + Suppress('*' + White()) + \
+                    ( explicit_iriref | IDENT_KEY | IRIREF ) + Suppress(DOUBLE_COLON) + Optional(IRIREF, None)
 edge            = Optional(White(' \t').leaveWhitespace(), '') + Suppress('*' + White()) + \
                     ( explicit_iriref | IDENT_KEY | IRIREF ) + Suppress(RIGHT_ARROW) + Optional(value_expr, None)
-propset         = Group(delimited_list(prop | edge | COMMENT, delim='\n'))
+propset         = Group(delimited_list(prop_text_ref | prop | edge | COMMENT, delim='\n'))
 node_header = Word('#') + Optional(IRIREF, None) + Optional(QuotedString('[', end_quote_char=']'), None)
 node_block  = Forward()
 node_block  << Group(node_header + White('\n').suppress() + Suppress(ZeroOrMore(blank_to_eol)) + propset)
 
-# Start symbol
+# Start symbol - allow text reference definitions anywhere
 node_seq    = OneOrMore(
                     Suppress(ZeroOrMore(blank_to_eol)) + \
-                        node_block + White('\n').suppress() + \
+                        (node_block | text_ref_def) + White('\n').suppress() + \
                             Suppress(ZeroOrMore(blank_to_eol))
                     )
 
+def _make_text_ref_tree(string, location, tokens):
+    '''
+    Parse action to return a parsed tree node for text references
+    '''
+    return prop_info(indent=len(tokens[0]), key=tokens[1],
+                        value=tokens[2] if len(tokens) > 2 else None, children=None,
+                        is_text_ref=True)
+
+def parse_multiline_text(lines, start_idx, current_indent):
+    """
+    Parse multiline text that continues after a property definition.
+    Returns (text_content, next_line_idx)
+    """
+    if start_idx >= len(lines):
+        return "", start_idx
+
+    text_lines = []
+    i = start_idx
+
+    while i < len(lines):
+        line = lines[i]
+
+        # Skip empty lines
+        if not line.strip():
+            i += 1
+            continue
+
+        # Check if this line is indented enough to be part of the multiline text
+        # Must be indented more than the current property level
+        line_indent = len(line) - len(line.lstrip())
+        if line_indent > current_indent:
+            # This is a continuation line
+            text_lines.append(line[current_indent:])  # Remove the base indentation
+            i += 1
+        else:
+            # This line is not indented enough, stop parsing multiline text
+            break
+
+    return '\n'.join(text_lines), i
+
+def _make_text_ref_def(string, location, tokens):
+    '''
+    Parse action for text reference definitions
+    '''
+    return ('text_ref_def', tokens[0], tokens[1])
+
 prop.setParseAction(_make_tree)
+prop_text_ref.setParseAction(_make_text_ref_tree)
 edge.setParseAction(_make_tree)
+text_ref_def.setParseAction(_make_text_ref_def)
 value_expr.setParseAction(_make_value)
 
 
@@ -164,11 +225,21 @@ def parse(lit_text, graph_obj, encoding='utf-8'):
     # Set up document parameters
     doc = doc_info()
     doc.iris = {}  # Initialize the iris dictionary
+    doc.text_refs = {}  # Initialize the text references dictionary
 
     parsed = node_seq.parseString(lit_text, parseAll=True)
 
-    for nodeblock in parsed:
-        process_nodeblock(nodeblock, graph_obj, doc)
+    # First pass: collect all text reference definitions
+    for item in parsed:
+        if isinstance(item, tuple) and item[0] == 'text_ref_def':
+            ref_name, ref_content = item[1], item[2]
+            doc.text_refs[ref_name] = str(ref_content)
+
+    # Second pass: process node blocks
+    for item in parsed:
+        if not (isinstance(item, tuple) and item[0] == 'text_ref_def'):
+            # Handle node blocks
+            process_nodeblock(item, graph_obj, doc)
 
     return doc.iri
 
@@ -200,20 +271,19 @@ def expand_iri(iri_in, base, nodecontext=None):
 def process_nodeblock(nodeblock, graph_obj, doc):
     headermarks, nid, ntype, props = nodeblock
     headdepth = len(headermarks)
-    print('NODEBLOCK:', nodeblock)
 
     if nid == '@docheader':
         process_docheader(props, graph_obj, doc)
         return
 
     nid = expand_iri(nid, doc.nodebase)
-    
+
     # Get or create the node
     if nid not in graph_obj:
         n = graph_obj.node(nid)
     else:
         n = graph_obj[nid]
-    
+
     # Add type if specified
     if ntype:
         type_iri = expand_iri(ntype, doc.typebase)
@@ -222,11 +292,16 @@ def process_nodeblock(nodeblock, graph_obj, doc):
     # Track current assertion for nested assertions
     outer_indent = -1
     current_assertion = None
-    
+
     for prop_info in props:
-        print('PROP:', prop_info)
         if isinstance(prop_info, str):
             # Just a comment. Skip.
+            continue
+
+        # Handle text reference definitions
+        if isinstance(prop_info, tuple) and prop_info[0] == 'text_ref_def':
+            ref_name, ref_content = prop_info[1], prop_info[2]
+            doc.text_refs[ref_name] = str(ref_content)
             continue
 
         # First assertion encountered determines outer indent
@@ -238,9 +313,18 @@ def process_nodeblock(nodeblock, graph_obj, doc):
 
         if prop_info.indent == outer_indent:
             # This is a top-level assertion
-            if prop_info.value:
+            if prop_info.is_text_ref:
+                # Handle text reference
+                ref_name = str(prop_info.value) if prop_info.value else None
+                if ref_name and ref_name in doc.text_refs:
+                    str_val = doc.text_refs[ref_name]
+                    current_assertion = n.add_property(assertion_label, str_val)
+                else:
+                    # Text reference not found, skip or use empty string
+                    current_assertion = n.add_property(assertion_label, "")
+            elif prop_info.value:
                 val, typeindic = prop_info.value.verbatim, prop_info.value.typeindic
-                
+
                 if typeindic == value_type.RES_VAL:
                     # This is an edge (node to node)
                     target_id = expand_iri(val, doc.typebase)
@@ -260,8 +344,14 @@ def process_nodeblock(nodeblock, graph_obj, doc):
             # This is a nested assertion on current_assertion
             if current_assertion is None:
                 continue  # Skip nested without a parent
-            
-            if prop_info.value:
+
+            if prop_info.is_text_ref:
+                # Handle nested text reference
+                ref_name = str(prop_info.value) if prop_info.value else None
+                if ref_name and ref_name in doc.text_refs:
+                    str_val = doc.text_refs[ref_name]
+                    current_assertion.add_property(assertion_label, str_val)
+            elif prop_info.value:
                 val, typeindic = prop_info.value.verbatim, prop_info.value.typeindic
                 if typeindic == value_type.RES_VAL:
                     # Nested edge
@@ -284,7 +374,7 @@ def process_docheader(props, graph_obj, doc):
         # Skip comments
         if isinstance(prop, str):
             continue
-            
+
         # @iri section is where key IRI prefixes can be set
         # First property encountered determines outer indent
         if outer_indent == -1:
@@ -309,7 +399,7 @@ def process_docheader(props, graph_obj, doc):
                     doc_node = graph_obj.node(doc.iri)
                 else:
                     doc_node = graph_obj[doc.iri]
-                
+
                 fullprop = I(iri.absolutize(prop.key, doc.schemabase))
                 if prop.value:
                     doc_node.add_property(fullprop, prop.value.verbatim)

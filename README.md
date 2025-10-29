@@ -32,7 +32,7 @@ pip install git+https://github.com/OoriData/Onya.git
 
 Onya is based on experience from developing [Versa](https://github.com/uogbuji/versa) and also working on [the MicroXML spec](https://dvcs.w3.org/hg/microxml/raw-file/tip/spec/microxml.html) and implementations thereof.
 
-The URL used for metavocabulary is [managed via purl.org](https://archive.org/services/purl/purl/onya/vocab).
+The URL used for metavocabulary is [managed via purl.org](https://purl.archive.org/purl/onya/vocab).
 
 The name is from Igbo "ọ́nyà", web, snare, trap, and by extension, network. The expanded sense is ọ́nyà úchè, web of knowledge.
 

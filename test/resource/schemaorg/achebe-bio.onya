@@ -1,0 +1,18 @@
+# @docheader
+
+* @document: http://example.org/achebe-bio
+* title: Chinua Achebe Biography
+* @base: http://example.org/
+* @schema: https://schema.org/
+* @language: en
+
+# CAchebe [Person]
+
+* name: Chinua Achebe
+* bio:: achebe-bio
+* birthDate: 1930-11-16
+* deathDate: 2013-03-21
+
+:achebe-bio = """Chinua Achebe (1930–2013) was a Nigerian writer considered a founder of modern African literature, known for his novel Things Fall Apart and for writing about African life from an African perspective.
+
+His work focused on the effects of colonialism, political corruption, and the clash between traditional and Western values, with works like Things Fall Apart and the "African Trilogy" exploring the Igbo experience. After the Nigerian Civil War, he became an English professor in the United States before returning to Nigeria to continue his academic and writing career."""

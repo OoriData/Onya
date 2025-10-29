@@ -212,6 +212,51 @@ String values can be explicitly quoted:
 
 Use quotes when values contain special characters or when you want to explicitly mark something as a string.
 
+## Long Text Blocks
+
+Onya Literate supports two mechanisms for handling long text blocks as property values:
+
+### 1. Markdown Indented Text
+
+Use Markdown's standard mechanism for multi-line list items. After the initial property line, add blank lines followed by indented paragraphs (4+ spaces) to continue the text within the same bullet point:
+
+```
+# CAchebe [Person]
+
+* name: Chinua Achebe
+* bio: Chinua Achebe (1930–2013) was a Nigerian writer considered a founder of modern African literature.
+
+    Known for his novel Things Fall Apart and for writing about African life from an African perspective, his work focused on the effects of colonialism, political corruption, and the clash between traditional and Western values.
+
+    After the Nigerian Civil War, he became an English professor in the United States before returning to Nigeria to continue his academic and writing career.
+* birthDate: 1930-11-16
+```
+
+The indented paragraphs are treated as part of the same property value, with newlines preserved.
+
+### 2. Text References
+
+For longer text blocks or when you want to define text content separately from its usage, use text references with Python-style triple quotes:
+
+```
+# CAchebe [Person]
+
+* name: Chinua Achebe
+* bio:: achebe-bio  <!-- The double colon marks it as a text reference -->
+* birthDate: 1930-11-16
+
+:achebe-bio = """Chinua Achebe (1930–2013) was a Nigerian writer considered a founder of modern African literature, known for his novel Things Fall Apart and for writing about African life from an African perspective.
+
+His work focused on the effects of colonialism, political corruption, and the clash between traditional and Western values, with works like Things Fall Apart and the "African Trilogy" exploring the Igbo experience. After the Nigerian Civil War, he became an English professor in the United States before returning to Nigeria to continue his academic and writing career.
+"""
+```
+
+Text references:
+- Use `::` after the property label to indicate a text reference
+- Define the text content with `:reference-name = """content"""`
+- Text references can be defined anywhere in the document, not necessarily before their usage
+- Triple-quoted content preserves all whitespace and newlines exactly as written
+
 ## Model Summary
 
 ```
