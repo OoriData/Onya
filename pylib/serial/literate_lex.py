@@ -133,7 +133,7 @@ explicit_iriref = Combine(Suppress("<") + IRIREF + Suppress(">")) \
 # Text reference definition: :name = """content"""
 text_ref_def    = Suppress(':') + IDENT + Suppress('=') + TRIPLE_QUOTED_STRING
 
-value_expr      = ( explicit_iriref + Suppress(ZeroOrMore(COMMENT)) ) | ( QUOTED_STRING + Suppress(ZeroOrMore(COMMENT)) ) | rest_of_line
+value_expr      = ( explicit_iriref + Suppress(ZeroOrMore(COMMENT)) ) | ( QUOTED_STRING + Suppress(ZeroOrMore(COMMENT)) ) | rest_of_line  # noqa: E501
 prop            = Optional(White(' \t').leaveWhitespace(), '') + Suppress('*' + White()) + \
                     ( explicit_iriref | IDENT_KEY | IRIREF ) + Suppress(':') + Optional(value_expr, None)
 # Text reference property: label:: reference_name
@@ -449,7 +449,7 @@ PREP_METHODS = {
     print(m.size())
     import pprint; pprint.pprint(list(m.match()))
     # next(m.match(None, 'http://uche.ogbuji.net/poems/updated', '2013-10-15'))
-'''
+'''  # noqa: E501
 
 '''
 
@@ -501,7 +501,7 @@ for s in [  '# res1\n<!-- COMMENT -->\n\n  * a-b-c: <quick-brown-fox>\n\n\n\n\n#
     parsed = resource_seq.parseString(s, parseAll=True)
     print('∴', parsed)
 
-'''
+'''  # noqa: E501, E502
 
 
 '''
@@ -520,4 +520,4 @@ for s in [  '# res1\n<!-- COMMENT -->\n\n  * a-b-c: <quick-brown-fox>\n\n\n\n\n#
   a-b-c: <quick-brown-fox>
     lang: en ∴ [I(resX), None, prop_info(key='a-b-c', value=ParseResults([I(quick-brown-fox)], {}), children=[ParseResults([prop_info(key='lang', value='en', children=[])], {})])]
 
-'''
+'''  # noqa: E501, E502

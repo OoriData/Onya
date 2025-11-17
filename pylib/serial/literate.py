@@ -40,7 +40,8 @@ def longtext(t):
 # >>> markdown.markdown('* abc\n\n    def\n\n    ghi')
 # '<ul>\n<li>\n<p>abc</p>\n<p>def</p>\n<p>ghi</p>\n</li>\n</ul>'
 
-    # Insert blank line after the list item and before the start of your secondary paragraph. Make sure to indent the line with at least one space to ensure that it is indented as part of the list.
+    # Insert blank line after list item & before start of secondary paragraph.
+    # Indent the line with at least one space to ensure it is indented as part of the list.
     endswith_cr = t[-1] == '\n'
     new_t = t.replace('\n', '\n    ')
     if endswith_cr:
