@@ -3,7 +3,7 @@ requires = ['hatchling>=1.13.0']
 build-backend = 'hatchling.build'
 
 [project]
-name = 'Onya'
+name = 'onya'
 description = 'Knowledge graph (property graph-style) model and serialization for web resources'
 readme = 'README.md'
 authors = [
@@ -51,9 +51,9 @@ demo = [
 ]
 
 [project.urls]
-Homepage = 'https://github.com/uogbuji/onya'
-Repository = 'https://github.com/uogbuji/onya'
-Issues = 'https://github.com/uogbuji/onya/issues'
+Homepage = 'https://github.com/OoriData/Onya'
+Repository = 'https://github.com/OoriData/Onya'
+Issues = 'https://github.com/OoriData/Onya/issues'
 
 [tool.hatch.version]
 path = 'pylib/__about__.py'
