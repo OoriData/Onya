@@ -149,7 +149,7 @@ node_block  << Group(node_header + White('\n').suppress() + Suppress(ZeroOrMore(
 # Start symbol - allow text reference definitions anywhere
 node_seq    = OneOrMore(
                     Suppress(ZeroOrMore(blank_to_eol)) + \
-                        (node_block | text_ref_def) + White('\n').suppress() + \
+                        (node_block | text_ref_def) + Optional(White('\n')).suppress() + \
                             Suppress(ZeroOrMore(blank_to_eol))
                     )
 

@@ -3,7 +3,7 @@ requires = ['hatchling>=1.13.0']
 build-backend = 'hatchling.build'
 
 [project]
-name = 'onya'
+name = 'Onya'
 description = 'Knowledge graph (property graph-style) model and serialization for web resources'
 readme = 'README.md'
 authors = [
@@ -13,16 +13,16 @@ license = {text = 'Apache-2.0'}
 requires-python = '>=3.12'
 keywords = ['web', 'data', 'graph', 'rdf', 'linked-data']
 classifiers = [
-    'Programming Language :: Python',
-    'Programming Language :: Python :: 3',
-    'Programming Language :: Python :: 3.12',
-    'Programming Language :: Python :: 3.13',
-    'Development Status :: 3 - Alpha',
-    'Intended Audience :: Developers',
-    'License :: OSI Approved :: Apache Software License',
-    'Operating System :: OS Independent',
-    'Topic :: Software Development :: Libraries :: Python Modules',
-    'Topic :: Internet :: WWW/HTTP',
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+    "Operating System :: OS Independent",
+    "License :: OSI Approved :: Apache Software License",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Utilities",
 ]
 dynamic = ['version']
 
@@ -36,14 +36,14 @@ dependencies = [
 [project.optional-dependencies]
 # Extra requirements for project contributors & other developers
 dev = [
-  "build",
-  "twine",
-  "hatch",
-  "pipdeptree",
-  "ruff",
-  "pytest",
-  "pytest-mock",
-  "pytest-asyncio",
+    "build",
+    "twine",
+    "hatch",
+    "pipdeptree",
+    "ruff",
+    "pytest",
+    "pytest-mock",
+    "pytest-asyncio",
 ]
 
 demo = [
@@ -62,21 +62,114 @@ path = 'pylib/__about__.py'
 include = ["*.toml", "*.py"]
 
 # Package configuration
-# Note: We only remap pylib->wordloom for wheels, not for sdist
+# Note: We only remap pylib->onya for wheels, not for sdist
 # This ensures both direct wheel builds and wheels-from-sdist work correctly
+[tool.hatch.build.targets.wheel]
+# only-include = ["pylib", "resources"]
+only-include = ["pylib"]
+
+[tool.hatch.build.targets.wheel.sources]
+"pylib" = "onya"
+# "resources" = "onya/resources"
 
 [tool.hatch.build.targets.sdist]
 # Preserve original pylib structure in sdist so wheel-from-sdist can find it
 only-include = [
-  "pylib",
-  # "resources",
-  "test",
-  "README.md",
-  "LICENSE",
-  "LICENSE-spec",
-  "SPEC.md",
-  "pyproject.toml",
+    "pylib",
+    # "resources",
+    "test",
+    "README.md",
+    "LICENSE",
+    "LICENSE-spec",
+    "SPEC.md",
+    "pyproject.toml",
 ]
 
 [tool.hatch.metadata]
 allow-direct-references = true
+
+[[tool.hatch.envs.all.matrix]]
+python = ["3.12", "3.13"]
+
+[tool.hatch.envs.lint]
+detached = true
+dependencies = [
+    "black>=23.1.0",
+    "mypy>=1.0.0",
+    "ruff>=0.0.243",
+]
+[tool.hatch.envs.lint.scripts]
+typing = "mypy --install-types --non-interactive {args:pylib/wordloom test}"
+style = [
+    "ruff {args:.}",
+    "black --check --diff {args:.}",
+]
+fmt = [
+    "black {args:.}",
+    "ruff --fix {args:.}",
+    "style",
+]
+all = [
+    "style",
+    "typing",
+]
+
+[tool.black]
+target-version = ["py310"]
+line-length = 120
+skip-string-normalization = true
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+lint.select = ["E", "F"]
+lint.ignore = [
+    # Allow non-abstract empty methods in abstract base classes
+    "B027",
+    # Allow boolean positional values in function calls, like `dict.get(... True)`
+    "FBT003",
+    # Ignore checks for possible passwords
+    "S105", "S106", "S107",
+    # Ignore complexity
+    "C901", "PLR0911", "PLR0912", "PLR0913", "PLR0915",
+]
+lint.unfixable = [
+    # Don't touch unused imports
+    "F401",
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["wordloom"]
+
+[tool.ruff.lint.flake8-tidy-imports]
+ban-relative-imports = "all"
+
+[tool.ruff.lint.per-file-ignores]
+# Tests can use magic values, assertions, and relative imports
+"test/**/*" = ["PLR2004", "S101", "TID252"]
+# Ignore `E402` (import violations) in all `__init__.py` files
+"__init__.py" = ["E402"]
+# "path/to/file.py" = ["E402"]  # in specific file.py
+# Ignore `D` rules everywhere except for the `src/` directory.
+"!pylib/**.py" = ["D"]
+# Ignore `E501` (line too long) in Jupyter notebooks
+"*.ipynb" = ["E501"]
+
+[tool.coverage.run]
+source_pkgs = ["wordloom", "test"]
+branch = true
+parallel = true
+omit = [
+    "pylib/__about__.py",
+]
+
+[tool.coverage.paths]
+wordloom = ["pylib", "*/pylib"]
+test = ["test", "*/test"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "no cov",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]

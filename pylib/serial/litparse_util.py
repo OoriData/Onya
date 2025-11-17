@@ -38,13 +38,17 @@ class parser:
             - docheader: document header info (may be None)
             - nodes: set of nodes parsed from the document
         '''
-        # Parse the literate text using the pyparsing implementation
-        literate_lex.parse(lit_text, g, encoding=self.encoding)
+        # Track nodes before parsing
+        nodes_before = set(g.nodes.keys())
 
-        # For now, return None for docheader and empty set for nodes
-        # The pyparsing implementation populates the graph directly
-        # TODO: Track nodes that were added during parsing
-        docheader = None
-        nodes = set()
+        # Parse the literate text using the pyparsing implementation
+        doc_iri = literate_lex.parse(lit_text, g, encoding=self.encoding)
+
+        # Get nodes that were added during parsing
+        nodes_after = set(g.nodes.keys())
+        nodes = nodes_after - nodes_before
+
+        # Return doc_iri as docheader (for compatibility)
+        docheader = doc_iri
 
         return docheader, nodes
