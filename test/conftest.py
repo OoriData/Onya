@@ -1,7 +1,6 @@
 # Onya conftest.py for pytest
 
 import pytest
-import os, inspect
 from pathlib import Path
 
 

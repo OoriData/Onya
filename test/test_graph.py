@@ -9,7 +9,6 @@ pytest -s test/test_graph.py
 # import functools
 
 # Requires pytest-mock
-import pytest
 
 from amara.iri import I
 
@@ -29,7 +28,7 @@ def test_graph_1():
     p1 = n1.add_property(T('title'), 'Give me a cookie!')
     assert len(n1.properties) == 1
 
-    p2 = n1.add_property(T('genre'), 'troublemaker')
+    n1.add_property(T('genre'), 'troublemaker')
     assert len(n1.properties) == 2
     assert isinstance(p1, property_)
 

@@ -13,7 +13,7 @@ pytest -s test/py/test_serial_literate.py
 
 from amara.iri import I
 
-from onya.graph import node, graph, property_, edge
+from onya.graph import graph
 #from onya.serial.literate import *
 from onya.serial.litparse_util import parser
 

@@ -39,7 +39,7 @@ class parser:
             - nodes: set of nodes parsed from the document
         '''
         # Parse the literate text using the pyparsing implementation
-        doc_iri = literate_lex.parse(lit_text, g, encoding=self.encoding)
+        literate_lex.parse(lit_text, g, encoding=self.encoding)
 
         # For now, return None for docheader and empty set for nodes
         # The pyparsing implementation populates the graph directly

@@ -4,7 +4,7 @@
 Onya - Property graph model for Web resources
 '''
 
-from .__about__ import __version__
+from .__about__ import __version__ as __version__  # noqa: F401
 from amara.iri import I
 
 # Base IRI for Onya vocabulary

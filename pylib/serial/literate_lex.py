@@ -17,10 +17,14 @@ from enum import Enum
 
 from amara import iri  # for absolutize & matches_uri_syntax
 
-from pyparsing import * # pip install pyparsing
-ParserElement.setDefaultWhitespaceChars(' \t')
-
 from onya import I, ONYA_BASEIRI, ONYA_NULL, LITERAL
+
+from pyparsing import (
+    ParserElement, Literal, htmlComment, Optional, Word, alphas, alphanums,
+    Combine, MatchFirst, QuotedString, Regex, ZeroOrMore, White, Suppress,
+    Group, delimited_list, Forward, OneOrMore, rest_of_line
+)  # pip install pyparsing
+ParserElement.setDefaultWhitespaceChars(' \t')
 
 URI_ABBR_PAT = re.compile('@([\\-_\\w]+)([#/@])(.+)', re.DOTALL)
 URI_EXPLICIT_PAT = re.compile('<(.+)>', re.DOTALL)
@@ -244,7 +248,7 @@ def parse(lit_text, graph_obj, encoding='utf-8'):
     return doc.iri
 
 
-def expand_iri(iri_in, base, nodecontext=None):
+def expand_iri(iri_in, base, nodecontext=None, doc=None):
     if iri_in is None:
         return ONYA_NULL
     # Abreviation for special, Onya-specific properties
@@ -257,7 +261,9 @@ def expand_iri(iri_in, base, nodecontext=None):
 
     # XXX Clarify this bit?
     if iri_match := URI_ABBR_PAT.match(iri_in):
-        uri = iris[iri_match.group(1)]
+        if doc is None or doc.iris is None:
+            raise ValueError(f'IRI abbreviation "{iri_match.group(1)}" used but no doc context provided')
+        uri = doc.iris[iri_match.group(1)]
         fulliri = URI_ABBR_PAT.sub(uri + '\\2\\3', iri_in)
     else:
         # Replace upstream ValueError with our own
@@ -270,13 +276,12 @@ def expand_iri(iri_in, base, nodecontext=None):
 
 def process_nodeblock(nodeblock, graph_obj, doc):
     headermarks, nid, ntype, props = nodeblock
-    headdepth = len(headermarks)
 
     if nid == '@docheader':
         process_docheader(props, graph_obj, doc)
         return
 
-    nid = expand_iri(nid, doc.nodebase)
+    nid = expand_iri(nid, doc.nodebase, doc=doc)
 
     # Get or create the node
     if nid not in graph_obj:
@@ -286,7 +291,7 @@ def process_nodeblock(nodeblock, graph_obj, doc):
 
     # Add type if specified
     if ntype:
-        type_iri = expand_iri(ntype, doc.typebase)
+        type_iri = expand_iri(ntype, doc.typebase, doc=doc)
         n.types.add(type_iri)
 
     # Track current assertion for nested assertions
@@ -309,7 +314,7 @@ def process_nodeblock(nodeblock, graph_obj, doc):
             outer_indent = prop_info.indent
 
         # Expand the assertion label IRI
-        assertion_label = expand_iri(prop_info.key, doc.schemabase)
+        assertion_label = expand_iri(prop_info.key, doc.schemabase, doc=doc)
 
         if prop_info.indent == outer_indent:
             # This is a top-level assertion
@@ -327,7 +332,7 @@ def process_nodeblock(nodeblock, graph_obj, doc):
 
                 if typeindic == value_type.RES_VAL:
                     # This is an edge (node to node)
-                    target_id = expand_iri(val, doc.typebase)
+                    target_id = expand_iri(val, doc.typebase, doc=doc)
                     # Get or create Janelaet node
                     if target_id not in graph_obj:
                         target_node = graph_obj.node(target_id)
@@ -355,7 +360,7 @@ def process_nodeblock(nodeblock, graph_obj, doc):
                 val, typeindic = prop_info.value.verbatim, prop_info.value.typeindic
                 if typeindic == value_type.RES_VAL:
                     # Nested edge
-                    target_id = expand_iri(val, doc.typebase)
+                    target_id = expand_iri(val, doc.typebase, doc=doc)
                     if target_id not in graph_obj:
                         target_node = graph_obj.node(target_id)
                     else:

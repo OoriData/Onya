@@ -3,7 +3,7 @@ requires = ['hatchling>=1.13.0']
 build-backend = 'hatchling.build'
 
 [project]
-name = 'onya'
+name = 'Onya'
 description = 'Knowledge graph (property graph-style) model and serialization for web resources'
 readme = 'README.md'
 authors = [
@@ -27,17 +27,25 @@ classifiers = [
 dynamic = ['version']
 
 dependencies = [
-    'Amara @ git+https://github.com/OoriData/Amara.git@main',
+    'Amara>=4.0.1',
+    # 'Amara @ git+https://github.com/OoriData/Amara.git@main',
     'pyparsing',   # Parser for Onya Literate format
     'markdown',    # Markdown support
 ]
 
 [project.optional-dependencies]
+# Extra requirements for project contributors & other developers
 dev = [
-    'pytest>=7.0',
-    'pytest-mock',
-    'pytest-asyncio',
+  "build",
+  "twine",
+  "hatch",
+  "pipdeptree",
+  "ruff",
+  "pytest",
+  "pytest-mock",
+  "pytest-asyncio",
 ]
+
 demo = [
     'fire',  # CLI framework
 ]
@@ -53,8 +61,22 @@ path = 'pylib/__about__.py'
 [tool.hatch.build]
 include = ["*.toml", "*.py"]
 
-[tool.hatch.build.sources]  # Rewriting path in distribution
-"pylib" = "onya"
+# Package configuration
+# Note: We only remap pylib->wordloom for wheels, not for sdist
+# This ensures both direct wheel builds and wheels-from-sdist work correctly
+
+[tool.hatch.build.targets.sdist]
+# Preserve original pylib structure in sdist so wheel-from-sdist can find it
+only-include = [
+  "pylib",
+  # "resources",
+  "test",
+  "README.md",
+  "LICENSE",
+  "LICENSE-spec",
+  "SPEC.md",
+  "pyproject.toml",
+]
 
 [tool.hatch.metadata]
 allow-direct-references = true

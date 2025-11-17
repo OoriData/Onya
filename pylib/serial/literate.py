@@ -17,7 +17,7 @@ from onya import I, ONYA_BASEIRI
 
 TYPE_REL = I(iri.absolutize('type', ONYA_BASEIRI))
 
-__all__ = ['read', 'read_coro', 'write',
+__all__ = ['read', 'write',
     # Non-standard
     'longtext',
 ]
