@@ -1,3 +1,5 @@
+# SPDX-FileCopyrightText: 2023-present Oori Data <info@oori.dev>
+# SPDX-License-Identifier: Apache-2.0
 # onya.serial.literate
 
 """
@@ -69,6 +71,11 @@ def value_format(val):
 def write(model, out=sys.stdout, base=None, propertybase=None, shorteners=None):
     '''
     models - input Onya model from which output is generated
+
+    out - file pointer to write to
+    base - base IRI for resolving relative node IDs
+    propertybase - base IRI for resolving relative property IDs
+    shorteners - dictionary of shorteners for property IDs
     '''
     shorteners = shorteners or {}
 
@@ -98,8 +105,8 @@ def write(model, out=sys.stdout, base=None, propertybase=None, shorteners=None):
             for k, v in a.items():
                 rendered_k = abbreviate(k, all_propertybase)
                 if isinstance(rendered_k, I):
-                    rendered_r = f'<{rendered_k}>'
-                out.write(f'    * {rendered_k}: {value_format(t)}\n')
+                    rendered_k = f'<{rendered_k}>'
+                out.write(f'    * {rendered_k}: {value_format(v)}\n')
 
         out.write('\n')
     return

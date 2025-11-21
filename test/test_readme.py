@@ -30,7 +30,7 @@ def test_readme_example():
 
 # Ify [Person]
 
-* name: Ifeoma Adebayo
+* name: Ifeoma Obasi
 * nickname: Ify
 * age: 27
 '''
@@ -98,7 +98,7 @@ def test_readme_example():
         friend = edge.target
         assert friend == ify
         for name_prop in friend.getprop('https://schema.org/name'):
-            assert name_prop.value == 'Ifeoma Adebayo'
+            assert name_prop.value == 'Ifeoma Obasi'
             found_friend = True
         # Access nested properties on the edge
         for date_prop in edge.getprop('https://schema.org/startDate'):
@@ -115,7 +115,7 @@ def test_readme_example():
         for name_prop in person.getprop('https://schema.org/name'):
             people_names.append(name_prop.value)
     assert 'Chukwuemeka Okafor' in people_names
-    assert 'Ifeoma Adebayo' in people_names
+    assert 'Ifeoma Obasi' in people_names
 
 
 def test_readme_example_edge_removal():

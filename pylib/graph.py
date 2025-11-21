@@ -1,3 +1,6 @@
+# SPDX-FileCopyrightText: 2023-present Oori Data <info@oori.dev>
+# SPDX-License-Identifier: Apache-2.0
+# onya.graph
 '''
 Graph and other fundamental classes for Onya
 
@@ -180,3 +183,36 @@ class graph(MutableMapping):
         for n in self.nodes.values():
             if n.types & types_set:
                 yield n
+
+    def match(self, origin: I | str) -> Iterator[tuple[I | str, I | str, str | I, dict]]:
+        '''
+        Match all assertions (properties and edges) for a given origin node.
+        
+        Returns an iterator of tuples: (origin, relation, target, annotations)
+        - origin: the node ID (same as input)
+        - relation: the property/edge label (IRI)
+        - target: for properties, the string value; for edges, the target node ID
+        - annotations: dict mapping property labels to values from assertion properties
+        '''
+        if origin not in self.nodes:
+            return
+        
+        node_obj = self.nodes[origin]
+        
+        # Helper to convert assertion properties to a dict
+        def props_to_dict(assertion_obj):
+            '''Convert a set of properties to a dict (last value wins for duplicates)'''
+            result = {}
+            for prop in assertion_obj.properties:
+                result[prop.label] = prop.value
+            return result
+        
+        # Yield all properties
+        for prop in node_obj.properties:
+            annotations = props_to_dict(prop)
+            yield (origin, prop.label, prop.value, annotations)
+        
+        # Yield all edges
+        for edge_obj in node_obj.edges:
+            annotations = props_to_dict(edge_obj)
+            yield (origin, edge_obj.label, edge_obj.target.id, annotations)

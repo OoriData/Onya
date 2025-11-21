@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
-# onya.serial.litparse_util.py
+# SPDX-FileCopyrightText: 2023-present Oori Data <info@oori.dev>
+# SPDX-License-Identifier: Apache-2.0
+# onya.serial.litparse_util
 '''
 Utility wrapper for Onya Literate parser
 

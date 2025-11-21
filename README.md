@@ -48,12 +48,12 @@ Here's a simple example demonstrating the core Onya API. First, let's define a s
 
 # Ify [Person]
 
-* name: Ifeoma Adebayo
+* name: Ifeoma Obasi
 * nickname: Ify
 * age: 27
 ```
 
-Now let's parse this graph and interact with it using the Python API:
+Parse this graph and interact with it using the Python API.
 
 ```python
 from onya.graph import graph
@@ -76,7 +76,7 @@ onya_text = '''
 
 # Ify [Person]
 
-* name: Ifeoma Adebayo
+* name: Ifeoma Obasi
 * nickname: Ify
 * age: 27
 '''
@@ -123,7 +123,12 @@ for edge in chuks.traverse('https://schema.org/knows'):
 # Find all nodes of a certain type
 for person in g.typematch('https://schema.org/Person'):
     for name_prop in person.getprop('https://schema.org/name'):
-        print(f"Person in graph: {name_prop.value}")
+        print(f'Person in graph: {name_prop.value}')
+
+# Reserialize to Onya literate
+from onya.serial.literate import write
+
+write(g)
 ```
 
 This example demonstrates:

@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
-# onya.serial.literate_lex.py
+# SPDX-FileCopyrightText: 2023-present Oori Data <info@oori.dev>
+# SPDX-License-Identifier: Apache-2.0
+# onya.serial.literate_lex
 '''
 Main body of the Onya Literate parser
 
