@@ -6,20 +6,16 @@ Notable changes to  Format based on [Keep a Changelog](https://keepachangelog.co
 ## [Unreleased]
 -->
 
-## [0.1.2] - 20251124
+## [0.1.2] - 20251121
 
 ### Added
 
 - Preliminary graph.match() method
-- CHANGELOG.md 😆
+- Files: LICENSE, CONTRIBUTING.md and this very CHANGELOG.md 😆
 
 ### Fixed
 
-- 
-
-### Changed
-
-- 
+- onya.serial.literate.write()
 
 ## [0.1.1] - 20251118
 

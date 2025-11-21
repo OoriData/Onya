@@ -64,6 +64,13 @@ include = ["*.toml", "*.py"]
 # Package configuration
 # Note: We only remap pylib->onya for wheels, not for sdist
 # This ensures both direct wheel builds and wheels-from-sdist work correctly
+#
+# Development note: Hatch environments don't work well with this pylib→onya remapping.
+# The remapping in [tool.hatch.build.sources] only applies during wheel building, not
+# in dev environments. Hatch's dev-mode uses editable installs which can't apply the
+# remapping, and dev-mode=false means no install happens at all.
+#
+# Use proper installation instead: `uv pip install -U .`
 [tool.hatch.build.targets.wheel]
 # only-include = ["pylib", "resources"]
 only-include = ["pylib"]
@@ -99,7 +106,7 @@ dependencies = [
     "ruff>=0.0.243",
 ]
 [tool.hatch.envs.lint.scripts]
-typing = "mypy --install-types --non-interactive {args:pylib/wordloom test}"
+typing = "mypy --install-types --non-interactive {args:pylib test}"
 style = [
     "ruff {args:.}",
     "black --check --diff {args:.}",
@@ -139,7 +146,7 @@ lint.unfixable = [
 ]
 
 [tool.ruff.lint.isort]
-known-first-party = ["wordloom"]
+known-first-party = ["onya"]
 
 [tool.ruff.lint.flake8-tidy-imports]
 ban-relative-imports = "all"
@@ -156,7 +163,7 @@ ban-relative-imports = "all"
 "*.ipynb" = ["E501"]
 
 [tool.coverage.run]
-source_pkgs = ["wordloom", "test"]
+source_pkgs = ["onya", "test"]
 branch = true
 parallel = true
 omit = [
@@ -164,7 +171,7 @@ omit = [
 ]
 
 [tool.coverage.paths]
-wordloom = ["pylib", "*/pylib"]
+onya = ["pylib", "*/pylib"]
 test = ["test", "*/test"]
 
 [tool.coverage.report]
