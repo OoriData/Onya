@@ -2,6 +2,9 @@
 
 # Python quick start
 
+[![PyPI - Version](https://img.shields.io/pypi/v/onya.svg)](https://pypi.org/project/Onya)
+[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/onya.svg)](https://pypi.org/project/Onya)
+
 ## Installation
 
 <!--
@@ -139,6 +142,13 @@ This example demonstrates:
 - Traversing the graph
 - Querying by type
 
+# Acknowledgments
+
+<table><tr>
+  <td><a href="https://oori.dev/"><img src="https://www.oori.dev/assets/branding/oori_Logo_FullColor.png" width="64" /></a></td>
+  <td>Onya is primarily developed by the crew at <a href="https://oori.dev/">Oori Data</a>. We offer LLMOps, data pipelines and software engineering services around AI/LLM applications.</td>
+</tr></table>
+
 # Background
 
 Onya is based on experience from developing [Versa](https://github.com/uogbuji/versa) and also working on [the MicroXML spec](https://dvcs.w3.org/hg/microxml/raw-file/tip/spec/microxml.html) and implementations thereof.
@@ -157,10 +167,6 @@ Contributions welcome! We're interested in feedback from the community about wha
 - **Specification** (wordloom_spec.md): [Creative Commons Attribution 4.0 International (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/) - See [LICENSE-spec](LICENSE-spec)
 
 The specification is under CC BY 4.0 to encourage broad adoption and derivative work while ensuring attribution. We want the format itself to be as open and reusable as possible, allowing anyone to create implementations in any language or adapt the format for their specific needs.
-
-# Acknowledgments
-
-Created by [Oori Data](https://oori.dev). Word Loom emerged from our work building multilingual LLM applications and finding gaps in existing prompt management approaches.
 
 # Related Work
 

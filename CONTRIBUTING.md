@@ -4,7 +4,7 @@ onya Contributor Guide
 
 ## Why We Use `uv pip install -U .`
 
-This project uses a non-standard source layout where `pylib/` becomes `onya/` during package building. This remapping only happens during wheel building, not in development environments.
+This project uses a source layout where `pylib/` becomes `onya/` during package building. This remapping only happens during wheel building, not in development environments.
 
 **Why not use hatch environments?**
 - Hatch's path remapping (`tool.hatch.build.sources`) only applies during wheel building
