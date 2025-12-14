@@ -1,0 +1,9 @@
+# Generated DOT files
+*.dot
+
+# Generated image files
+*.png
+*.svg
+*.pdf
+*.jpg
+*.jpeg

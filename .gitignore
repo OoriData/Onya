@@ -1,4 +1,10 @@
+.DS_Store
 scratch
+demo/graphviz_basic/demo_*.dot
+demo/graphviz_basic/demo_*.png
+demo/graphviz_basic/demo_*.svg
+demo/graphviz_basic/demo_*.pdf
+
 #PyCharm
 .idea
 .vscode

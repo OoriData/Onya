@@ -6,7 +6,7 @@ Notable changes to  Format based on [Keep a Changelog](https://keepachangelog.co
 ## [Unreleased]
 -->
 
-## [0.1.2] - 20251121
+## [0.1.2] - 20251202
 
 ### Added
 

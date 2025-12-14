@@ -210,11 +210,11 @@ value_expr.setParseAction(_make_value)
 
 def parse(lit_text, graph_obj, encoding='utf-8'):
     """
-    Translate Onya Literate text into Onya graph
+    Translate Onya Literate text into nodes which are added to an Onya graph
 
     lit_text -- Onya Literate source text
     graph_obj -- Onya graph to populate
-    encoding -- character encoding (defaults to UTF-8)
+    encoding -- character encoding used in processing the input text (defaults to UTF-8)
 
     Returns: The document IRI from @document header, or None
 
