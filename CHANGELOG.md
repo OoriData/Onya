@@ -6,10 +6,11 @@ Notable changes to  Format based on [Keep a Changelog](https://keepachangelog.co
 ## [Unreleased]
 -->
 
-## [0.1.2] - 20251202
+## [0.2.0] - 20251215
 
 ### Added
 
+- Graphviz (DOT) serializer: onya.serial.graphviz.write(), incl. styling options, IRI abbreviation, and optional edge annotations
 - Preliminary graph.match() method
 - Files: LICENSE, CONTRIBUTING.md and this very CHANGELOG.md 😆
 
