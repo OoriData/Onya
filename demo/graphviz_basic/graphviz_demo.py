@@ -15,9 +15,11 @@ This will generate several .dot files that can be rendered with:
 '''
 
 import sys
+from pathlib import Path
 
 from onya.graph import graph
 from onya.serial import graphviz
+from onya.serial.literate_lex import LiterateParser
 
 
 def demo_basic():
@@ -179,6 +181,28 @@ def demo_minimal():
     print('  Render with: dot -Tpng demo_minimal.dot -o demo_minimal.png\n')
 
 
+def demo_from_literate():
+    '''Parse an Onya Literate document and export to DOT'''
+    print('Parsing an Onya Literate document and exporting to DOT…')
+
+    root = Path(__file__).resolve().parents[2]
+    docpath = root / 'test' / 'resource' / 'schemaorg' / 'thingsfallapart.onya'
+
+    g = graph()
+    op = LiterateParser()
+    result = op.parse(docpath.read_text(encoding='utf-8'), g)
+
+    outpath = 'demo_literate.dot'
+    with open(outpath, 'w') as f:
+        graphviz.write(g, out=f,
+                      base='http://example.org/',
+                      propertybase='https://schema.org/')
+
+    print(f'  Parsed: {docpath.name} (@document={result.doc_iri})')
+    print(f'  Generated: {outpath}')
+    print(f'  Render with: dot -Tpng {outpath} -o demo_literate.png\n')
+
+
 def main():
     print('Onya Graphviz Emitter Demo')
     print('=' * 50)
@@ -188,6 +212,7 @@ def main():
     demo_styled()
     demo_reified()
     demo_minimal()
+    demo_from_literate()
 
     print('=' * 50)
     print('All demos complete!')

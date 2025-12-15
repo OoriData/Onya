@@ -7,7 +7,7 @@ pytest -s test/test_readme.py
 '''
 
 from onya.graph import graph
-from onya.serial import literate_lex
+from onya.serial.literate_lex import LiterateParser
 
 
 def test_readme_example():
@@ -18,7 +18,7 @@ def test_readme_example():
 # @docheader
 
 * @document: http://example.org/friendship-graph
-* @base: http://example.org/people/
+* @nodebase: http://example.org/people/
 * @schema: https://schema.org/
 * @type-base: https://schema.org/
 
@@ -36,11 +36,16 @@ def test_readme_example():
 '''
 
     g = graph()
-    doc_iri = literate_lex.parse(onya_text, g)
+    op = LiterateParser()
+    result = op.parse(onya_text, g)
+    doc_iri = result.doc_iri
 
     # Verify document was parsed
     assert doc_iri == 'http://example.org/friendship-graph'
-    assert len(g) == 2  # 2 person nodes (Chuks and Ify)
+    # The parser creates a node for the document itself
+    assert doc_iri in g
+    assert len(g) == 3  # document + 2 person nodes (Chuks and Ify)
+    assert len(list(g.typematch('https://schema.org/Person'))) == 2
 
     # Access nodes and their properties
     chuks = g['http://example.org/people/Chuks']
@@ -125,7 +130,7 @@ def test_readme_example_edge_removal():
 # @docheader
 
 * @document: http://example.org/test
-* @base: http://example.org/people/
+* @nodebase: http://example.org/people/
 * @schema: https://schema.org/
 
 # Person1 [Person]
@@ -138,7 +143,8 @@ def test_readme_example_edge_removal():
 '''
 
     g = graph()
-    literate_lex.parse(onya_text, g)
+    op = LiterateParser()
+    op.parse(onya_text, g)
 
     person1 = g['http://example.org/people/Person1']
     person2 = g['http://example.org/people/Person2']

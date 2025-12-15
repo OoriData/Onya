@@ -2,7 +2,7 @@
 
 * @document: http://example.org/achebe-bio
 * title: Chinua Achebe Biography
-* @base: http://example.org/
+* @nodebase: http://example.org/
 * @schema: https://schema.org/
 * @language: en
 

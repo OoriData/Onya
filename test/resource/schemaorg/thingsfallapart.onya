@@ -5,7 +5,7 @@
 
 * @document: http://example.org/classics/things-fall-apart
 * title: Achebe - Things Fall Apart knowledgebase
-* @base: http://example.org/classics/
+* @nodebase: http://example.org/classics/
 * @schema: https://schema.org/
 * @language: en
 

@@ -104,14 +104,14 @@ These are ignored by the parser and do not appear in the graph in any way. They 
 
 * @document: http://example.org/doc
 * title: Example Document
-* @base: http://example.org/
+* @nodebase: http://example.org/
 * @schema: https://schema.org/
 * @language: en
 ```
 
 The document header specifies:
 - `@document`: IRI of the document itself
-- `@base`: Base IRI for resolving relative node IDs
+- `@nodebase`: Base IRI for resolving relative node IDs, whether as origins or edge targets; if omitted, `@document` is used as the node base
 - `@schema`: Base IRI for schema vocabulary (types, property/edge labels)
 - `@language`: Default language for string values
 - Other assertions are attached to the document node
@@ -129,7 +129,7 @@ Each node block defines a node:
 
 Structure:
 - Header: `# NodeID [OptionalType]`
-  - `NodeID` is resolved relative to `@base`
+  - `NodeID` is resolved relative to `@nodebase` (or `@document` if `@nodebase` is not set)
   - `Type` is resolved relative to `@schema`
 - Assertions: list items starting with `*`
   - `label: value` - property (label is IRI, value is string)
@@ -143,7 +143,7 @@ Structure:
 
 * @document: http://example.org/classics/things-fall-apart
 * title: Things Fall Apart knowledgebase
-* @base: http://example.org/classics/
+* @nodebase: http://example.org/classics/
 * @schema: https://schema.org/
 * @language: en
 
@@ -256,6 +256,14 @@ Text references:
 - Define the text content with `:reference-name = """content"""`
 - Text references can be defined anywhere in the document, not necessarily before their usage
 - Triple-quoted content preserves all whitespace and newlines exactly as written
+
+## Optional assertion provenance (`@source`)
+
+Some workflows want document-level provenance without making it part of the core model. The parser can optionally tag **every created assertion** (including nested assertions) with a sub-property:
+
+- `@source`: the `@document` IRI of the source document
+
+This is **off by default** to avoid graph bloat.
 
 ## Model Summary
 

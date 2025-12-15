@@ -39,7 +39,7 @@ Here's a simple example demonstrating the core Onya API. First, let's define a s
 # @docheader
 
 * @document: http://example.org/friendship-graph
-* @base: http://example.org/people/
+* @nodebase: http://example.org/people/
 * @schema: https://schema.org/
 * @type-base: https://schema.org/
 
@@ -60,14 +60,14 @@ Parse this graph and interact with it using the Python API.
 
 ```python
 from onya.graph import graph
-from onya.serial import literate_lex
+from onya.serial.literate_lex import LiterateParser
 
 # Parse the Onya Literate text into a graph
 onya_text = '''
 # @docheader
 
 * @document: http://example.org/friendship-graph
-* @base: http://example.org/people/
+* @nodebase: http://example.org/people/
 * @schema: https://schema.org/
 * @type-base: https://schema.org/
 
@@ -85,9 +85,11 @@ onya_text = '''
 '''
 
 g = graph()
-doc_iri = literate_lex.parse(onya_text, g)
-print(f"Parsed document: {doc_iri}")
-print(f"Graph has {len(g)} nodes")
+op = LiterateParser()
+result = op.parse(onya_text, g)
+doc_iri = result.doc_iri
+print(f'Parsed document: {doc_iri}')
+print(f'Graph has {len(g)} nodes')
 
 # Access nodes and their properties
 chuks = g['http://example.org/people/Chuks']
@@ -95,11 +97,11 @@ ify = g['http://example.org/people/Ify']
 
 # Get a specific property value
 for prop in chuks.getprop('https://schema.org/name'):
-    print(f"Name: {prop.value}")
+    print(f'Name: {prop.value}')
 
 # Add a friendship edge between Chuks and Ify
 friendship = chuks.add_edge('https://schema.org/knows', ify)
-print(f"Added edge: {friendship}")
+print(f'Added edge: {friendship}')
 
 # Add nested properties to the friendship (metadata about the relationship)
 friendship.add_property('https://schema.org/startDate', '2018-03-15')
@@ -118,10 +120,10 @@ chuks.add_property('https://schema.org/age', '29')
 for edge in chuks.traverse('https://schema.org/knows'):
     friend = edge.target
     for name_prop in friend.getprop('https://schema.org/name'):
-        print(f"Chuks knows: {name_prop.value}")
+        print(f'Chuks knows: {name_prop.value}')
     # Access nested properties on the edge
     for date_prop in edge.getprop('https://schema.org/startDate'):
-        print(f"  Friends since: {date_prop.value}")
+        print(f'  Friends since: {date_prop.value}')
 
 # Find all nodes of a certain type
 for person in g.typematch('https://schema.org/Person'):

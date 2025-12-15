@@ -14,6 +14,7 @@ This will generate four DOT files demonstrating different features:
 2. **demo_styled.dot** - Custom styling with different shapes/colors per node type
 3. **demo_reified.dot** - Reified relationships (edges with properties/metadata)
 4. **demo_minimal.dot** - Minimal structure-only view (no properties displayed)
+5. **demo_literate.dot** - Parse an Onya Literate document and export to DOT
 
 # Rendering DOT Files
 

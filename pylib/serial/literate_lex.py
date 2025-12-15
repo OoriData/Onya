@@ -9,8 +9,7 @@ Onya Literate, or Onya Lit, is a Markdown-based format
 
 Proper entry point of use is onya.serial.literate
 
-see: doc/literate_format.md
-
+see: the [Onya Literate format documentation](https://github.com/OoriData/Onya/blob/main/SPEC.md#onya-literate-serialization)
 '''
 
 import re
@@ -32,6 +31,7 @@ URI_ABBR_PAT = re.compile('@([\\-_\\w]+)([#/@])(.+)', re.DOTALL)
 URI_EXPLICIT_PAT = re.compile('<(.+)>', re.DOTALL)
 
 TYPE_REL = ONYA_BASEIRI('type')
+SOURCE_REL = ONYA_BASEIRI('source')
 
 class value_type(Enum):
     '''
@@ -50,6 +50,7 @@ class prop_info:
     value: list = None      # 
     children: list = None   # 
     is_text_ref: bool = False  # True if this is a text reference (uses ::)
+    is_edge: bool = False   # True if this is an edge (uses ->)
     multiline_text: str = None  # For storing multiline text content
 
 
@@ -69,6 +70,90 @@ class value_info:
     verbatim: int = None    # Literal value input text
     typeindic: int = None   # Value type indicator (from value_type enum)
 
+@dataclass
+class ParseResult:
+    '''
+    Result of parsing an Onya Literate document.
+    '''
+    doc_iri: str | None
+    graph: object
+    nodes_added: set
+
+
+class LiterateParser:
+    '''
+    Onya Literate parser with configurable behavior.
+
+    The classic `parse()` function remains available for backwards compatibility,
+    but new behavior flags are supported via this class.
+    '''
+    def __init__(self, *, document_source_assertions: bool = False, encoding: str = 'utf-8'):
+        self.document_source_assertions = document_source_assertions
+        self.encoding = encoding
+
+    def parse(self, lit_text, graph_obj=None, *, encoding: str | None = None) -> ParseResult:
+        '''
+        Parse Onya Literate source text.
+
+        - If `graph_obj` is provided, assertions are added to it (merge workflow).
+        - If `graph_obj` is None, a new `onya.graph.graph` is created.
+
+        Returns: `ParseResult(doc_iri, graph, nodes_added)`
+        '''
+        if graph_obj is None:
+            # Lazy import to avoid circular dependency concerns
+            from onya.graph import graph as graph_cls
+            graph_obj = graph_cls()
+
+        nodes_before = set(getattr(graph_obj, 'nodes', {}).keys()) if hasattr(graph_obj, 'nodes') else set(graph_obj)
+
+        doc = doc_info()
+        doc.iris = {}  # Initialize the iris dictionary
+        doc.text_refs = {}  # Initialize the text references dictionary
+
+        parsed = node_seq.parseString(lit_text, parseAll=True)
+
+        # First pass: collect all text reference definitions
+        for item in parsed:
+            if isinstance(item, tuple) and item[0] == 'text_ref_def':
+                ref_name, ref_content = item[1], item[2]
+                doc.text_refs[ref_name] = str(ref_content)
+
+        # Second pass: process node blocks
+        for item in parsed:
+            if not (isinstance(item, tuple) and item[0] == 'text_ref_def'):
+                process_nodeblock(item, graph_obj, doc, self)
+
+        nodes_after = set(getattr(graph_obj, 'nodes', {}).keys()) if hasattr(graph_obj, 'nodes') else set(graph_obj)
+        nodes_added = nodes_after - nodes_before
+
+        return ParseResult(doc.iri, graph_obj, nodes_added)
+
+    def _node_base(self, doc: doc_info) -> str | None:
+        '''
+        Base used for resolving relative node IDs. Defaults to @document if
+        @nodebase is not specified.
+        '''
+        return doc.nodebase or doc.iri
+
+    def _type_base(self, doc: doc_info) -> str | None:
+        '''
+        Base used for resolving relative type IRIs. Defaults to @schema if
+        @type-base (or legacy @resource-type) is not specified.
+        '''
+        return doc.typebase or doc.schemabase
+
+    def _maybe_add_source(self, assertion_obj, doc: doc_info):
+        '''
+        Optionally add @source sub-property to assertions for provenance.
+        '''
+        if not self.document_source_assertions:
+            return
+        if not doc.iri:
+            return
+        # Properties are string-valued in core Onya; store source IRI as string.
+        assertion_obj.add_property(SOURCE_REL, doc.iri)
+
 
 def _make_tree(string, location, tokens):
     '''
@@ -76,6 +161,14 @@ def _make_tree(string, location, tokens):
     '''
     return prop_info(indent=len(tokens[0]), key=tokens[1],
                         value=tokens[2], children=None)
+
+
+def _make_edge_tree(string, location, tokens):
+    '''
+    Parse action to return a parsed tree node for edges (->)
+    '''
+    return prop_info(indent=len(tokens[0]), key=tokens[1],
+                        value=tokens[2], children=None, is_edge=True)
 
 
 def _make_value(string, location, tokens):
@@ -122,17 +215,17 @@ QUOTED_STRING   = MatchFirst((QuotedString('"', escChar='\\'), QuotedString("'",
 TRIPLE_QUOTED_STRING = Regex(r'"""([^"]*(?:"[^"]*)*?)"""', re.DOTALL) \
                         .setParseAction(lambda tokens: LITERAL(tokens[0]))
 # See: https://rdflib.readthedocs.io/en/stable/_modules/rdflib/plugins/sparql/parser.html
-IRIREF          = Regex(r'[^<>"{}|^`\\\[\]%s]*' % "".join(
-                        "\\x%02X" % i for i in range(33)
+IRIREF          = Regex(r'[^<>"{}|^`\\\[\]%s]*' % ''.join(
+                        '\\x%02X' % i for i in range(33)
                     )) \
                     .setParseAction(iriref_parse_action)
 #REST_OF_LINE = rest_of_line.leave_whitespace()
 
 blank_to_eol    = ZeroOrMore(COMMENT) + White('\n')
-explicit_iriref = Combine(Suppress("<") + IRIREF + Suppress(">")) \
+explicit_iriref = Combine(Suppress('<') + IRIREF + Suppress('>')) \
                     .setParseAction(iriref_parse_action)
 
-# Text reference definition: :name = """content"""
+# Text reference definition: :name = '''content'''
 text_ref_def    = Suppress(':') + IDENT + Suppress('=') + TRIPLE_QUOTED_STRING
 
 value_expr      = ( explicit_iriref + Suppress(ZeroOrMore(COMMENT)) ) | ( QUOTED_STRING + Suppress(ZeroOrMore(COMMENT)) ) | rest_of_line  # noqa: E501
@@ -164,12 +257,12 @@ def _make_text_ref_tree(string, location, tokens):
                         is_text_ref=True)
 
 def parse_multiline_text(lines, start_idx, current_indent):
-    """
+    '''
     Parse multiline text that continues after a property definition.
     Returns (text_content, next_line_idx)
-    """
+    '''
     if start_idx >= len(lines):
-        return "", start_idx
+        return '', start_idx
 
     text_lines = []
     i = start_idx
@@ -203,13 +296,13 @@ def _make_text_ref_def(string, location, tokens):
 
 prop.setParseAction(_make_tree)
 prop_text_ref.setParseAction(_make_text_ref_tree)
-edge.setParseAction(_make_tree)
+edge.setParseAction(_make_edge_tree)
 text_ref_def.setParseAction(_make_text_ref_def)
 value_expr.setParseAction(_make_value)
 
 
 def parse(lit_text, graph_obj, encoding='utf-8'):
-    """
+    '''
     Translate Onya Literate text into nodes which are added to an Onya graph
 
     lit_text -- Onya Literate source text
@@ -227,27 +320,27 @@ def parse(lit_text, graph_obj, encoding='utf-8'):
     40
     >>> next(m.match(None, 'http://uche.ogbuji.net/poems/updated', '2013-10-15'))
     (I(http://uche.ogbuji.net/poems/1), I(http://uche.ogbuji.net/poems/updated), '2013-10-15', {})
-    """
-    # Set up document parameters
-    doc = doc_info()
-    doc.iris = {}  # Initialize the iris dictionary
-    doc.text_refs = {}  # Initialize the text references dictionary
+    '''
+    op = LiterateParser(encoding=encoding)
+    return op.parse(lit_text, graph_obj, encoding=encoding).doc_iri
 
-    parsed = node_seq.parseString(lit_text, parseAll=True)
 
-    # First pass: collect all text reference definitions
-    for item in parsed:
-        if isinstance(item, tuple) and item[0] == 'text_ref_def':
-            ref_name, ref_content = item[1], item[2]
-            doc.text_refs[ref_name] = str(ref_content)
+_SCHEME_RE = re.compile(r'^[a-zA-Z][a-zA-Z0-9+\-.]*:')
 
-    # Second pass: process node blocks
-    for item in parsed:
-        if not (isinstance(item, tuple) and item[0] == 'text_ref_def'):
-            # Handle node blocks
-            process_nodeblock(item, graph_obj, doc)
 
-    return doc.iri
+def _lexical_join(base: str, ref: str) -> str:
+    '''
+    Onya's IRI resolution convention is intentionally lexical: for relative refs,
+    resolve by concatenation of base + ref.
+    '''
+    if base is None:
+        return ref
+    if ref is None:
+        return ref
+    # If ref already looks like an absolute IRI (has a scheme), don't join.
+    if _SCHEME_RE.match(ref):
+        return ref
+    return f'{base}{ref}'
 
 
 def expand_iri(iri_in, base, nodecontext=None, doc=None):
@@ -255,35 +348,37 @@ def expand_iri(iri_in, base, nodecontext=None, doc=None):
         return ONYA_NULL
     # Abreviation for special, Onya-specific properties
     if iri_in.startswith('@'):
-        return I(iri.absolutize(iri_in[1:], ONYA_BASEIRI))
+        return ONYA_BASEIRI(iri_in[1:])
 
     # Is it an explicit IRI (i.e. with <…>)?
     if iri_match := URI_EXPLICIT_PAT.match(iri_in):
-        return iri_match.group(1) if base is None else I(iri.absolutize(iri_match.group(1), base))
+        inner = iri_match.group(1)
+        return I(inner if base is None else _lexical_join(base, inner))
 
     # XXX Clarify this bit?
     if iri_match := URI_ABBR_PAT.match(iri_in):
         if doc is None or doc.iris is None:
-            raise ValueError(f'IRI abbreviation "{iri_match.group(1)}" used but no doc context provided')
+            raise ValueError(f'IRI abbreviation `{iri_match.group(1)}` used but no doc context provided')
         uri = doc.iris[iri_match.group(1)]
         fulliri = URI_ABBR_PAT.sub(uri + '\\2\\3', iri_in)
     else:
         # Replace upstream ValueError with our own
         if nodecontext and not(iri.matches_uri_ref_syntax(iri_in)):
             # FIXME: Replace with a Onya-specific error
-            raise ValueError(f'Invalid IRI reference provided for node context {nodecontext}: "{iri_in}"')
-        fulliri = iri_in if base is None else I(iri.absolutize(iri_in, base))
+            raise ValueError(f'Invalid IRI reference provided for node context {nodecontext}: `{iri_in}`')
+        fulliri = iri_in if base is None else _lexical_join(base, iri_in)
     return I(fulliri)
 
 
-def process_nodeblock(nodeblock, graph_obj, doc):
+def process_nodeblock(nodeblock, graph_obj, doc, parser: LiterateParser | None = None):
     headermarks, nid, ntype, props = nodeblock
 
     if nid == '@docheader':
         process_docheader(props, graph_obj, doc)
         return
 
-    nid = expand_iri(nid, doc.nodebase, doc=doc)
+    node_base = parser._node_base(doc) if parser else doc.nodebase
+    nid = expand_iri(nid, node_base, doc=doc)
 
     # Get or create the node
     if nid not in graph_obj:
@@ -293,7 +388,8 @@ def process_nodeblock(nodeblock, graph_obj, doc):
 
     # Add type if specified
     if ntype:
-        type_iri = expand_iri(ntype, doc.typebase, doc=doc)
+        type_base = parser._type_base(doc) if parser else doc.typebase
+        type_iri = expand_iri(ntype, type_base, doc=doc)
         n.types.add(type_iri)
 
     # Track current assertion for nested assertions
@@ -328,24 +424,29 @@ def process_nodeblock(nodeblock, graph_obj, doc):
                     current_assertion = n.add_property(assertion_label, str_val)
                 else:
                     # Text reference not found, skip or use empty string
-                    current_assertion = n.add_property(assertion_label, "")
+                    current_assertion = n.add_property(assertion_label, '')
+                if parser and current_assertion is not None:
+                    parser._maybe_add_source(current_assertion, doc)
             elif prop_info.value:
                 val, typeindic = prop_info.value.verbatim, prop_info.value.typeindic
 
-                if typeindic == value_type.RES_VAL:
-                    # This is an edge (node to node)
-                    target_id = expand_iri(val, doc.typebase, doc=doc)
-                    # Get or create Janelaet node
+                if prop_info.is_edge:
+                    # This is an edge (node to node). Resolve RHS as a node ID.
+                    node_base = parser._node_base(doc) if parser else doc.nodebase
+                    target_id = expand_iri(str(val), node_base, doc=doc)
                     if target_id not in graph_obj:
                         target_node = graph_obj.node(target_id)
                     else:
                         target_node = graph_obj[target_id]
-                    # Add edge and track it for nested assertions
                     current_assertion = n.add_edge(assertion_label, target_node)
-                elif typeindic == value_type.TEXT_VAL or typeindic == value_type.UNKNOWN_VAL:
+                    if parser and current_assertion is not None:
+                        parser._maybe_add_source(current_assertion, doc)
+                else:
                     # This is a property (node to string value)
                     str_val = str(val)
                     current_assertion = n.add_property(assertion_label, str_val)
+                    if parser and current_assertion is not None:
+                        parser._maybe_add_source(current_assertion, doc)
 
         else:
             # This is a nested assertion on current_assertion
@@ -357,26 +458,34 @@ def process_nodeblock(nodeblock, graph_obj, doc):
                 ref_name = str(prop_info.value) if prop_info.value else None
                 if ref_name and ref_name in doc.text_refs:
                     str_val = doc.text_refs[ref_name]
-                    current_assertion.add_property(assertion_label, str_val)
+                    nested = current_assertion.add_property(assertion_label, str_val)
+                    if parser and nested is not None:
+                        parser._maybe_add_source(nested, doc)
             elif prop_info.value:
                 val, typeindic = prop_info.value.verbatim, prop_info.value.typeindic
-                if typeindic == value_type.RES_VAL:
+                if prop_info.is_edge:
                     # Nested edge
-                    target_id = expand_iri(val, doc.typebase, doc=doc)
+                    node_base = parser._node_base(doc) if parser else doc.nodebase
+                    target_id = expand_iri(str(val), node_base, doc=doc)
                     if target_id not in graph_obj:
                         target_node = graph_obj.node(target_id)
                     else:
                         target_node = graph_obj[target_id]
-                    current_assertion.add_edge(assertion_label, target_node)
-                elif typeindic == value_type.TEXT_VAL or typeindic == value_type.UNKNOWN_VAL:
+                    nested = current_assertion.add_edge(assertion_label, target_node)
+                    if parser and nested is not None:
+                        parser._maybe_add_source(nested, doc)
+                else:
                     # Nested property
                     str_val = str(val)
-                    current_assertion.add_property(assertion_label, str_val)
+                    nested = current_assertion.add_property(assertion_label, str_val)
+                    if parser and nested is not None:
+                        parser._maybe_add_source(nested, doc)
 
 
 def process_docheader(props, graph_obj, doc):
     outer_indent = -1
     current_outer_prop = None
+    pending_doc_props = []
     for prop in props:
         # Skip comments
         if isinstance(prop, str):
@@ -393,35 +502,41 @@ def process_docheader(props, graph_obj, doc):
                 doc.iri = prop.value.verbatim if prop.value else None
             elif prop.key == '@language':
                 doc.lang = prop.value.verbatim if prop.value else None
-            elif prop.key == '@base':
-                doc.nodebase = doc.typebase = prop.value.verbatim if prop.value else None
+            elif prop.key == '@nodebase' or prop.key == '@base':
+                # @base is retained as a legacy alias, but @nodebase is preferred.
+                doc.nodebase = prop.value.verbatim if prop.value else None
             elif prop.key == '@schema':
                 doc.schemabase = prop.value.verbatim if prop.value else None
             elif prop.key == '@resource-type' or prop.key == '@type-base':
                 doc.typebase = prop.value.verbatim if prop.value else None
             #If we have a document node to which to attach them, just attach all other properties
-            elif doc.iri:
-                # Create document node if needed
-                if doc.iri not in graph_obj:
-                    doc_node = graph_obj.node(doc.iri)
-                else:
-                    doc_node = graph_obj[doc.iri]
-
-                fullprop = I(iri.absolutize(prop.key, doc.schemabase))
-                if prop.value:
-                    doc_node.add_property(fullprop, prop.value.verbatim)
+            else:
+                pending_doc_props.append(prop)
         else:
             # Handle nested properties (attributes)
             if current_outer_prop and current_outer_prop.key == '@iri':
                 k, uri = prop.key, prop.value.verbatim if prop.value else None
-                if k == '@base':
-                    doc.nodebase = doc.typebase = uri
+                if k == '@nodebase' or k == '@base':
+                    # @base is retained as a legacy alias, but @nodebase is preferred.
+                    doc.nodebase = uri
                 elif k == '@schema':
                     doc.schemabase = uri
                 elif k == '@resource-type' or k == '@type-base':
                     doc.typebase = uri
                 else:
                     doc.iris[k] = uri
+
+    # Attach all non-reserved docheader assertions to the document node (if any)
+    if doc.iri:
+        if doc.iri not in graph_obj:
+            doc_node = graph_obj.node(doc.iri)
+        else:
+            doc_node = graph_obj[doc.iri]
+        for prop in pending_doc_props:
+            if prop.value is None:
+                continue
+            fullprop = expand_iri(prop.key, doc.schemabase, doc=doc)
+            doc_node.add_property(fullprop, prop.value.verbatim)
     return
 
 

@@ -40,17 +40,10 @@ class parser:
             - docheader: document header info (may be None)
             - nodes: set of nodes parsed from the document
         '''
-        # Track nodes before parsing
-        nodes_before = set(g.nodes.keys())
-
-        # Parse the literate text using the pyparsing implementation
-        doc_iri = literate_lex.parse(lit_text, g, encoding=self.encoding)
-
-        # Get nodes that were added during parsing
-        nodes_after = set(g.nodes.keys())
-        nodes = nodes_after - nodes_before
-
+        op = literate_lex.LiterateParser(
+            document_source_assertions=bool(self.config.get('document_source_assertions', False)),
+            encoding=self.encoding,
+        )
+        result = op.parse(lit_text, g)
         # Return doc_iri as docheader (for compatibility)
-        docheader = doc_iri
-
-        return docheader, nodes
+        return result.doc_iri, result.nodes_added

@@ -178,19 +178,21 @@ python -c "import onya; print(onya.__version__)"
 # Test basic functionality
 python -c "
 from onya.graph import graph
-from onya.serial import literate_lex
+from onya.serial.literate_lex import LiterateParser
 
 onya_text = '''
 # @docheader
 * @document: http://example.org/test
-* @base: http://example.org/
+* @nodebase: http://example.org/
 
 # TestNode [Thing]
 * name: Hello
 '''
 
 g = graph()
-doc_iri = literate_lex.parse(onya_text, g)
+op = LiterateParser()
+result = op.parse(onya_text, g)
+doc_iri = result.doc_iri
 print(f'Parsed document: {doc_iri}')
 print(f'Graph has {len(g)} nodes')
 "
