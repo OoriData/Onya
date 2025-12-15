@@ -6,12 +6,15 @@ Notable changes to  Format based on [Keep a Changelog](https://keepachangelog.co
 ## [Unreleased]
 -->
 
-## [Unreleased]
+## [0.2.0] - 20251215
 
 ### Added
 
 - Class-based Onya Literate parser API: `onya.serial.literate_lex.LiterateParser`, returning a `ParseResult` with `doc_iri`, `graph`, and `nodes_added`
 - Optional assertion provenance: `document_source_assertions` flag to add `@source` sub-properties on created assertions (including nested assertions)
+- Graphviz (DOT) serializer: onya.serial.graphviz.write(), incl. styling options, IRI abbreviation, and optional edge annotations
+- Preliminary graph.match() method
+- Files: LICENSE, CONTRIBUTING.md and this very CHANGELOG.md 😆
 
 ### Changed
 
@@ -22,17 +25,6 @@ Notable changes to  Format based on [Keep a Changelog](https://keepachangelog.co
 ### Fixed
 
 - Onya Literate `->` edges now create edges even when the RHS is a plain (relative) node ID (e.g. `knows -> B`)
-
-## [0.2.0] - 20251215
-
-### Added
-
-- Graphviz (DOT) serializer: onya.serial.graphviz.write(), incl. styling options, IRI abbreviation, and optional edge annotations
-- Preliminary graph.match() method
-- Files: LICENSE, CONTRIBUTING.md and this very CHANGELOG.md 😆
-
-### Fixed
-
 - onya.serial.literate.write()
 
 ## [0.1.1] - 20251118
