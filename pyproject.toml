@@ -31,7 +31,11 @@ dependencies = [
     # 'Amara @ git+https://github.com/OoriData/Amara.git@main',
     'pyparsing',   # Parser for Onya Literate format
     'markdown',    # Markdown support
+    'fire',        # CLI framework (used by the onya console script)
 ]
+
+[project.scripts]
+onya = 'onya.cli.onya:main'
 
 [project.optional-dependencies]
 # Extra requirements for project contributors & other developers
@@ -47,13 +51,16 @@ dev = [
 ]
 
 demo = [
-    'fire',  # CLI framework
 ]
 
 [project.urls]
 Homepage = 'https://github.com/OoriData/Onya'
 Repository = 'https://github.com/OoriData/Onya'
 Issues = 'https://github.com/OoriData/Onya/issues'
+
+[tool.pytest.ini_options]
+testpaths = ["test"]
+norecursedirs = ["scratch", "demo", ".git", ".venv", "dist", "build"]
 
 [tool.hatch.version]
 path = 'pylib/__about__.py'

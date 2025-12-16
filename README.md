@@ -151,6 +151,18 @@ Onya includes simple serializers to help you visualize graphs:
 - **Graphviz (DOT)**: `from onya.serial import graphviz` → `graphviz.write(g, out=f)` (see `demo/graphviz_basic/`)
 - **Mermaid (flowchart)**: `from onya.serial import mermaid` → `mermaid.write(g, out=f)` (see `demo/mermaid_basic/`; quick viewing via [Mermaid Live Editor](https://mermaid.live/))
 
+# Command line tool
+
+You can use the built-in CLI to export directly from an Onya Literate (`.onya`) file:
+
+```bash
+# Mermaid (default)
+onya convert test/resource/schemaorg/thingsfallapart.onya > out.mmd
+
+# Graphviz DOT
+onya convert test/resource/schemaorg/thingsfallapart.onya --dot > out.dot
+```
+
 # Acknowledgments
 
 <table><tr>

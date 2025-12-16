@@ -15,6 +15,7 @@ Notable changes to  Format based on [Keep a Changelog](https://keepachangelog.co
 - Graphviz (DOT) serializer: onya.serial.graphviz.write(), incl. styling options, IRI abbreviation, and optional edge annotations
 - Mermaid (flowchart) serializer: `onya.serial.mermaid.write()`, incl. IRI abbreviation, optional edge annotations, and basic type-to-shape mapping
 - Mermaid demo: `demo/mermaid_basic/` (parallel to `demo/graphviz_basic/`)
+- `onya` CLI (console script): `onya convert <filespec>` to emit Mermaid (`--mermaid`) or Graphviz DOT (`--dot`) from Onya Literate input (path/glob/dir/stdin)
 - Preliminary graph.match() method
 - Files: LICENSE, CONTRIBUTING.md and this very CHANGELOG.md 😆
 

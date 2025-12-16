@@ -166,7 +166,7 @@ def write(model, out=sys.stdout,
 
     # Pass 2: edges
     for node_id in ordered_node_ids:
-        for origin, relation, target, annotations in model.match(node_id):
+        for origin, relation, target, annotations_ in model.match(node_id):
             if target not in origin_space:
                 continue
 
@@ -178,9 +178,9 @@ def write(model, out=sys.stdout,
                 continue
 
             edge_label = abbreviate(relation, all_propertybase)
-            if show_edge_annotations and annotations:
+            if show_edge_annotations and annotations_:
                 ann_parts = [edge_label]
-                for ann_key, ann_value in annotations.items():
+                for ann_key, ann_value in annotations_.items():
                     ann_key_abbr = abbreviate(ann_key, all_propertybase)
                     ann_value_str = str(ann_value)
                     if len(ann_value_str) > 30:
