@@ -3,8 +3,7 @@
 # onya.util
 from amara import iri
 
-from onya import I, ONYA_BASEIRI
-from onya.terms import ONYA_TYPE_REL
+from onya import ONYA_BASEIRI
 
 __all__ = ['abbreviate']
 

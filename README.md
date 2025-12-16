@@ -144,6 +144,13 @@ This example demonstrates:
 - Traversing the graph
 - Querying by type
 
+# Visualization / export
+
+Onya includes simple serializers to help you visualize graphs:
+
+- **Graphviz (DOT)**: `from onya.serial import graphviz` → `graphviz.write(g, out=f)` (see `demo/graphviz_basic/`)
+- **Mermaid (flowchart)**: `from onya.serial import mermaid` → `mermaid.write(g, out=f)` (see `demo/mermaid_basic/`; quick viewing via [Mermaid Live Editor](https://mermaid.live/))
+
 # Acknowledgments
 
 <table><tr>

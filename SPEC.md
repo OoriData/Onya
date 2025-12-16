@@ -259,11 +259,11 @@ Text references:
 
 ## Optional assertion provenance (`@source`)
 
-Some workflows want document-level provenance without making it part of the core model. The parser can optionally tag **every created assertion** (including nested assertions) with a sub-property:
+Some workflows want document-level provenance without making it part of the core model. The parser can optionally tag **every created assertion** (including nested assertions but excluding document header declarations) with a sub-property:
 
 - `@source`: the `@document` IRI of the source document
 
-This is **off by default** to avoid graph bloat.
+Parsers will generally turn this **off by default** to avoid graph bloat.
 
 ## Model Summary
 

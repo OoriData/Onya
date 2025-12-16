@@ -1,4 +1,4 @@
-Onya Graphviz Demo
+**Onya Graphviz Demo**
 
 This directory contains demo scripts showing how to use the Onya Graphviz emitter.
 

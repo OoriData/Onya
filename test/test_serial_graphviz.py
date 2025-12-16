@@ -9,8 +9,6 @@ pytest -s test/test_serial_graphviz.py  # With console output
 
 from io import StringIO
 
-from amara.iri import I
-
 from onya.graph import graph
 from onya.serial import graphviz
 
@@ -29,7 +27,7 @@ def test_basic_graphviz_output():
     ify.add_property('http://schema.org/name', 'Ifeoma Eze')
 
     # Add edge
-    friendship = chuks.add_edge('http://schema.org/knows', ify)
+    chuks.add_edge('http://schema.org/knows', ify)
 
     # Serialize to DOT
     out = StringIO()

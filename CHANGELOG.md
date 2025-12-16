@@ -6,13 +6,15 @@ Notable changes to  Format based on [Keep a Changelog](https://keepachangelog.co
 ## [Unreleased]
 -->
 
-## [0.2.0] - 20251215
+## [0.2.0] - 20251216
 
 ### Added
 
 - Class-based Onya Literate parser API: `onya.serial.literate_lex.LiterateParser`, returning a `ParseResult` with `doc_iri`, `graph`, and `nodes_added`
 - Optional assertion provenance: `document_source_assertions` flag to add `@source` sub-properties on created assertions (including nested assertions)
 - Graphviz (DOT) serializer: onya.serial.graphviz.write(), incl. styling options, IRI abbreviation, and optional edge annotations
+- Mermaid (flowchart) serializer: `onya.serial.mermaid.write()`, incl. IRI abbreviation, optional edge annotations, and basic type-to-shape mapping
+- Mermaid demo: `demo/mermaid_basic/` (parallel to `demo/graphviz_basic/`)
 - Preliminary graph.match() method
 - Files: LICENSE, CONTRIBUTING.md and this very CHANGELOG.md 😆
 

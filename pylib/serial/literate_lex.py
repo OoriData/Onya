@@ -88,15 +88,20 @@ class LiterateParser:
     but new behavior flags are supported via this class.
     '''
     def __init__(self, *, document_source_assertions: bool = False, encoding: str = 'utf-8'):
+        '''
+        document_source_assertions -- if set, add @source sub-properties on created assertions,
+            including nested assertions but excluding document header declarations
+        encoding -- character encoding used in processing the input text (defaults to UTF-8)
+        '''
         self.document_source_assertions = document_source_assertions
         self.encoding = encoding
 
     def parse(self, lit_text, graph_obj=None, *, encoding: str | None = None) -> ParseResult:
         '''
-        Parse Onya Literate source text.
+        Parse Onya Literate source text
 
-        - If `graph_obj` is provided, assertions are added to it (merge workflow).
-        - If `graph_obj` is None, a new `onya.graph.graph` is created.
+        - If `graph_obj` is provided, assertions are added to it (merge workflow)
+        - If `graph_obj` is None, a new `onya.graph.graph` is created
 
         Returns: `ParseResult(doc_iri, graph, nodes_added)`
         '''
@@ -428,7 +433,7 @@ def process_nodeblock(nodeblock, graph_obj, doc, parser: LiterateParser | None =
                 if parser and current_assertion is not None:
                     parser._maybe_add_source(current_assertion, doc)
             elif prop_info.value:
-                val, typeindic = prop_info.value.verbatim, prop_info.value.typeindic
+                val, _ = prop_info.value.verbatim, prop_info.value.typeindic
 
                 if prop_info.is_edge:
                     # This is an edge (node to node). Resolve RHS as a node ID.
@@ -462,7 +467,7 @@ def process_nodeblock(nodeblock, graph_obj, doc, parser: LiterateParser | None =
                     if parser and nested is not None:
                         parser._maybe_add_source(nested, doc)
             elif prop_info.value:
-                val, typeindic = prop_info.value.verbatim, prop_info.value.typeindic
+                val, _ = prop_info.value.verbatim, prop_info.value.typeindic
                 if prop_info.is_edge:
                     # Nested edge
                     node_base = parser._node_base(doc) if parser else doc.nodebase

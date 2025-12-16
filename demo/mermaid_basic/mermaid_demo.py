@@ -1,23 +1,25 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: 2023-present Oori Data <info@oori.dev>
 # SPDX-License-Identifier: Apache-2.0
-# demo/graphviz_basic/graphviz_demo.py
+# demo/mermaid_basic/mermaid_demo.py
 
 '''
-Demo script showing how to use the Onya Graphviz emitter
+Demo script showing how to use the Onya Mermaid emitter.
 
 Usage:
-    python graphviz_demo.py
+    python mermaid_demo.py
 
-This will generate several .dot files that can be rendered with:
-    dot -Tpng output.dot -o output.png
-    dot -Tsvg output.dot -o output.svg
+This will generate several .mmd files containing Mermaid markup. You can:
+- paste the contents into Mermaid Live Editor, or
+- embed in Markdown using a ```mermaid code fence (GitHub, many docs sites, etc.)
+
+Mermaid reference: https://mermaid.js.org/intro/syntax-reference.html
 '''
 
 from pathlib import Path
 
 from onya.graph import graph
-from onya.serial import graphviz
+from onya.serial import mermaid
 from onya.serial.literate_lex import LiterateParser
 
 
@@ -50,19 +52,21 @@ def demo_basic():
     ify.add_edge('http://schema.org/knows', ada)
     ada.add_edge('http://schema.org/knows', chuks)
 
-    # Export to DOT
-    with open('demo_basic.dot', 'w') as f:
-        graphviz.write(g, out=f,
+    outpath = 'demo_basic.mmd'
+    with open(outpath, 'w', encoding='utf-8') as f:
+        mermaid.write(g, out=f,
                       base='http://example.org/',
                       propertybase='http://schema.org/')
 
-    print('  Generated: demo_basic.dot')
-    print('  Render with: dot -Tpng demo_basic.dot -o demo_basic.png\n')
+    print(f'  Generated: {outpath}')
+    print('  View by pasting into Mermaid Live Editor, or embedding with ```mermaid\n')
 
 
 def demo_styled():
-    '''Graph with custom styling based on node types'''
-    print('Creating styled graph…')
+    '''
+    Graph with basic styling via node shapes (Mermaid styles/colors are not emitted yet).
+    '''
+    print('Creating shape-styled graph…')
 
     g = graph()
 
@@ -88,27 +92,21 @@ def demo_styled():
     book.add_edge('http://schema.org/publisher', publisher)
     publisher.add_edge('http://schema.org/location', place)
 
-    # Export with custom styling
-    with open('demo_styled.dot', 'w') as f:
-        graphviz.write(g, out=f,
+    outpath = 'demo_styled.mmd'
+    with open(outpath, 'w', encoding='utf-8') as f:
+        mermaid.write(g, out=f,
                       base='http://example.org/',
                       propertybase='http://schema.org/',
-                      rankdir='LR',  # Left-to-right layout
+                      rankdir='LR',
                       node_shapes={
-                          'http://schema.org/Person': 'ellipse',
-                          'http://schema.org/Book': 'note',
+                          'http://schema.org/Person': 'round',
+                          'http://schema.org/Place': 'diamond',
+                          'http://schema.org/Book': 'box',
                           'http://schema.org/Organization': 'box',
-                          'http://schema.org/Place': 'diamond'
-                      },
-                      node_colors={
-                          'http://schema.org/Person': 'lightblue',
-                          'http://schema.org/Book': 'lightyellow',
-                          'http://schema.org/Organization': 'lightgreen',
-                          'http://schema.org/Place': 'lightcoral'
                       })
 
-    print('  Generated: demo_styled.dot')
-    print('  Render with: dot -Tpng demo_styled.dot -o demo_styled.png\n')
+    print(f'  Generated: {outpath}')
+    print('  (Note: this demo uses shapes only; Mermaid styling directives are a future enhancement)\n')
 
 
 def demo_reified():
@@ -117,7 +115,6 @@ def demo_reified():
 
     g = graph()
 
-    # Create nodes
     alice = g.node('http://example.org/Alice', 'http://schema.org/Person')
     bob = g.node('http://example.org/Bob', 'http://schema.org/Person')
     carol = g.node('http://example.org/Carol', 'http://schema.org/Person')
@@ -126,7 +123,6 @@ def demo_reified():
     bob.add_property('http://schema.org/name', 'Bob Smith')
     carol.add_property('http://schema.org/name', 'Carol Williams')
 
-    # Add edges with metadata (reified relationships)
     friendship1 = alice.add_edge('http://schema.org/knows', bob)
     friendship1.add_property('http://schema.org/startDate', '2018-03-15')
     friendship1.add_property('http://schema.org/description', 'Met at conference')
@@ -135,17 +131,15 @@ def demo_reified():
     friendship2.add_property('http://schema.org/startDate', '2020-06-01')
     friendship2.add_property('http://schema.org/description', 'College roommates')
 
-    # Export with edge annotations visible
-    with open('demo_reified.dot', 'w') as f:
-        graphviz.write(g, out=f,
+    outpath = 'demo_reified.mmd'
+    with open(outpath, 'w', encoding='utf-8') as f:
+        mermaid.write(g, out=f,
                       base='http://example.org/',
                       propertybase='http://schema.org/',
                       show_edge_annotations=True,
-                      node_shapes={'http://schema.org/Person': 'ellipse'},
-                      node_colors={'http://schema.org/Person': 'lightblue'})
+                      node_shapes={'http://schema.org/Person': 'round'})
 
-    print('  Generated: demo_reified.dot')
-    print('  Render with: dot -Tpng demo_reified.dot -o demo_reified.png\n')
+    print(f'  Generated: {outpath}\n')
 
 
 def demo_minimal():
@@ -154,35 +148,32 @@ def demo_minimal():
 
     g = graph()
 
-    # Create a small taxonomy
     animal = g.node('http://example.org/Animal', 'http://www.w3.org/2002/07/owl#Class')
     mammal = g.node('http://example.org/Mammal', 'http://www.w3.org/2002/07/owl#Class')
     bird = g.node('http://example.org/Bird', 'http://www.w3.org/2002/07/owl#Class')
     dog = g.node('http://example.org/Dog', 'http://www.w3.org/2002/07/owl#Class')
     cat = g.node('http://example.org/Cat', 'http://www.w3.org/2002/07/owl#Class')
 
-    # Build hierarchy
     mammal.add_edge('http://www.w3.org/2000/01/rdf-schema#subClassOf', animal)
     bird.add_edge('http://www.w3.org/2000/01/rdf-schema#subClassOf', animal)
     dog.add_edge('http://www.w3.org/2000/01/rdf-schema#subClassOf', mammal)
     cat.add_edge('http://www.w3.org/2000/01/rdf-schema#subClassOf', mammal)
 
-    # Export without properties, clean structure
-    with open('demo_minimal.dot', 'w') as f:
-        graphviz.write(g, out=f,
+    outpath = 'demo_minimal.mmd'
+    with open(outpath, 'w', encoding='utf-8') as f:
+        mermaid.write(g, out=f,
                       base='http://example.org/',
                       propertybase='http://www.w3.org/2000/01/rdf-schema#',
-                      show_properties=False,  # Hide properties
-                      show_types=False,  # Hide types
-                      rankdir='BT')  # Bottom-to-top (child to parent)
+                      show_properties=False,
+                      show_types=False,
+                      rankdir='BT')
 
-    print('  Generated: demo_minimal.dot')
-    print('  Render with: dot -Tpng demo_minimal.dot -o demo_minimal.png\n')
+    print(f'  Generated: {outpath}\n')
 
 
 def demo_from_literate():
-    '''Parse an Onya Literate document and export to DOT'''
-    print('Parsing an Onya Literate document and exporting to DOT…')
+    '''Parse an Onya Literate document and export to Mermaid markup'''
+    print('Parsing an Onya Literate document and exporting to Mermaid…')
 
     root = Path(__file__).resolve().parents[2]
     docpath = root / 'test' / 'resource' / 'schemaorg' / 'thingsfallapart.onya'
@@ -191,19 +182,18 @@ def demo_from_literate():
     op = LiterateParser()
     result = op.parse(docpath.read_text(encoding='utf-8'), g)
 
-    outpath = 'demo_literate.dot'
-    with open(outpath, 'w') as f:
-        graphviz.write(g, out=f,
+    outpath = 'demo_literate.mmd'
+    with open(outpath, 'w', encoding='utf-8') as f:
+        mermaid.write(g, out=f,
                       base='http://example.org/',
                       propertybase='https://schema.org/')
 
     print(f'  Parsed: {docpath.name} (@document={result.doc_iri})')
-    print(f'  Generated: {outpath}')
-    print(f'  Render with: dot -Tpng {outpath} -o demo_literate.png\n')
+    print(f'  Generated: {outpath}\n')
 
 
 def main():
-    print('Onya Graphviz Emitter Demo')
+    print('Onya Mermaid Emitter Demo')
     print('=' * 50)
     print()
 
@@ -216,19 +206,10 @@ def main():
     print('=' * 50)
     print('All demos complete!')
     print()
-    print('To render any DOT file as an image:')
-    print('  dot -Tpng <file>.dot -o <file>.png')
-    print('  dot -Tsvg <file>.dot -o <file>.svg')
-    print()
-    print('Other Graphviz layout engines you can try:')
-    print('  neato  - spring model layout')
-    print('  fdp    - force-directed placement')
-    print('  circo  - circular layout')
-    print('  twopi  - radial layout')
-    print()
-    print('Example: neato -Tpng demo_basic.dot -o demo_basic_neato.png')
-    print('For cleanup, run: rm -f demo_*.dot ; rm -f demo_*.png ; rm -f demo_*.svg ; rm -f demo_*.pdf')
+    print('Cleanup:')
+    print('  rm -f demo_*.mmd')
 
 
 if __name__ == '__main__':
     main()
+
