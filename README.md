@@ -31,7 +31,19 @@ pip install -U .
 pip install git+https://github.com/OoriData/Onya.git
 -->
 
-## Basic Usage
+## Command line tool
+
+You can use the built-in CLI to export directly from an Onya Literate (`.onya`) file to the Mermaid diagram format:
+
+```sh
+onya convert test/resource/schemaorg/thingsfallapart.onya > out.mmd
+```
+
+Then use a site such as mermaid.live to generate a diagram such as:
+
+![Running MLX-LM generate within Python](test/resource/schemaorg/thingsfallapart.png)
+
+## Basic Python Usage
 
 Here's a simple example demonstrating the core Onya API. First, let's define a small friendship graph in Onya Literate format:
 
