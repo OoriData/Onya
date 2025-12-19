@@ -11,6 +11,7 @@ from amara.iri import I
 
 ONYA = I('http://purl.org/onya/vocab/')
 ONYA_TYPE_REL = ONYA('type')
+ONYA_DOCUMENT = ONYA('Document')  # Type for document nodes created from @document directive
 # assert ONYA_TYPE_REL == I(iri.absolutize('type', ONYA_BASEIRI))
 
 # RDF

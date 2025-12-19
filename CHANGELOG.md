@@ -6,6 +6,18 @@ Notable changes to  Format based on [Keep a Changelog](https://keepachangelog.co
 ## [Unreleased]
 -->
 
+## [Unreleased]
+
+### Added
+
+- `ONYA_DOCUMENT` term in `onya.terms` for document node type
+
+### Fixed
+
+- Document nodes created from `@document` directive now automatically receive `onya:Document` type
+- Test case against missing `onya:Document` regression
+
+
 ## [0.2.0] - 20251216
 
 ### Added

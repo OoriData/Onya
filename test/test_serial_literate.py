@@ -146,3 +146,42 @@ def test_document_source_assertions():
     src_props = list(since_prop.getprop(source_rel))
     assert len(src_props) == 1
     assert src_props[0].value == result.doc_iri
+
+
+def test_document_node_has_type():
+    '''
+    Verify document nodes automatically get onya:Document type.
+
+    When a document is created via @document directive, it should
+    receive the onya:Document type in addition to any properties.
+    '''
+    from onya.terms import ONYA_DOCUMENT
+
+    onya_text = '''\
+# @docheader
+* @document: http://example.org/my-doc
+* title: Test Document
+* @schema: https://schema.org/
+
+# Node1 [Person]
+* name: Alice
+'''
+    g = graph()
+    op = LiterateParser()
+    result = op.parse(onya_text, g)
+
+    # Verify document node exists and has the correct IRI
+    assert result.doc_iri == 'http://example.org/my-doc'
+    assert result.doc_iri in g
+
+    # Get the document node
+    doc_node = g[result.doc_iri]
+
+    # Verify it has the onya:Document type
+    assert ONYA_DOCUMENT in doc_node.types
+    assert len(doc_node.types) == 1
+
+    # Verify it has properties (the title)
+    title_props = list(doc_node.getprop('https://schema.org/title'))
+    assert len(title_props) == 1
+    assert title_props[0].value == 'Test Document'

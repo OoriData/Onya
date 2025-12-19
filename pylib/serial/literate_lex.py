@@ -19,6 +19,7 @@ from enum import Enum
 from amara import iri  # for absolutize & matches_uri_syntax
 
 from onya import I, ONYA_BASEIRI, ONYA_NULL, LITERAL
+from onya.terms import ONYA_DOCUMENT
 
 from pyparsing import (
     ParserElement, Literal, htmlComment, Optional, Word, alphas, alphanums,
@@ -537,6 +538,8 @@ def process_docheader(props, graph_obj, doc):
             doc_node = graph_obj.node(doc.iri)
         else:
             doc_node = graph_obj[doc.iri]
+        # Add onya:Document type to document nodes
+        doc_node.types.add(ONYA_DOCUMENT)
         for prop in pending_doc_props:
             if prop.value is None:
                 continue

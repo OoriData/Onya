@@ -39,7 +39,7 @@ You can use the built-in CLI to export directly from an Onya Literate (`.onya`) 
 onya convert test/resource/schemaorg/thingsfallapart.onya > out.mmd
 ```
 
-Then use a site such as mermaid.live to generate a diagram such as:
+Then use a site such as https://mermaid.live/ to generate a diagram such as:
 
 ![Running MLX-LM generate within Python](test/resource/schemaorg/thingsfallapart.png)
 
