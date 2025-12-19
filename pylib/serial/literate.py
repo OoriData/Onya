@@ -87,7 +87,7 @@ def write(model, out=sys.stdout, base=None, propertybase=None, shorteners=None):
     if base:
         out.write('    * @nodebase: {0}'.format(base))
     #for k, v in shorteners:
-    #    out.write('    * @base: {0}'.format(base))
+    #    out.write('    * @nodebase: {0}'.format(base))
 
     out.write('\n\n')
 

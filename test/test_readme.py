@@ -20,7 +20,6 @@ def test_readme_example():
 * @document: http://example.org/friendship-graph
 * @nodebase: http://example.org/people/
 * @schema: https://schema.org/
-* @type-base: https://schema.org/
 
 # Chuks [Person]
 

@@ -22,10 +22,16 @@ from onya import ONYA_BASEIRI
 T = I('http://e.o')
 
 TFA_1 = '''\
-# http://e.o/TFA [http://e.o/Book]
+# @docheader
 
-* http://e.o/name: Things Fall Apart
-* http://e.o/image: http://example.org/classics/tfa-book-cover.jpg
+* @document: http://e.o/doc
+* @nodebase: http://e.o/
+* @schema: http://e.o/
+
+# TFA [Book]
+
+* name: Things Fall Apart
+* image: http://example.org/classics/tfa-book-cover.jpg
 * isbn: 9781841593272
 * author -> CAchebe
 * publisher -> Heinemann
@@ -51,7 +57,13 @@ def test_parse_tfa_1():
     op = LiterateParser()
     result = op.parse(TFA_1, g)
 
-    assert len(result.nodes_added) == 3
+    # Should have document node + TFA + CAchebe + Heinemann
+    assert len(result.nodes_added) == 4
+    assert result.doc_iri == 'http://e.o/doc'
+    # Verify the main entities exist
+    assert 'http://e.o/TFA' in g
+    assert 'http://e.o/CAchebe' in g
+    assert 'http://e.o/Heinemann' in g
 
 
 def test_parse_tfa_expanded():
@@ -185,3 +197,45 @@ def test_document_node_has_type():
     title_props = list(doc_node.getprop('https://schema.org/title'))
     assert len(title_props) == 1
     assert title_props[0].value == 'Test Document'
+
+
+def test_typebase_directive():
+    '''
+    Test @typebase directive for cases where types need different base than properties.
+    
+    When @typebase is specified, types should resolve using it instead of @schema.
+    '''
+    onya_text = '''\
+# @docheader
+* @document: http://example.org/test-doc
+* @nodebase: http://example.org/entities/
+* @schema: https://schema.org/
+* @typebase: http://example.org/types/
+
+# Alice [Person]
+* name: Alice Smith
+* knows -> Bob
+
+# Bob [Person]
+* name: Bob Jones
+'''
+    g = graph()
+    op = LiterateParser()
+    result = op.parse(onya_text, g)
+
+    alice = g['http://example.org/entities/Alice']
+    bob = g['http://example.org/entities/Bob']
+
+    # Types should use @typebase
+    assert 'http://example.org/types/Person' in alice.types
+    assert 'http://example.org/types/Person' in bob.types
+
+    # Properties should still use @schema
+    name_props = list(alice.getprop('https://schema.org/name'))
+    assert len(name_props) == 1
+    assert name_props[0].value == 'Alice Smith'
+
+    # Edges should still use @schema
+    knows_edges = list(alice.traverse('https://schema.org/knows'))
+    assert len(knows_edges) == 1
+    assert knows_edges[0].target == bob

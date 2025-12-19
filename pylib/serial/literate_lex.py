@@ -145,7 +145,11 @@ class LiterateParser:
     def _type_base(self, doc: doc_info) -> str | None:
         '''
         Base used for resolving relative type IRIs. Defaults to @schema if
-        @type-base (or legacy @resource-type) is not specified.
+        @typebase is not specified.
+
+        NOTE: @typebase is for less common cases where types need a different base IRI
+        than properties. In most cases, @schema alone suffices for both properties
+        and types. @type-base and @resource-type are legacy aliases for @typebase.
         '''
         return doc.typebase or doc.schemabase
 
@@ -513,7 +517,9 @@ def process_docheader(props, graph_obj, doc):
                 doc.nodebase = prop.value.verbatim if prop.value else None
             elif prop.key == '@schema':
                 doc.schemabase = prop.value.verbatim if prop.value else None
-            elif prop.key == '@resource-type' or prop.key == '@type-base':
+            elif prop.key == '@typebase' or prop.key == '@type-base' or prop.key == '@resource-type':
+                # @typebase for less common cases where types need different base than properties (@schema)
+                # @type-base and @resource-type are legacy aliases for @typebase
                 doc.typebase = prop.value.verbatim if prop.value else None
             #If we have a document node to which to attach them, just attach all other properties
             else:
@@ -527,7 +533,9 @@ def process_docheader(props, graph_obj, doc):
                     doc.nodebase = uri
                 elif k == '@schema':
                     doc.schemabase = uri
-                elif k == '@resource-type' or k == '@type-base':
+                elif k == '@typebase' or k == '@type-base' or k == '@resource-type':
+                    # @typebase for less common cases where types need different base than properties (@schema)
+                    # @type-base and @resource-type are legacy aliases for @typebase
                     doc.typebase = uri
                 else:
                     doc.iris[k] = uri

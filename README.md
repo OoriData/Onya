@@ -53,7 +53,6 @@ Here's a simple example demonstrating the core Onya API. First, let's define a s
 * @document: http://example.org/friendship-graph
 * @nodebase: http://example.org/people/
 * @schema: https://schema.org/
-* @type-base: https://schema.org/
 
 # Chuks [Person]
 
@@ -81,7 +80,6 @@ onya_text = '''
 * @document: http://example.org/friendship-graph
 * @nodebase: http://example.org/people/
 * @schema: https://schema.org/
-* @type-base: https://schema.org/
 
 # Chuks [Person]
 

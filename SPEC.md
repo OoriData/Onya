@@ -110,11 +110,14 @@ These are ignored by the parser and do not appear in the graph in any way. They 
 ```
 
 The document header specifies:
-- `@document`: IRI of the document itself
+- `@document`: IRI of the document itself (required)
 - `@nodebase`: Base IRI for resolving relative node IDs, whether as origins or edge targets; if omitted, `@document` is used as the node base
-- `@schema`: Base IRI for schema vocabulary (types, property/edge labels)
+- `@schema`: Base IRI for schema vocabulary—used to expand both property/edge labels AND types (required in nearly all cases)
+- `@typebase`: Base IRI for resolving relative type IRIs; only needed in less common cases where types use a different base than properties. If omitted, types use `@schema` as the base.
 - `@language`: Default language for string values
 - Other assertions are attached to the document node
+
+**Important**: The `@nodebase` directive is used exclusively for expanding node IDs (e.g., `Chuks` → `http://example.org/people/Chuks`). The `@schema` directive is used for expanding both property labels (e.g., `name` → `https://schema.org/name`) and types (e.g., `[Person]` → `https://schema.org/Person`). It should be extremely unusual for an Onya file not to have a `@schema` directive.
 
 ## Node Blocks
 
