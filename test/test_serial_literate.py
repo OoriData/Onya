@@ -221,7 +221,7 @@ def test_typebase_directive():
 '''
     g = graph()
     op = LiterateParser()
-    result = op.parse(onya_text, g)
+    _ = op.parse(onya_text, g)
 
     alice = g['http://example.org/entities/Alice']
     bob = g['http://example.org/entities/Bob']
