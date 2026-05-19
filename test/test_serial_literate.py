@@ -15,7 +15,12 @@ from amara.iri import I
 
 from onya.graph import graph
 #from onya.serial.literate import *
-from onya.serial.literate_lex import LiterateParser
+from onya.serial.literate_lex import (
+    LiterateParser,
+    doc_info,
+    expand_iri,
+    _join_namespace,
+)
 from onya import ONYA_BASEIRI
 
 # T = I('http://example.org')
@@ -239,3 +244,80 @@ def test_typebase_directive():
     knows_edges = list(alice.traverse('https://schema.org/knows'))
     assert len(knows_edges) == 1
     assert knows_edges[0].target == bob
+
+
+def test_join_namespace_avoids_duplicate_slash():
+    assert _join_namespace('https://acme.example/kg/schema', 'Client') == (
+        'https://acme.example/kg/schema/Client'
+    )
+    assert _join_namespace('https://acme.example/kg/schema/', 'Client') == (
+        'https://acme.example/kg/schema/Client'
+    )
+    assert _join_namespace('https://schema.org/', 'name') == 'https://schema.org/name'
+    assert _join_namespace('http://example.org/vocab#', 'Thing') == 'http://example.org/vocab#Thing'
+
+
+def test_expand_curie_from_iri_block():
+    d = doc_info()
+    d.iris = {
+        'acme': 'https://acme.example/kg/schema',
+        'schema': 'https://schema.org',
+    }
+    d.schemabase = 'https://schema.org/'
+
+    assert expand_iri('acme:Client', d.schemabase, doc=d) == I(
+        'https://acme.example/kg/schema/Client'
+    )
+    assert expand_iri('<acme:contactPoint>', d.schemabase, doc=d) == I(
+        'https://acme.example/kg/schema/contactPoint'
+    )
+    assert expand_iri('name', d.schemabase, doc=d) == I('https://schema.org/name')
+
+
+def test_parse_curie_acme_client_example():
+    '''Parse Acme Corp example using @iri CURIE prefixes (acme:, schema:).'''
+    onya_text = '''\
+# @docheader
+
+* @document: https://acme.example/pulse/kg/sample
+* title: Acme Corp (Acme client)
+* @nodebase: https://acme.example/pulse/kg/sample/
+* @schema: https://schema.org/
+* @iri:
+    * acme: https://acme.example/kg/schema
+    * schema: https://schema.org
+
+# Acme [<acme:Client>]
+
+* name: ACME Corporation
+* url: https://www.acme.example/
+* description: Engineering services client; primary **Acme** relationship record.
+* <acme:contactPoint> -> acme-cp-main
+
+# acme-cp-main [ContactPoint]
+
+* contactType: main
+* name: Jane Doe
+* email: jane.doe@acme.example
+* telephone: +1-555-0100
+* url: https://www.linkedin.com/in/janedoe
+'''
+    g = graph()
+    op = LiterateParser()
+    result = op.parse(onya_text, g)
+
+    assert result.doc_iri == 'https://acme.example/pulse/kg/sample'
+    acme = g['https://acme.example/pulse/kg/sample/Acme']
+    assert I('https://acme.example/kg/schema/Client') in acme.types
+
+    name_props = list(acme.getprop('https://schema.org/name'))
+    assert len(name_props) == 1
+    assert name_props[0].value == 'ACME Corporation'
+
+    cp_edges = list(acme.traverse('https://acme.example/kg/schema/contactPoint'))
+    assert len(cp_edges) == 1
+    assert cp_edges[0].target.id == 'https://acme.example/pulse/kg/sample/acme-cp-main'
+
+    cp = cp_edges[0].target
+    assert I('https://schema.org/ContactPoint') in cp.types
+    assert list(cp.getprop('https://schema.org/email'))[0].value == 'jane.doe@acme.example'

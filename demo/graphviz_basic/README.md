@@ -157,3 +157,8 @@ The `graphviz.write()` function accepts many options:
 - **edge_attrs** - Default edge attributes
 
 See `pylib/serial/graphviz.py` for complete documentation.
+
+# Related interest
+
+- [Sketchviz](https://sketchviz.com/)
+

@@ -30,6 +30,8 @@ ParserElement.setDefaultWhitespaceChars(' \t')
 
 URI_ABBR_PAT = re.compile('@([\\-_\\w]+)([#/@])(.+)', re.DOTALL)
 URI_EXPLICIT_PAT = re.compile('<(.+)>', re.DOTALL)
+# Compact CURIE: prefix:localName (prefix is a QName NCName; not an absolute IRI scheme)
+CURIE_PAT = re.compile(r'^([A-Za-z][\w.\-]*):([^:]+)$')
 
 TYPE_REL = ONYA_BASEIRI('type')
 SOURCE_REL = ONYA_BASEIRI('source')
@@ -353,30 +355,68 @@ def _lexical_join(base: str, ref: str) -> str:
     return f'{base}{ref}'
 
 
+def _join_namespace(namespace: str, local: str) -> str:
+    '''
+    Join an @iri namespace base with a CURIE local name (RDF/XML-style).
+
+    Avoids a duplicate slash when the base already ends with ``/`` and the local
+    part does not start with ``/``, ``#``, or ``?``.
+    '''
+    if not local:
+        return namespace
+    if local[0] in '#?':
+        return namespace + local
+    if local[0] == '/':
+        return namespace.rstrip('/') + local
+    if namespace.endswith(('#', '/', '?')):
+        return namespace + local
+    return f'{namespace}/{local}'
+
+
+def _expand_curie(iri_in: str, doc: doc_info | None) -> str | None:
+    '''
+    Expand ``prefix:local`` using prefixes from the document ``@iri`` block.
+    Returns the full IRI string, or None if not a CURIE or prefix is unknown.
+    '''
+    if not (m := CURIE_PAT.match(iri_in)):
+        return None
+    prefix, local = m.group(1), m.group(2)
+    if doc is None or not doc.iris or prefix not in doc.iris:
+        return None
+    return _join_namespace(doc.iris[prefix], local)
+
+
 def expand_iri(iri_in, base, nodecontext=None, doc=None):
     if iri_in is None:
         return ONYA_NULL
-    # Abreviation for special, Onya-specific properties
-    if iri_in.startswith('@'):
-        return ONYA_BASEIRI(iri_in[1:])
 
-    # Is it an explicit IRI (i.e. with <…>)?
+    # Explicit <…> — inner may be a CURIE or a relative/absolute IRI ref
     if iri_match := URI_EXPLICIT_PAT.match(iri_in):
         inner = iri_match.group(1)
+        if expanded := _expand_curie(inner, doc):
+            return I(expanded)
         return I(inner if base is None else _lexical_join(base, inner))
 
-    # XXX Clarify this bit?
+    # Legacy @prefix/#/suffix abbreviations from the @iri block
     if iri_match := URI_ABBR_PAT.match(iri_in):
         if doc is None or doc.iris is None:
             raise ValueError(f'IRI abbreviation `{iri_match.group(1)}` used but no doc context provided')
         uri = doc.iris[iri_match.group(1)]
         fulliri = URI_ABBR_PAT.sub(uri + '\\2\\3', iri_in)
-    else:
-        # Replace upstream ValueError with our own
-        if nodecontext and not(iri.matches_uri_ref_syntax(iri_in)):
-            # FIXME: Replace with a Onya-specific error
-            raise ValueError(f'Invalid IRI reference provided for node context {nodecontext}: `{iri_in}`')
-        fulliri = iri_in if base is None else _lexical_join(base, iri_in)
+        return I(fulliri)
+
+    # Compact CURIE (e.g. acme:Client) before Onya @-vocab and relative expansion
+    if expanded := _expand_curie(iri_in, doc):
+        return I(expanded)
+
+    # Onya built-in @property names (e.g. @document, @source)
+    if iri_in.startswith('@'):
+        return ONYA_BASEIRI(iri_in[1:])
+
+    # Relative to base
+    if nodecontext and not(iri.matches_uri_ref_syntax(iri_in)):
+        raise ValueError(f'Invalid IRI reference provided for node context {nodecontext}: `{iri_in}`')
+    fulliri = iri_in if base is None else _lexical_join(base, iri_in)
     return I(fulliri)
 
 
