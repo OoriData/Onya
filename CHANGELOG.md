@@ -11,9 +11,15 @@ Notable changes to  Format based on [Keep a Changelog](https://keepachangelog.co
 ### Added
 
 - `ONYA_DOCUMENT` term in `onya.terms` for document node type
+- Onya Literate **compact CURIE** expansion (`prefix:local` and `<prefix:local>`) using prefixes declared in the document `@iri` block; namespace joining avoids duplicate `/` when the base already ends with `/`
+
+### Changed
+
+- `@typebase` preferred to `@type-base`
 
 ### Fixed
 
+- CURIE expansion is evaluated before Onya `@` vocabulary names, so prefixed terms such as `acme:Client` are not mistaken for Onya built-ins
 - Document nodes created from `@document` directive now automatically receive `onya:Document` type
 - Test case against missing `onya:Document` regression
 

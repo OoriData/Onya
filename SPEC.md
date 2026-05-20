@@ -107,6 +107,9 @@ These are ignored by the parser and do not appear in the graph in any way. They 
 * @nodebase: http://example.org/
 * @schema: https://schema.org/
 * @language: en
+* @iri:
+    * acme: https://acme.example.com/kg/schema
+    * schema: https://schema.org
 ```
 
 The document header specifies:
@@ -115,9 +118,58 @@ The document header specifies:
 - `@schema`: Base IRI for schema vocabulary—used to expand both property/edge labels AND types (required in nearly all cases)
 - `@typebase`: Base IRI for resolving relative type IRIs; only needed in less common cases where types use a different base than properties. If omitted, types use `@schema` as the base.
 - `@language`: Default language for string values
+- `@iri`: Optional block declaring extra vocabulary namespace bases (see below)
 - Other assertions are attached to the document node
 
 **Important**: The `@nodebase` directive is used exclusively for expanding node IDs (e.g., `Chuks` → `http://example.org/people/Chuks`). The `@schema` directive is used for expanding both property labels (e.g., `name` → `https://schema.org/name`) and types (e.g., `[Person]` → `https://schema.org/Person`). It should be extremely unusual for an Onya file not to have a `@schema` directive.
+
+### Vocabulary prefixes (`@iri`)
+
+When a document uses more than one vocabulary base (for example schema.org plus a project-specific ontology), declare additional prefixes under `@iri`:
+
+```
+* @iri:
+    * acme: https://acme.example.com/kg/schema
+    * schema: https://schema.org
+```
+
+Each nested line is `prefix: namespace-base`, where `prefix` is a QName-style NCName (letters, digits, `_`, `.`, `-`) and `namespace-base` is the IRI prefix string that local names append to. The same block may also repeat `@nodebase`, `@schema`, or `@typebase` as nested lines (they update the corresponding document fields).
+
+Use **compact CURIEs** anywhere an IRI label or type is expected:
+
+- `acme:Client` in a type position → `https://acme.example.com/kg/schema/Client` (with the example bases above)
+- `<acme:contactPoint>` as a property or edge label → `https://acme.example.com/kg/schema/contactPoint`
+- Bare names such as `name` still resolve against `@schema` when no matching `@iri` prefix applies
+
+Namespace joining follows RDF/XML rules: if the namespace base already ends with `/`, `#`, or `?`, the local name is appended directly (no extra `/`). Otherwise a single `/` is inserted between base and local name, so bases should usually be written **without** a trailing slash unless the vocabulary IRIs are defined that way.
+
+Onya built-in names still use a leading `@` and the Onya vocabulary (e.g. `@document`, `@source`), not the `@iri` map. A separate legacy form `@prefix/path` (with `/`, `#`, or `@` after the prefix) is also supported when the prefix appears in `@iri`.
+
+Example (Acme client with schema.org contact details):
+
+```
+# @docheader
+
+* @document: https://acme.example.com/pulse/kg/sample
+* title: Acme Corp (Acme client)
+* @nodebase: https://acme.example.com/pulse/kg/sample/
+* @schema: https://schema.org/
+* @iri:
+    * acme: https://acme.example.com/kg/schema
+    * schema: https://schema.org
+
+# Acme [<acme:Client>]
+
+* name: ACME Corporation
+* url: https://www.acme.example/
+* <acme:contactPoint> -> acme-cp-main
+
+# acme-cp-main [ContactPoint]
+
+* contactType: main
+* name: Jane Doe
+* email: jane.doe@acme.example
+```
 
 ## Node Blocks
 
