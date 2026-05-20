@@ -1,0 +1,15 @@
+# Agent control config for Onya. Managed by oori_coding_control.
+
+[project]
+name = 'Onya'
+kind = 'python'
+control = 'https://github.com/OoriData/coding-agent-control'
+
+[paths]
+claude = 'CLAUDE.md'
+agents = 'AGENTS.md'
+config = 'agent-control.toml'
+
+[managed]
+# Skills installed in this repo (updated by oori-seed-repo)
+skills = ['python']
