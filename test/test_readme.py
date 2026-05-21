@@ -7,7 +7,7 @@ pytest -s test/test_readme.py
 '''
 
 from onya.graph import graph
-from onya.serial.literate_lex import LiterateParser
+from onya.serial.literate import LiterateParser
 
 
 def test_readme_example():

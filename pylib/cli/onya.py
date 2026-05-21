@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import TextIO
 
 from onya.__about__ import __version__
-from onya.serial.literate_lex import LiterateParser
+from onya.serial.literate import LiterateParser
 
 
 def _looks_like_glob(filespec: str) -> bool:
@@ -79,8 +79,8 @@ def convert(filespec: str,
             mermaid: bool = False,
             dot: bool = False,
             out: str | None = '-',
-            base: str | None = None,
-            propertybase: str | None = None,
+            nodebase: str | None = None,
+            schema: str | None = None,
             rankdir: str = 'TB',
             show_properties: bool = True,
             show_types: bool = True,
@@ -96,7 +96,7 @@ def convert(filespec: str,
         mermaid: Emit Mermaid flowchart markup (`.mmd`-style text).
         dot: Emit Graphviz DOT.
         out: Output file path, or '-' for stdout.
-        base/propertybase/rankdir/show_*: Passed to the target serializer.
+        nodebase/schema/rankdir/show_*: Passed to the target serializer.
         document_source_assertions: If set, parser adds @source provenance annotations.
         encoding: Text encoding used to read input files (ignored for stdin).
 
@@ -137,28 +137,19 @@ def convert(filespec: str,
         raise RuntimeError('No input was read')
 
     # Serializer selection is intentionally explicit (keeps CLI help obvious).
+    emit_kwargs = dict(
+        nodebase=nodebase,
+        schema=schema,
+        rankdir=rankdir,
+        show_properties=show_properties,
+        show_types=show_types,
+        show_edge_labels=show_edge_labels,
+        show_edge_annotations=show_edge_annotations,
+    )
     if fmt == 'dot':
         from onya.serial import graphviz as emitter
-        emit_kwargs = dict(
-            base=base,
-            propertybase=propertybase,
-            rankdir=rankdir,
-            show_properties=show_properties,
-            show_types=show_types,
-            show_edge_labels=show_edge_labels,
-            show_edge_annotations=show_edge_annotations,
-        )
     else:
         from onya.serial import mermaid as emitter
-        emit_kwargs = dict(
-            base=base,
-            propertybase=propertybase,
-            rankdir=rankdir,
-            show_properties=show_properties,
-            show_types=show_types,
-            show_edge_labels=show_edge_labels,
-            show_edge_annotations=show_edge_annotations,
-        )
 
     fp = _open_output(out)
     try:

@@ -31,9 +31,13 @@ from __future__ import annotations
 
 import sys
 
-from onya.util import abbreviate, ONYA_BASEIRI
+from onya.util import compact_iri, shorten_node_id
 
 __all__ = ['write']
+
+
+def _label(label, prefixes: dict[str, str] | None) -> str:
+    return compact_iri(str(label), prefixes, fallback='full')
 
 
 def _escape_mermaid_string(s: object) -> str:
@@ -84,8 +88,9 @@ def _get_node_shape(node_obj, type_shapes: dict) -> str:
 
 
 def write(model, out=sys.stdout,
-          base=None,
-          propertybase=None,
+          nodebase=None,
+          schema=None,
+          prefixes=None,
           rankdir='TB',
           show_properties=True,
           show_types=True,
@@ -98,8 +103,9 @@ def write(model, out=sys.stdout,
     Args:
         model: The Onya graph to serialize
         out: File pointer to write to (default: sys.stdout)
-        base: Base IRI for abbreviating node display labels
-        propertybase: Base IRI for abbreviating property and edge labels
+        nodebase: Base IRI for relativizing node display labels
+        schema: Base IRI for abbreviating property/edge/type labels (registered as the ``schema`` CURIE prefix)
+        prefixes: Additional CURIE prefix map (prefix name -> namespace base)
         rankdir: Flow direction - 'TB' (top-bottom), 'LR' (left-right),
                  'BT' (bottom-top), 'RL' (right-left)
         show_properties: If True, include node properties in labels
@@ -111,10 +117,9 @@ def write(model, out=sys.stdout,
     '''
     node_shapes = node_shapes or {}
 
-    all_propertybase = [propertybase] if propertybase else []
-    all_propertybase.append(ONYA_BASEIRI)
-
-    all_base = [base] if base else []
+    label_prefixes: dict[str, str] = dict(prefixes or {})
+    if schema:
+        label_prefixes['schema'] = schema
 
     # Mermaid header
     rankdir = (rankdir or 'TB').upper()
@@ -142,16 +147,16 @@ def write(model, out=sys.stdout,
 
         # Build label lines
         label_lines: list[str] = []
-        display_id = abbreviate(node_id, all_base) if all_base else str(node_id)
+        display_id = shorten_node_id(node_id, nodebase)
         label_lines.append(display_id)
 
         if show_types and getattr(node_obj, 'types', None):
-            types_str = ', '.join(abbreviate(t, all_propertybase) for t in node_obj.types)
+            types_str = ', '.join(_label(t, label_prefixes) for t in node_obj.types)
             label_lines.append(f'[{types_str}]')
 
         if show_properties and node_properties:
             for rel, val in node_properties:
-                rel_abbr = abbreviate(rel, all_propertybase)
+                rel_abbr = _label(rel, label_prefixes)
                 val_str = str(val)
                 if len(val_str) > 50:
                     val_str = val_str[:47] + '…'
@@ -177,11 +182,11 @@ def write(model, out=sys.stdout,
                 out.write(f'  {src} --> {dst}\n')
                 continue
 
-            edge_label = abbreviate(relation, all_propertybase)
+            edge_label = _label(relation, label_prefixes)
             if show_edge_annotations and annotations_:
                 ann_parts = [edge_label]
                 for ann_key, ann_value in annotations_.items():
-                    ann_key_abbr = abbreviate(ann_key, all_propertybase)
+                    ann_key_abbr = _label(ann_key, label_prefixes)
                     ann_value_str = str(ann_value)
                     if len(ann_value_str) > 30:
                         ann_value_str = ann_value_str[:27] + '…'

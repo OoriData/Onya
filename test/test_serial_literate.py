@@ -17,13 +17,8 @@ from onya.graph import graph
 #from onya.serial.literate import *
 from io import StringIO
 
-from onya.serial.literate import write
-from onya.serial.literate_lex import (
-    LiterateParser,
-    SchemaPrefixConflict,
-    doc_info,
-    expand_iri,
-)
+from onya.serial.literate import LiterateParser, SchemaPrefixConflict, read, write
+from onya.serial._literate_parse import doc_info, expand_iri
 from onya.util import compact_iri, join_namespace # , namespace_for_curie
 from onya import LITERAL, ONYA_BASEIRI
 
@@ -82,7 +77,7 @@ def test_parse_tfa_1():
 def test_parse_tfa_expanded():
     '''Test the expanded Things Fall Apart example with docheader'''
     from onya.graph import graph
-    from onya.serial.literate_lex import LiterateParser
+    from onya.serial.literate import LiterateParser
     
     # Read the file
     with open('test/resource/schemaorg/thingsfallapart.onya') as f:
@@ -428,3 +423,48 @@ def test_parse_curie_acme_client_example():
     cp = cp_edges[0].target
     assert I('https://schema.org/ContactPoint') in cp.types
     assert list(cp.getprop('https://schema.org/email'))[0].value == 'jane.doe@acme.example'
+
+
+def test_unicode_arrow_edge():
+    '''U+2192 → is accepted as a synonym for -> in edge assertions.'''
+    text = '''# @docheader
+* @document: http://example.org/d
+* @nodebase: http://example.org/
+* @schema: https://schema.org/
+
+# A [Person]
+* name: Alice
+* knows → B
+
+# B [Person]
+* name: Bob
+'''
+    g = graph()
+    read(text, g)
+    a = g['http://example.org/A']
+    edges = list(a.traverse('https://schema.org/knows'))
+    assert len(edges) == 1
+    assert edges[0].target.id == 'http://example.org/B'
+
+
+def test_read_shim_roundtrip():
+    '''Public read() API parses text or file-like objects; survives a write → read round-trip.'''
+    g1 = graph()
+    result_str = read(ACME_CURIE_ONYA, g1)
+    assert result_str.doc_iri == 'https://acme.example/pulse/kg/sample'
+    assert set(g1.nodes.keys()) == set(result_str.graph.nodes.keys())
+
+    buf = StringIO()
+    write(
+        g1,
+        buf,
+        document='https://acme.example/pulse/kg/sample',
+        nodebase='https://acme.example/pulse/kg/sample/',
+        schema='https://schema.org/',
+        prefixes={'acme': 'https://acme.example/kg/schema'},
+    )
+    buf.seek(0)
+    g2 = graph()
+    result_fp = read(buf, g2)
+    assert result_fp.doc_iri == 'https://acme.example/pulse/kg/sample'
+    assert set(g2.nodes.keys()) == set(g1.nodes.keys())

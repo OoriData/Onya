@@ -16,7 +16,7 @@ Run from repo root:
 from pathlib import Path
 
 from onya.graph import graph
-from onya.serial.literate_lex import LiterateParser
+from onya.serial.literate import LiterateParser
 from onya import ONYA_BASEIRI
 
 

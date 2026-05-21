@@ -1,13 +1,14 @@
 # -*- coding: utf-8 -*-
 # SPDX-FileCopyrightText: 2023-present Oori Data <info@oori.dev>
 # SPDX-License-Identifier: Apache-2.0
-# onya.serial.literate_lex
+# onya.serial._literate_parse
 '''
-Main body of the Onya Literate parser
+Internal implementation of the Onya Literate parser.
 
-Onya Literate, or Onya Lit, is a Markdown-based format
+Public API is exposed via ``onya.serial.literate`` (``LiterateParser``, ``read``, ``write``,
+``ParseResult``, ``SchemaPrefixConflict``). Import from there, not from this module.
 
-Proper entry point of use is onya.serial.literate
+Onya Literate, or Onya Lit, is a Markdown-based format.
 
 see: the [Onya Literate format documentation](https://github.com/OoriData/Onya/blob/main/SPEC.md#onya-literate-serialization)
 '''
@@ -19,7 +20,7 @@ from enum import Enum
 from amara import iri  # for absolutize & matches_uri_syntax
 
 from onya import I, ONYA_BASEIRI, ONYA_NULL, LITERAL
-from onya.terms import ONYA_DOCUMENT
+from onya.terms import ONYA_DOCUMENT, ONYA_SOURCE_REL
 from onya.util import join_namespace, namespace_for_curie
 
 from pyparsing import (
@@ -29,13 +30,11 @@ from pyparsing import (
 )  # pip install pyparsing
 ParserElement.setDefaultWhitespaceChars(' \t')
 
-URI_ABBR_PAT = re.compile('@([\\-_\\w]+)([#/@])(.+)', re.DOTALL)
 URI_EXPLICIT_PAT = re.compile('<(.+)>', re.DOTALL)
 # Compact CURIE: prefix:localName (prefix is a QName NCName; not an absolute IRI scheme)
 CURIE_PAT = re.compile(r'^([A-Za-z][\w.\-]*):([^:]+)$')
 
-TYPE_REL = ONYA_BASEIRI('type')
-SOURCE_REL = ONYA_BASEIRI('source')
+SOURCE_REL = ONYA_SOURCE_REL
 
 
 class value_type(Enum):
@@ -190,9 +189,9 @@ class LiterateParser:
         Base used for resolving relative type IRIs. Defaults to @schema if
         @typebase is not specified.
 
-        NOTE: @typebase is for less common cases where types need a different base IRI
+        @typebase is for less common cases where types need a different base IRI
         than properties. In most cases, @schema alone suffices for both properties
-        and types. @type-base and @resource-type are legacy aliases for @typebase.
+        and types.
         '''
         return doc.typebase or doc.schemabase
 
@@ -357,30 +356,6 @@ text_ref_def.setParseAction(_make_text_ref_def)
 value_expr.setParseAction(_make_value)
 
 
-def parse(lit_text, graph_obj, encoding='utf-8'):
-    '''
-    Translate Onya Literate text into nodes which are added to an Onya graph
-
-    lit_text -- Onya Literate source text
-    graph_obj -- Onya graph to populate
-    encoding -- character encoding used in processing the input text (defaults to UTF-8)
-
-    Returns: The document IRI from @document header, or None
-
-    >>> from onya.driver.memory import newmodel
-    >>> from onya.serial.literate import parse # Delegates to literate_lex.parse
-    >>> m = newmodel()
-    >>> parse(open('test/resource/poetry.onya').read(), m)
-    'http://uche.ogbuji.net/poems/'
-    >>> m.size()
-    40
-    >>> next(m.match(None, 'http://uche.ogbuji.net/poems/updated', '2013-10-15'))
-    (I(http://uche.ogbuji.net/poems/1), I(http://uche.ogbuji.net/poems/updated), '2013-10-15', {})
-    '''
-    op = LiterateParser(encoding=encoding)
-    return op.parse(lit_text, graph_obj, encoding=encoding).doc_iri
-
-
 _SCHEME_RE = re.compile(r'^[a-zA-Z][a-zA-Z0-9+\-.]*:')
 
 
@@ -423,14 +398,6 @@ def expand_iri(iri_in, base, nodecontext=None, doc=None):
             return I(expanded)
         return I(inner if base is None else _lexical_join(base, inner))
 
-    # Legacy @prefix/#/suffix abbreviations from the @iri block
-    if iri_match := URI_ABBR_PAT.match(iri_in):
-        if doc is None or doc.iris is None:
-            raise ValueError(f'IRI abbreviation `{iri_match.group(1)}` used but no doc context provided')
-        uri = doc.iris[iri_match.group(1)]
-        fulliri = URI_ABBR_PAT.sub(uri + '\\2\\3', iri_in)
-        return I(fulliri)
-
     # Compact CURIE (e.g. acme:Client) before Onya @-vocab and relative expansion
     if expanded := _expand_curie(iri_in, doc):
         return I(expanded)
@@ -472,29 +439,29 @@ def process_nodeblock(nodeblock, graph_obj, doc, parser: LiterateParser | None =
     outer_indent = -1
     current_assertion = None
 
-    for prop_info in props:
-        if isinstance(prop_info, str):
+    for pi in props:
+        if isinstance(pi, str):
             # Just a comment. Skip.
             continue
 
         # Handle text reference definitions
-        if isinstance(prop_info, tuple) and prop_info[0] == 'text_ref_def':
-            ref_name, ref_content = prop_info[1], prop_info[2]
+        if isinstance(pi, tuple) and pi[0] == 'text_ref_def':
+            ref_name, ref_content = pi[1], pi[2]
             doc.text_refs[ref_name] = str(ref_content)
             continue
 
         # First assertion encountered determines outer indent
         if outer_indent == -1:
-            outer_indent = prop_info.indent
+            outer_indent = pi.indent
 
         # Expand the assertion label IRI
-        assertion_label = expand_iri(prop_info.key, doc.schemabase, doc=doc)
+        assertion_label = expand_iri(pi.key, doc.schemabase, doc=doc)
 
-        if prop_info.indent == outer_indent:
+        if pi.indent == outer_indent:
             # This is a top-level assertion
-            if prop_info.is_text_ref:
+            if pi.is_text_ref:
                 # Handle text reference
-                ref_name = str(prop_info.value) if prop_info.value else None
+                ref_name = str(pi.value) if pi.value else None
                 if ref_name and ref_name in doc.text_refs:
                     str_val = doc.text_refs[ref_name]
                     current_assertion = n.add_property(assertion_label, str_val)
@@ -503,10 +470,10 @@ def process_nodeblock(nodeblock, graph_obj, doc, parser: LiterateParser | None =
                     current_assertion = n.add_property(assertion_label, '')
                 if parser and current_assertion is not None:
                     parser._maybe_add_source(current_assertion, doc)
-            elif prop_info.value:
-                val, _ = prop_info.value.verbatim, prop_info.value.typeindic
+            elif pi.value:
+                val, _ = pi.value.verbatim, pi.value.typeindic
 
-                if prop_info.is_edge:
+                if pi.is_edge:
                     # This is an edge (node to node). Resolve RHS as a node ID.
                     node_base = parser._node_base(doc) if parser else doc.nodebase
                     target_id = expand_iri(str(val), node_base, doc=doc)
@@ -529,17 +496,17 @@ def process_nodeblock(nodeblock, graph_obj, doc, parser: LiterateParser | None =
             if current_assertion is None:
                 continue  # Skip nested without a parent
 
-            if prop_info.is_text_ref:
+            if pi.is_text_ref:
                 # Handle nested text reference
-                ref_name = str(prop_info.value) if prop_info.value else None
+                ref_name = str(pi.value) if pi.value else None
                 if ref_name and ref_name in doc.text_refs:
                     str_val = doc.text_refs[ref_name]
                     nested = current_assertion.add_property(assertion_label, str_val)
                     if parser and nested is not None:
                         parser._maybe_add_source(nested, doc)
-            elif prop_info.value:
-                val, _ = prop_info.value.verbatim, prop_info.value.typeindic
-                if prop_info.is_edge:
+            elif pi.value:
+                val, _ = pi.value.verbatim, pi.value.typeindic
+                if pi.is_edge:
                     # Nested edge
                     node_base = parser._node_base(doc) if parser else doc.nodebase
                     target_id = expand_iri(str(val), node_base, doc=doc)
@@ -583,9 +550,8 @@ def process_docheader(props, graph_obj, doc):
                 doc.nodebase = prop.value.verbatim if prop.value else None
             elif prop.key == '@schema':
                 doc.schemabase = prop.value.verbatim if prop.value else None
-            elif prop.key == '@typebase' or prop.key == '@type-base' or prop.key == '@resource-type':
+            elif prop.key == '@typebase':
                 # @typebase for less common cases where types need different base than properties (@schema)
-                # @type-base and @resource-type are legacy aliases for @typebase
                 doc.typebase = prop.value.verbatim if prop.value else None
             elif prop.key == '@iri':
                 # Prefix block only; nested lines supply mappings (not a document assertion)
@@ -603,9 +569,8 @@ def process_docheader(props, graph_obj, doc):
                 elif k == '@schema':
                     doc.schemabase = uri
                     _sync_schema_prefix(doc)
-                elif k == '@typebase' or k == '@type-base' or k == '@resource-type':
+                elif k == '@typebase':
                     # @typebase for less common cases where types need different base than properties (@schema)
-                    # @type-base and @resource-type are legacy aliases for @typebase
                     doc.typebase = uri
                 else:
                     _register_iri_prefix(doc, k, uri)
@@ -626,103 +591,3 @@ def process_docheader(props, graph_obj, doc):
             fullprop = expand_iri(prop.key, doc.schemabase, doc=doc)
             doc_node.add_property(fullprop, prop.value.verbatim)
     return
-
-
-'''
-def handle_resourceset(ltext, **kwargs):
-    'Helper that converts sets of resources from a textual format such as Markdown, including absolutizing relative IRIs'
-    fullprop=kwargs.get('fullprop')
-    rid=kwargs.get('rid')
-    base=kwargs.get('base', ONYA_BASEIRI)
-    model=kwargs.get('model')
-    iris = ltext.strip().split()
-    for i in iris:
-        model.add(rid, fullprop, I(iri.absolutize(i, base)))
-    return None
-
-
-PREP_METHODS = {
-    ONYA_BASEIRI + 'text': lambda x, **kwargs: x,
-    # '@text': lambda x, **kwargs: x,
-    ONYA_BASEIRI + 'resource': lambda x, base=ONYA_BASEIRI, **kwargs: I(iri.absolutize(x, base)),
-    ONYA_BASEIRI + 'resourceset': handle_resourceset,
-}
-
-    from onya.driver.memory import newmodel
-    m = newmodel()
-    parse(open('/tmp/poetry.md').read(), m)
-    print(m.size())
-    import pprint; pprint.pprint(list(m.match()))
-    # next(m.match(None, 'http://uche.ogbuji.net/poems/updated', '2013-10-15'))
-'''  # noqa: E501
-
-'''
-
-for s in [  ' "quick-brown-fox"',
-            ' "quick-brown-fox"\n',
-            ' <quick-brown-fox>',
-            ' <quick-brown-fox>\n',
-            ' <quick-brown-fox> <!-- COMMENT -->',
-            ' "quick-brown-fox" <!-- COMMENT -->',
-            '"\"1\""',
-            ]:
-    parsed = value_expr.parseString(s, parseAll=True)
-    print(s, '∴', parsed)
-
-for s in [  '# resX\n<!-- COMMENT -->\n\n  * a-b-c: <quick-brown-fox>',
-            ]:
-    print(s, end='')
-    parsed = resource_block.parseString(s, parseAll=True)
-    print('∴', parsed)
-
-for s in [  '  * a-b-c: <quick-brown-fox>',
-            '  * a-b-c:  quick brown fox',
-            '  * a-b-c: " quick brown fox"',
-            ]:
-    parsed = prop.parseString(s, parseAll=True)
-    print(s, '∴', parsed)
-
-for s in [  '# resX\n  * a-b-c: <quick-brown-fox>',
-            '# resX [Person]\n  * a-b-c: <quick-brown-fox>',
-            '# resX [Person]\n  * a-b-c: <quick-brown-fox>\n  * d-e-f: "lazy dog"',
-            ]:
-    parsed = resource_block.parseString(s, parseAll=True)
-    print(s, '∴', parsed)
-
-for s in [  '# resX\n  * a-b-c: <quick-brown-fox>\n    lang: en',
-            ]:
-    parsed = resource_block.parseString(s, parseAll=True)
-    print(s, '∴', parsed)
-
-for s in [  '# res1\n<!-- COMMENT -->\n\n  * a-b-c: <quick-brown-fox>\n\n\n# res2\n\n  * d-e-f: <jumps-over>\n\n\n',
-            ]:
-    print(s, end='')
-    parsed = resource_block.parseString(s, parseAll=True)
-    print('∴', parsed)
-
-for s in [  '# res1\n<!-- COMMENT -->\n\n  * a-b-c: <quick-brown-fox>\n\n\n\n\n# res2\n\n  * d-e-f: <jumps-over>\n\n\n',
-            ]:
-    print(s, end='')
-    parsed = resource_seq.parseString(s, parseAll=True)
-    print('∴', parsed)
-
-'''  # noqa: E501, E502
-
-
-'''
-
-  a-b-c: <quick-brown-fox> ∴ [prop_info(key='a-b-c', value=ParseResults([I(quick-brown-fox)], {}), children=[ParseResults([], {})])]
-  a-b-c:  quick brown fox ∴ [prop_info(key='a-b-c', value=ParseResults(['quick brown fox'], {}), children=[ParseResults([], {})])]
-  a-b-c: " quick brown fox" ∴ [prop_info(key='a-b-c', value=ParseResults([LITERAL(' quick brown fox')], {}), children=[ParseResults([], {})])]
-# resX
-  a-b-c: <quick-brown-fox> ∴ [I(resX), None, prop_info(key='a-b-c', value=ParseResults([I(quick-brown-fox)], {}), children=[ParseResults([], {})])]
-# resX [Person]
-  a-b-c: <quick-brown-fox> ∴ [I(resX), 'Person', prop_info(key='a-b-c', value=ParseResults([I(quick-brown-fox)], {}), children=[ParseResults([], {})])]
-# resX [Person]
-  a-b-c: <quick-brown-fox>
-  d-e-f: "lazy dog" ∴ [I(resX), 'Person', prop_info(key='a-b-c', value=ParseResults([I(quick-brown-fox)], {}), children=[ParseResults([prop_info(key='d-e-f', value=LITERAL('lazy dog'), children=[])], {})])]
-# resX
-  a-b-c: <quick-brown-fox>
-    lang: en ∴ [I(resX), None, prop_info(key='a-b-c', value=ParseResults([I(quick-brown-fox)], {}), children=[ParseResults([prop_info(key='lang', value='en', children=[])], {})])]
-
-'''  # noqa: E501, E502

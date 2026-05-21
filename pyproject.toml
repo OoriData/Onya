@@ -30,7 +30,6 @@ dependencies = [
     'Amara>=4.0.1',
     # 'Amara @ git+https://github.com/OoriData/Amara.git@main',
     'pyparsing',   # Parser for Onya Literate format
-    'markdown',    # Markdown support
     'fire',        # CLI framework (used by the onya console script)
 ]
 

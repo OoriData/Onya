@@ -28,9 +28,13 @@ Note: See also demo/graphviz_basic/graphviz_demo.py for more info, including on 
 import sys
 import html
 
-from onya.util import abbreviate, ONYA_BASEIRI
+from onya.util import compact_iri, shorten_node_id
 
 __all__ = ['write']
+
+
+def _label(label, prefixes: dict[str, str] | None) -> str:
+    return compact_iri(str(label), prefixes, fallback='full')
 
 
 def escape_dot_id(s):
@@ -53,14 +57,13 @@ def escape_html_label(s):
     return html.escape(str(s))
 
 
-def get_node_label(node_id, node_obj, bases, show_full_iri=False):
+def get_node_label(node_id, nodebase, show_full_iri=False):
     '''
     Generate a display label for a node
 
     Args:
         node_id: The node's IRI
-        node_obj: The node object
-        bases: List of base IRIs for abbreviation
+        nodebase: Base IRI used to relativize the displayed node ID
         show_full_iri: If True, show full IRI; if False, abbreviate
 
     Returns:
@@ -68,8 +71,7 @@ def get_node_label(node_id, node_obj, bases, show_full_iri=False):
     '''
     if show_full_iri:
         return str(node_id)
-    else:
-        return abbreviate(node_id, bases)
+    return shorten_node_id(node_id, nodebase)
 
 
 def get_node_shape(node_obj, type_shapes):
@@ -116,13 +118,13 @@ def get_node_color(node_obj, type_colors):
     return None
 
 
-def format_properties_html(properties, bases):
+def format_properties_html(properties, prefixes):
     '''
     Format properties as an HTML table for display in node label
 
     Args:
         properties: List of (label, value) tuples
-        bases: List of base IRIs for abbreviation
+        prefixes: CURIE prefix map used to abbreviate labels
 
     Returns:
         HTML string for table
@@ -132,7 +134,7 @@ def format_properties_html(properties, bases):
 
     rows = []
     for label, value in properties:
-        abbr_label = abbreviate(label, bases)
+        abbr_label = _label(label, prefixes)
         # Truncate very long values
         display_value = str(value)
         if len(display_value) > 50:
@@ -146,8 +148,9 @@ def format_properties_html(properties, bases):
 
 
 def write(model, out=sys.stdout,
-          base=None,
-          propertybase=None,
+          nodebase=None,
+          schema=None,
+          prefixes=None,
           rankdir='TB',
           show_properties=True,
           show_types=True,
@@ -164,8 +167,9 @@ def write(model, out=sys.stdout,
     Args:
         model: The Onya graph to serialize
         out: File pointer to write to (default: sys.stdout)
-        base: Base IRI for abbreviating node IDs
-        propertybase: Base IRI for abbreviating property labels
+        nodebase: Base IRI for relativizing node IDs in display labels
+        schema: Base IRI for abbreviating property/edge/type labels (registered as the ``schema`` CURIE prefix)
+        prefixes: Additional CURIE prefix map (prefix name -> namespace base)
         rankdir: Graph layout direction - 'TB' (top-bottom), 'LR' (left-right),
                  'BT' (bottom-top), 'RL' (right-left)
         show_properties: If True, show node properties as HTML table in node
@@ -189,10 +193,9 @@ def write(model, out=sys.stdout,
     node_attrs = node_attrs or {}
     edge_attrs = edge_attrs or {}
 
-    all_propertybase = [propertybase] if propertybase else []
-    all_propertybase.append(ONYA_BASEIRI)
-
-    all_base = [base] if base else []
+    label_prefixes: dict[str, str] = dict(prefixes or {})
+    if schema:
+        label_prefixes['schema'] = schema
 
     # Write DOT header
     out.write('digraph G {\n')
@@ -243,17 +246,17 @@ def write(model, out=sys.stdout,
         label_parts = []
 
         # Add abbreviated node ID
-        display_id = get_node_label(node_id, node_obj, all_base)
+        display_id = get_node_label(node_id, nodebase)
         label_parts.append(f'<b>{escape_html_label(display_id)}</b>')
 
         # Add types if requested
         if show_types and node_obj.types:
-            types_str = ', '.join(abbreviate(t, all_propertybase) for t in node_obj.types)
+            types_str = ', '.join(_label(t, label_prefixes) for t in node_obj.types)
             label_parts.append(f'<font point-size="8">[{escape_html_label(types_str)}]</font>')
 
         # Add properties if requested
         if show_properties and node_properties:
-            props_html = format_properties_html(node_properties, all_propertybase)
+            props_html = format_properties_html(node_properties, label_prefixes)
             label_parts.append(props_html)
 
         # Combine label parts
@@ -292,13 +295,13 @@ def write(model, out=sys.stdout,
 
                 # Add edge label if requested
                 if show_edge_labels:
-                    edge_label = abbreviate(relation, all_propertybase)
+                    edge_label = _label(relation, label_prefixes)
 
                     # Add annotations to label if requested
                     if show_edge_annotations and annotations:
                         annotation_parts = [edge_label]
                         for ann_key, ann_value in annotations.items():
-                            ann_key_abbr = abbreviate(ann_key, all_propertybase)
+                            ann_key_abbr = _label(ann_key, label_prefixes)
                             # Truncate long annotation values
                             ann_value_str = str(ann_value)
                             if len(ann_value_str) > 30:

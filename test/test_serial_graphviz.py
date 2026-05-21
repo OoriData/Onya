@@ -147,8 +147,8 @@ def test_graphviz_with_base_iri():
     # Serialize with base IRIs for abbreviation
     out = StringIO()
     graphviz.write(g, out=out,
-                   base='http://example.org/',
-                   propertybase='http://schema.org/')
+                   nodebase='http://example.org/',
+                   schema='http://schema.org/')
     dot_output = out.getvalue()
 
     # Should have abbreviated forms (though exact format depends on implementation)

@@ -71,7 +71,7 @@ Parse this graph and interact with it using the Python API.
 
 ```python
 from onya.graph import graph
-from onya.serial.literate_lex import LiterateParser
+from onya.serial.literate import LiterateParser
 
 # Parse the Onya Literate text into a graph
 onya_text = '''

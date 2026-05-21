@@ -11,12 +11,22 @@ see: SPEC.md (Onya Literate serialization)
 import re
 import sys
 
-from amara import iri
+from onya import I
+from onya.util import compact_iri, namespace_for_curie, shorten_node_id
+from onya.serial._literate_parse import (
+    LiterateParser,
+    ParseResult,
+    SchemaPrefixConflict,
+)
 
-from onya import I, ONYA_BASEIRI
-from onya.util import abbreviate, compact_iri, namespace_for_curie
-
-__all__ = ['read', 'write', 'longtext']
+__all__ = [
+    'read',
+    'write',
+    'longtext',
+    'LiterateParser',
+    'ParseResult',
+    'SchemaPrefixConflict',
+]
 
 
 def longtext(t):
@@ -42,31 +52,18 @@ def _prefixes_for_write(schema: str | None, prefixes: dict[str, str] | None) -> 
     return result
 
 
-def _relativize_node_id(nid, nodebase: str | None) -> str:
-    nid_s = str(nid)
-    if nodebase:
-        abbr = iri.relativize(nid_s, nodebase, subPathOnly=True)
-        if abbr:
-            return abbr
-    return nid_s
-
-
 def _format_label(
     label,
     prefixes: dict[str, str],
     *,
     bracket_curie: bool = False,
 ) -> str:
-    label_s = str(label)
-    if label_s.startswith(str(ONYA_BASEIRI)):
-        abbr = abbreviate(label_s, [ONYA_BASEIRI])
-        return abbr if isinstance(abbr, str) else str(abbr)
-    return compact_iri(label_s, prefixes, bracket=bracket_curie)
+    return compact_iri(str(label), prefixes, bracket=bracket_curie)
 
 
 def _format_value(val, nodebase: str | None, prefixes: dict[str, str]) -> str:
     if isinstance(val, I):
-        inner = _relativize_node_id(val, nodebase)
+        inner = shorten_node_id(val, nodebase)
         if inner != str(val):
             return inner
         return compact_iri(str(val), prefixes)
@@ -89,7 +86,7 @@ def _write_assertions(node, out, indent: str, nodebase, prefixes, bracket_curie:
 
     for edge in sorted(node.edges, key=lambda e: str(e.label)):
         label = _format_label(edge.label, prefixes, bracket_curie=bracket_curie)
-        target = _relativize_node_id(edge.target.id, nodebase)
+        target = shorten_node_id(edge.target.id, nodebase)
         out.write(f'{indent}* {label} -> {target}\n')
         for nested in sorted(edge.properties, key=lambda p: str(p.label)):
             nested_label = _format_label(nested.label, prefixes, bracket_curie=bracket_curie)
@@ -109,9 +106,6 @@ def write(
     prefixes: dict[str, str] | None = None,
     bracket_curie: bool = False,
     bracket_types: bool = False,
-    # Legacy aliases (deprecated)
-    base: str | None = None,
-    propertybase: str | None = None,
 ):
     '''
     Serialize an Onya graph to Onya Literate (Markdown).
@@ -122,14 +116,7 @@ def write(
     prefixes -- additional ``@iri`` prefix map (prefix name -> namespace base)
     bracket_curie -- if True, write labels as ``<prefix:local>`` instead of ``prefix:local``
     bracket_types -- if True, write types as ``[<prefix:Type>]`` with bracketed CURIEs
-
-    Legacy: ``base`` -> ``nodebase``, ``propertybase`` -> ``schema``.
     '''
-    if base is not None:
-        nodebase = nodebase or base
-    if propertybase is not None:
-        schema = schema or propertybase
-
     all_prefixes = _prefixes_for_write(schema, prefixes)
     document_s = str(document) if document else None
 
@@ -159,7 +146,7 @@ def write(
         if document_s and str(nid) == document_s:
             continue
         node = model[nid]
-        header_id = _relativize_node_id(nid, nodebase)
+        header_id = shorten_node_id(nid, nodebase)
         if node.types:
             types = sorted(node.types, key=str)
             type_parts = [
@@ -175,12 +162,20 @@ def write(
     return
 
 
-def read(fp, g):
+def read(fp, g=None, *, document_source_assertions: bool = False, encoding: str = 'utf-8'):
     '''
-    Read Onya Literate format from file pointer into graph
+    Read Onya Literate format from a file-like object (or text string) into a graph.
 
-    fp -- file pointer to read from
-    g -- graph to populate
+    fp -- file-like object with a ``.read()`` method, OR a ``str`` of Onya Literate source
+    g -- graph to populate; if None, a new ``onya.graph.graph`` is created
+    document_source_assertions -- if True, tag each created assertion with an @source sub-property
+    encoding -- character encoding hint passed through to the parser
+
+    Returns: ``ParseResult(doc_iri, graph, nodes_added)``
     '''
-    # TODO: Implement this using literate_lex.parse
-    pass
+    text = fp if isinstance(fp, str) else fp.read()
+    parser = LiterateParser(
+        document_source_assertions=document_source_assertions,
+        encoding=encoding,
+    )
+    return parser.parse(text, g, encoding=encoding)

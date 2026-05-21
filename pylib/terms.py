@@ -11,12 +11,12 @@ from amara.iri import I
 
 ONYA = I('http://purl.org/onya/vocab/')
 ONYA_TYPE_REL = ONYA('type')
+ONYA_SOURCE_REL = ONYA('source')  # @source provenance sub-property
 ONYA_DOCUMENT = ONYA('Document')  # Type for document nodes created from @document directive
-# assert ONYA_TYPE_REL == I(iri.absolutize('type', ONYA_BASEIRI))
 
 # RDF
 
 RDF_NS = I('http://www.w3.org/1999/02/22-rdf-syntax-ns#')
 RDFS_NS = I('http://www.w3.org/2000/01/rdf-schema#')
 
-RDF_TYPE = RDF_TYPE = RDF_NS('type')
+RDF_TYPE = RDF_NS('type')

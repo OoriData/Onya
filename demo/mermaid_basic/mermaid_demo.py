@@ -20,7 +20,7 @@ from pathlib import Path
 
 from onya.graph import graph
 from onya.serial import mermaid
-from onya.serial.literate_lex import LiterateParser
+from onya.serial.literate import LiterateParser
 
 
 def demo_basic():

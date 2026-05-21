@@ -145,7 +145,7 @@ Use **compact CURIEs** anywhere an IRI label or type is expected:
 
 Namespace joining follows RDF/XML rules: if the namespace base already ends with `/`, `#`, or `?`, the local name is appended directly (no extra `/`). Otherwise a single `/` is inserted between base and local name, so bases should usually be written **without** a trailing slash unless the vocabulary IRIs are defined that way.
 
-Onya built-in names still use a leading `@` and the Onya vocabulary (e.g. `@document`, `@source`), not the `@iri` map. A separate legacy form `@prefix/path` (with `/`, `#`, or `@` after the prefix) is also supported when the prefix appears in `@iri`.
+Onya built-in names use a leading `@` and the Onya vocabulary (e.g. `@document`, `@source`), not the `@iri` map.
 
 Example (Acme client with schema.org contact details):
 
@@ -190,7 +190,8 @@ Structure:
   - `Type` is resolved relative to `@schema`
 - Assertions: list items starting with `*`
   - `label: value` - property (label is IRI, value is string)
-  - `label -> TargetID` - edge (label is IRI, TargetID is node ID)
+  - `label -> TargetID` - edge (label is IRI, TargetID is node ID).
+    The Unicode arrow `→` (U+2192) is accepted as a synonym for `->`.
 - Indentation indicates nested assertions
 
 ## Example: Things Fall Apart

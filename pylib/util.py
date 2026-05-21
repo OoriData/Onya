@@ -6,23 +6,25 @@ from amara import iri
 from onya import ONYA_BASEIRI
 
 __all__ = [
-    'abbreviate',
     'namespace_for_curie',
     'join_namespace',
     'curie_local_for_iri',
     'compact_iri',
+    'shorten_node_id',
 ]
 
 
-def abbreviate(rel, bases):
-    '''Abbreviate an IRI using base IRIs for more readable labels'''
-    for base in bases:
-        abbr = iri.relativize(rel, base, subPathOnly=True)
+def shorten_node_id(nid, nodebase: str | None) -> str:
+    '''
+    Relativize a node IRI against a nodebase for display/serialization.
+    Returns the full IRI string when no nodebase or no match.
+    '''
+    nid_s = str(nid)
+    if nodebase:
+        abbr = iri.relativize(nid_s, nodebase, subPathOnly=True)
         if abbr:
-            if base is ONYA_BASEIRI:
-                abbr = '@' + abbr
             return abbr
-    return str(rel)
+    return nid_s
 
 
 def namespace_for_curie(base: str) -> str:
@@ -77,25 +79,35 @@ def compact_iri(
     *,
     default_bare_prefix: str | None = 'schema',
     bracket: bool = False,
+    at_local: bool = True,
+    fallback: str = 'bracket',
 ) -> str:
     '''
-    Render a full IRI as a compact CURIE or bare local name.
+    Render a full IRI as a compact CURIE, ``@local`` Onya built-in, or bare local name.
 
-    Longest matching prefix wins. When the match is ``default_bare_prefix``, return
-    only the local part (e.g. ``name``). Otherwise return ``prefix:local``.
-    If ``bracket`` is True, wrap the result in ``<…>`` (for explicit IRI form).
-    If no prefix matches, return ``<full-iri>``.
+    - Longest matching prefix wins.
+    - When the match is ``default_bare_prefix``, return only the local part (e.g. ``name``).
+    - When ``at_local`` is True and ``full`` is in ``ONYA_BASEIRI``, return ``@local``.
+    - Otherwise return ``prefix:local``.
+    - If ``bracket`` is True, wrap the matched result in ``<…>`` (for explicit IRI form).
+    - If no prefix matches, ``fallback='bracket'`` returns ``<full>``;
+      ``fallback='full'`` returns ``full``.
     '''
     full = str(full)
-    if not prefixes:
-        return f'<{full}>' if bracket else f'<{full}>'
+
+    # Onya @-vocab is a built-in convention; take it before normal prefix matching.
+    if at_local:
+        onya_local = curie_local_for_iri(full, str(ONYA_BASEIRI))
+        if onya_local:
+            rendered = f'@{onya_local}'
+            return f'<{rendered}>' if bracket else rendered
 
     best_prefix: str | None = None
     best_local: str | None = None
     best_ns_len = -1
 
     for prefix_name, ns in sorted(
-        prefixes.items(),
+        (prefixes or {}).items(),
         key=lambda item: len(namespace_for_curie(item[1])),
         reverse=True,
     ):
@@ -109,7 +121,7 @@ def compact_iri(
             best_ns_len = ns_len
 
     if best_prefix is None:
-        return f'<{full}>'
+        return f'<{full}>' if fallback == 'bracket' else full
 
     if best_prefix == default_bare_prefix and best_local:
         rendered = best_local
