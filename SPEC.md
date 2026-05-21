@@ -141,6 +141,8 @@ Use **compact CURIEs** anywhere an IRI label or type is expected:
 - `<acme:contactPoint>` as a property or edge label → `https://acme.example.com/kg/schema/contactPoint`
 - Bare names such as `name` still resolve against `@schema` when no matching `@iri` prefix applies
 
+**`@schema` and the `schema` prefix:** Top-level `@schema` automatically registers `schema` in the internal prefix map used for CURIE expansion, so `schema:name` and bare `name` resolve to the same IRI. You do not need to repeat `* schema: …` under `@iri` unless you want it visible for readers. If you do declare `schema:` under `@iri`, it must match `@schema` after normalization (trailing `/` ignored); otherwise parsing fails with `SchemaPrefixConflict`.
+
 Namespace joining follows RDF/XML rules: if the namespace base already ends with `/`, `#`, or `?`, the local name is appended directly (no extra `/`). Otherwise a single `/` is inserted between base and local name, so bases should usually be written **without** a trailing slash unless the vocabulary IRIs are defined that way.
 
 Onya built-in names still use a leading `@` and the Onya vocabulary (e.g. `@document`, `@source`), not the `@iri` map. A separate legacy form `@prefix/path` (with `/`, `#`, or `@` after the prefix) is also supported when the prefix appears in `@iri`.
@@ -151,17 +153,17 @@ Example (Acme client with schema.org contact details):
 # @docheader
 
 * @document: https://acme.example.com/pulse/kg/sample
-* title: Acme Corp (Acme client)
+* title: Coyote Corp (Acme client)
 * @nodebase: https://acme.example.com/pulse/kg/sample/
 * @schema: https://schema.org/
 * @iri:
     * acme: https://acme.example.com/kg/schema
     * schema: https://schema.org
 
-# Acme [<acme:Client>]
+# Coyote [<acme:Client>]
 
-* name: ACME Corporation
-* url: https://www.acme.example/
+* name: Coyote Corporation
+* url: https://www.coyote.example/
 * <acme:contactPoint> -> acme-cp-main
 
 # acme-cp-main [ContactPoint]
@@ -311,6 +313,17 @@ Text references:
 - Define the text content with `:reference-name = """content"""`
 - Text references can be defined anywhere in the document, not necessarily before their usage
 - Triple-quoted content preserves all whitespace and newlines exactly as written
+
+## Serialization (`onya.serial.literate.write`)
+
+Graphs can be written back to Onya Literate with `write()`. Supply the same bases used when authoring:
+
+- `document`, `nodebase`, `schema` — written in `# @docheader`
+- `prefixes` — extra vocabularies under `@iri` (the `schema` prefix is implied by `schema=` and is not repeated under `@iri`)
+- `bracket_curie` — if true, non-schema labels use `<prefix:local>`; default is `prefix:local` (e.g. `acme:contactPoint`)
+- `bracket_types` — if true, types use bracketed CURIE form in headers
+
+Document-level properties stored on the document node are emitted as top-level docheader bullets. The document node itself is not written as a `#` block.
 
 ## Optional assertion provenance (`@source`)
 

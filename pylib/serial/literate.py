@@ -5,24 +5,18 @@
 """
 Serialize and deserialize between an Onya model and Onya Literate (Markdown)
 
-see: doc/literate_format.md
-
+see: SPEC.md (Onya Literate serialization)
 """
 
+import re
 import sys
 
 from amara import iri
 
 from onya import I, ONYA_BASEIRI
+from onya.util import abbreviate, compact_iri, namespace_for_curie
 
-# from onya.serial.litparse_util import parse
-
-TYPE_REL = I(iri.absolutize('type', ONYA_BASEIRI))
-
-__all__ = ['read', 'write',
-    # Non-standard
-    'longtext',
-]
+__all__ = ['read', 'write', 'longtext']
 
 
 def longtext(t):
@@ -31,19 +25,7 @@ def longtext(t):
     according to markdown rules
 
     Only use this function if you're Ok with possible whitespace-specific changes
-
-    >>> from onya.serial.literate import longtext
-    >>> longtext()
     '''
-# >>> markdown.markdown('* abc\ndef\nghi')
-# '<ul>\n<li>abc\ndef\nghi</li>\n</ul>'
-# >>> markdown.markdown('* abc\n\ndef\n\nghi')
-# '<ul>\n<li>abc</li>\n</ul>\n<p>def</p>\n<p>ghi</p>'
-# >>> markdown.markdown('* abc\n\n    def\n\n    ghi')
-# '<ul>\n<li>\n<p>abc</p>\n<p>def</p>\n<p>ghi</p>\n</li>\n</ul>'
-
-    # Insert blank line after list item & before start of secondary paragraph.
-    # Indent the line with at least one space to ensure it is indented as part of the list.
     endswith_cr = t[-1] == '\n'
     new_t = t.replace('\n', '\n    ')
     if endswith_cr:
@@ -51,63 +33,144 @@ def longtext(t):
     return new_t
 
 
-def abbreviate(rel, bases):
-    for base in bases:
-        abbr = iri.relativize(rel, base, subPathOnly=True)
+def _prefixes_for_write(schema: str | None, prefixes: dict[str, str] | None) -> dict[str, str]:
+    result: dict[str, str] = {}
+    for k, v in (prefixes or {}).items():
+        result[k] = v if str(v).endswith('#') else namespace_for_curie(v)
+    if schema:
+        result['schema'] = namespace_for_curie(schema)
+    return result
+
+
+def _relativize_node_id(nid, nodebase: str | None) -> str:
+    nid_s = str(nid)
+    if nodebase:
+        abbr = iri.relativize(nid_s, nodebase, subPathOnly=True)
         if abbr:
-            if base is ONYA_BASEIRI:
-                abbr = '@' + abbr
             return abbr
-    return I(rel)
+    return nid_s
 
 
-def value_format(val):
+def _format_label(
+    label,
+    prefixes: dict[str, str],
+    *,
+    bracket_curie: bool = False,
+) -> str:
+    label_s = str(label)
+    if label_s.startswith(str(ONYA_BASEIRI)):
+        abbr = abbreviate(label_s, [ONYA_BASEIRI])
+        return abbr if isinstance(abbr, str) else str(abbr)
+    return compact_iri(label_s, prefixes, bracket=bracket_curie)
+
+
+def _format_value(val, nodebase: str | None, prefixes: dict[str, str]) -> str:
     if isinstance(val, I):
-        return f'<{val}>'
-    else:
-        return f'"{val}"'
+        inner = _relativize_node_id(val, nodebase)
+        if inner != str(val):
+            return inner
+        return compact_iri(str(val), prefixes)
+    s = str(val)
+    if re.search(r'[\s:"\\]', s) or s == '':
+        return f'"{s}"'
+    return s
 
 
-def write(model, out=sys.stdout, base=None, propertybase=None, shorteners=None):
+def _write_assertions(node, out, indent: str, nodebase, prefixes, bracket_curie: bool):
+    for prop in sorted(node.properties, key=lambda p: str(p.label)):
+        label = _format_label(prop.label, prefixes, bracket_curie=bracket_curie)
+        out.write(f'{indent}* {label}: {_format_value(prop.value, nodebase, prefixes)}\n')
+        for nested in sorted(prop.properties, key=lambda p: str(p.label)):
+            nested_label = _format_label(nested.label, prefixes, bracket_curie=bracket_curie)
+            out.write(
+                f'{indent}    * {nested_label}: '
+                f'{_format_value(nested.value, nodebase, prefixes)}\n'
+            )
+
+    for edge in sorted(node.edges, key=lambda e: str(e.label)):
+        label = _format_label(edge.label, prefixes, bracket_curie=bracket_curie)
+        target = _relativize_node_id(edge.target.id, nodebase)
+        out.write(f'{indent}* {label} -> {target}\n')
+        for nested in sorted(edge.properties, key=lambda p: str(p.label)):
+            nested_label = _format_label(nested.label, prefixes, bracket_curie=bracket_curie)
+            out.write(
+                f'{indent}    * {nested_label}: '
+                f'{_format_value(nested.value, nodebase, prefixes)}\n'
+            )
+
+
+def write(
+    model,
+    out=sys.stdout,
+    *,
+    document: str | None = None,
+    nodebase: str | None = None,
+    schema: str | None = None,
+    prefixes: dict[str, str] | None = None,
+    bracket_curie: bool = False,
+    bracket_types: bool = False,
+    # Legacy aliases (deprecated)
+    base: str | None = None,
+    propertybase: str | None = None,
+):
     '''
-    models - input Onya model from which output is generated
+    Serialize an Onya graph to Onya Literate (Markdown).
 
-    out - file pointer to write to
-    base - base IRI for resolving relative node IDs
-    propertybase - base IRI for resolving relative property IDs
-    shorteners - dictionary of shorteners for property IDs
+    document -- @document IRI (document node is not written as a ``#`` block)
+    nodebase -- @nodebase for relativizing node IDs in headers and edge targets
+    schema -- @schema base IRI; also registers the ``schema`` CURIE prefix
+    prefixes -- additional ``@iri`` prefix map (prefix name -> namespace base)
+    bracket_curie -- if True, write labels as ``<prefix:local>`` instead of ``prefix:local``
+    bracket_types -- if True, write types as ``[<prefix:Type>]`` with bracketed CURIEs
+
+    Legacy: ``base`` -> ``nodebase``, ``propertybase`` -> ``schema``.
     '''
-    shorteners = shorteners or {}
+    if base is not None:
+        nodebase = nodebase or base
+    if propertybase is not None:
+        schema = schema or propertybase
 
-    all_propertybase = [propertybase] if propertybase else []
-    all_propertybase.append(ONYA_BASEIRI)
+    all_prefixes = _prefixes_for_write(schema, prefixes)
+    document_s = str(document) if document else None
 
-    if any((base, propertybase, shorteners)):
-        out.write('# @docheader\n\n* @iri:\n')
-    if base:
-        out.write('    * @nodebase: {0}'.format(base))
-    #for k, v in shorteners:
-    #    out.write('    * @nodebase: {0}'.format(base))
+    if document or nodebase or schema or prefixes:
+        out.write('# @docheader\n\n')
+        if document:
+            out.write(f'* @document: {document}\n')
+        if nodebase:
+            out.write(f'* @nodebase: {nodebase}\n')
+        if schema:
+            out.write(f'* @schema: {schema}\n')
+        extra = {k: v for k, v in sorted(all_prefixes.items()) if k != 'schema'}
+        if extra:
+            out.write('* @iri:\n')
+            for k, v in extra.items():
+                out.write(f'    * {k}: {v}\n')
+        if document_s and document_s in model.nodes:
+            doc_node = model.nodes[document_s]
+            for prop in sorted(doc_node.properties, key=lambda p: str(p.label)):
+                key = _format_label(prop.label, all_prefixes, bracket_curie=bracket_curie)
+                out.write(
+                    f'* {key}: {_format_value(prop.value, nodebase, all_prefixes)}\n'
+                )
+        out.write('\n')
 
-    out.write('\n\n')
-
-    # Get all origin nodes from the model (all node IDs in the graph)
-    origin_space = set(model.keys()) if hasattr(model, 'keys') else set()
-
-    for o in origin_space:
-        out.write('# {0}\n\n'.format(o))
-        for o_, r, t, a in model.match(o):
-            rendered_r = abbreviate(r, all_propertybase)
-            if isinstance(rendered_r, I):
-                rendered_r = f'<{rendered_r}>'
-            value_format(t)
-            out.write(f'* {rendered_r}: {value_format(t)}\n')
-            for k, v in a.items():
-                rendered_k = abbreviate(k, all_propertybase)
-                if isinstance(rendered_k, I):
-                    rendered_k = f'<{rendered_k}>'
-                out.write(f'    * {rendered_k}: {value_format(v)}\n')
-
+    for nid in sorted(model.nodes.keys(), key=str):
+        if document_s and str(nid) == document_s:
+            continue
+        node = model[nid]
+        header_id = _relativize_node_id(nid, nodebase)
+        if node.types:
+            types = sorted(node.types, key=str)
+            type_parts = [
+                _format_label(t, all_prefixes, bracket_curie=bracket_types)
+                for t in types
+            ]
+            type_str = ' '.join(type_parts)
+            out.write(f'# {header_id} [{type_str}]\n\n')
+        else:
+            out.write(f'# {header_id}\n\n')
+        _write_assertions(node, out, '', nodebase, all_prefixes, bracket_curie)
         out.write('\n')
     return
 

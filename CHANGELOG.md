@@ -12,6 +12,9 @@ Notable changes to  Format based on [Keep a Changelog](https://keepachangelog.co
 
 - `ONYA_DOCUMENT` term in `onya.terms` for document node type
 - Onya Literate **compact CURIE** expansion (`prefix:local` and `<prefix:local>`) using prefixes declared in the document `@iri` block; namespace joining avoids duplicate `/` when the base already ends with `/`
+- `@schema` auto-registers the `schema` CURIE prefix in `doc.iris`; mismatch with explicit `schema:` under `@iri` raises `SchemaPrefixConflict`
+- `onya.util`: `namespace_for_curie`, `join_namespace`, `curie_local_for_iri`, `compact_iri` for CURIE round-trip
+- `literate.write()` rewrite: docheader, types, edges, nested assertions, CURIE labels (`bracket_curie` / `bracket_types` flags)
 
 ### Changed
 

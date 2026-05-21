@@ -9,19 +9,27 @@ pytest -s test/py/test_serial_literate.py
 # import functools
 
 # Requires pytest-mock
-# import pytest
+import pytest
 
 from amara.iri import I
 
 from onya.graph import graph
 #from onya.serial.literate import *
+from io import StringIO
+
+from onya.serial.literate import write
 from onya.serial.literate_lex import (
     LiterateParser,
+    SchemaPrefixConflict,
     doc_info,
     expand_iri,
-    _join_namespace,
 )
-from onya import ONYA_BASEIRI
+from onya.util import compact_iri, join_namespace, namespace_for_curie
+from onya import LITERAL, ONYA_BASEIRI
+
+
+def _prop_value(v):
+    return str(v) if isinstance(v, LITERAL) else v
 
 # T = I('http://example.org')
 T = I('http://e.o')
@@ -247,14 +255,132 @@ def test_typebase_directive():
 
 
 def test_join_namespace_avoids_duplicate_slash():
-    assert _join_namespace('https://acme.example/kg/schema', 'Client') == (
+    assert join_namespace('https://acme.example/kg/schema', 'Client') == (
         'https://acme.example/kg/schema/Client'
     )
-    assert _join_namespace('https://acme.example/kg/schema/', 'Client') == (
+    assert join_namespace('https://acme.example/kg/schema/', 'Client') == (
         'https://acme.example/kg/schema/Client'
     )
-    assert _join_namespace('https://schema.org/', 'name') == 'https://schema.org/name'
-    assert _join_namespace('http://example.org/vocab#', 'Thing') == 'http://example.org/vocab#Thing'
+    assert join_namespace('https://schema.org/', 'name') == 'https://schema.org/name'
+    assert join_namespace('http://example.org/vocab#', 'Thing') == 'http://example.org/vocab#Thing'
+
+
+def test_schema_autoregister_from_schema_directive():
+    onya_text = '''\
+# @docheader
+* @document: https://acme.example/doc
+* @nodebase: https://acme.example/
+* @schema: https://schema.org/
+* @iri:
+    * acme: https://acme.example/kg/schema
+
+# N [Thing]
+* name: X
+* schema:name: X
+'''
+    g = graph()
+    LiterateParser().parse(onya_text, g)
+    n = g['https://acme.example/N']
+    assert list(n.getprop('https://schema.org/name'))[0].value == 'X'
+
+
+def test_schema_prefix_conflict_raises():
+    onya_text = '''\
+# @docheader
+* @schema: https://schema.org/
+* @iri:
+    * schema: https://vocab.example.org/core
+
+# N [Thing]
+* name: X
+'''
+    g = graph()
+    with pytest.raises(SchemaPrefixConflict):
+        LiterateParser().parse(onya_text, g)
+
+
+def test_compact_iri_bare_schema_and_bracket():
+    prefixes = {
+        'acme': 'https://acme.example/kg/schema',
+        'schema': 'https://schema.org',
+    }
+    assert compact_iri('https://schema.org/name', prefixes) == 'name'
+    assert compact_iri('https://acme.example/kg/schema/contactPoint', prefixes) == (
+        'acme:contactPoint'
+    )
+    assert compact_iri(
+        'https://acme.example/kg/schema/contactPoint', prefixes, bracket=True
+    ) == '<acme:contactPoint>'
+
+
+ACME_CURIE_ONYA = '''\
+# @docheader
+
+* @document: https://acme.example/pulse/kg/sample
+* title: Acme Corp (Acme client)
+* @nodebase: https://acme.example/pulse/kg/sample/
+* @schema: https://schema.org/
+* @iri:
+    * acme: https://acme.example/kg/schema
+
+# Acme [<acme:Client>]
+
+* name: ACME Corporation
+* url: https://www.acme.example/
+* <acme:contactPoint> -> acme-cp-main
+
+# acme-cp-main [ContactPoint]
+
+* contactType: main
+* name: Jane Doe
+* email: jane.doe@acme.example
+'''
+
+
+def test_write_roundtrip_curie():
+    g1 = graph()
+    LiterateParser().parse(ACME_CURIE_ONYA, g1)
+
+    buf = StringIO()
+    write(
+        g1,
+        buf,
+        document='https://acme.example/pulse/kg/sample',
+        nodebase='https://acme.example/pulse/kg/sample/',
+        schema='https://schema.org/',
+        prefixes={'acme': 'https://acme.example/kg/schema'},
+    )
+    text2 = buf.getvalue()
+
+    g2 = graph()
+    LiterateParser().parse(text2, g2)
+
+    assert set(g2.nodes.keys()) == set(g1.nodes.keys())
+    for nid in g1.nodes:
+        n1, n2 = g1[nid], g2[nid]
+        assert n1.types == n2.types
+        assert {(str(p.label), _prop_value(p.value)) for p in n1.properties} == {
+            (str(p.label), _prop_value(p.value)) for p in n2.properties
+        }
+        assert {
+            (str(e.label), e.target.id) for e in n1.edges
+        } == {(str(e.label), e.target.id) for e in n2.edges}
+
+
+def test_write_bracket_curie_flag():
+    g = graph()
+    LiterateParser().parse(ACME_CURIE_ONYA, g)
+    buf = StringIO()
+    write(
+        g,
+        buf,
+        document='https://acme.example/pulse/kg/sample',
+        nodebase='https://acme.example/pulse/kg/sample/',
+        schema='https://schema.org/',
+        prefixes={'acme': 'https://acme.example/kg/schema'},
+        bracket_curie=True,
+    )
+    assert '<acme:contactPoint>' in buf.getvalue()
 
 
 def test_expand_curie_from_iri_block():
@@ -275,33 +401,14 @@ def test_expand_curie_from_iri_block():
 
 
 def test_parse_curie_acme_client_example():
-    '''Parse Acme Corp example using @iri CURIE prefixes (acme:, schema:).'''
-    onya_text = '''\
-# @docheader
-
-* @document: https://acme.example/pulse/kg/sample
-* title: Acme Corp (Acme client)
-* @nodebase: https://acme.example/pulse/kg/sample/
-* @schema: https://schema.org/
-* @iri:
-    * acme: https://acme.example/kg/schema
-    * schema: https://schema.org
-
-# Acme [<acme:Client>]
-
-* name: ACME Corporation
-* url: https://www.acme.example/
-* description: Engineering services client; primary **Acme** relationship record.
-* <acme:contactPoint> -> acme-cp-main
-
-# acme-cp-main [ContactPoint]
-
-* contactType: main
-* name: Jane Doe
-* email: jane.doe@acme.example
-* telephone: +1-555-0100
-* url: https://www.linkedin.com/in/janedoe
-'''
+    '''Parse Acme Corp example using @iri CURIE prefixes (acme:; schema: from @schema).'''
+    onya_text = ACME_CURIE_ONYA.replace(
+        'jane.doe@acme.example',
+        'jane.doe@acme.example\n* telephone: +1-555-0100\n* url: https://www.linkedin.com/in/janedoe',
+    ).replace(
+        '* <acme:contactPoint> -> acme-cp-main',
+        '* description: Engineering services client.\n* <acme:contactPoint> -> acme-cp-main',
+    )
     g = graph()
     op = LiterateParser()
     result = op.parse(onya_text, g)

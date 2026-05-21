@@ -20,6 +20,7 @@ from amara import iri  # for absolutize & matches_uri_syntax
 
 from onya import I, ONYA_BASEIRI, ONYA_NULL, LITERAL
 from onya.terms import ONYA_DOCUMENT
+from onya.util import join_namespace, namespace_for_curie
 
 from pyparsing import (
     ParserElement, Literal, htmlComment, Optional, Word, alphas, alphanums,
@@ -35,6 +36,7 @@ CURIE_PAT = re.compile(r'^([A-Za-z][\w.\-]*):([^:]+)$')
 
 TYPE_REL = ONYA_BASEIRI('type')
 SOURCE_REL = ONYA_BASEIRI('source')
+
 
 class value_type(Enum):
     '''
@@ -66,6 +68,45 @@ class doc_info:
     lang: str = None        # other IRI abbreviations
     iris: dict = None       # iterpretations of untyped values (e.g. string vs list of strs vs IRI)
     text_refs: dict = None  # text references defined with :name = """content"""
+
+
+class SchemaPrefixConflict(ValueError):
+    '''Raised when ``schema:`` under ``@iri`` disagrees with top-level ``@schema``.'''
+
+
+def _register_iri_prefix(doc: doc_info, prefix: str, uri: str | None) -> None:
+    if uri is None:
+        return
+    if doc.iris is None:
+        doc.iris = {}
+    uri_norm = uri if uri.endswith('#') else namespace_for_curie(uri)
+    if prefix == 'schema':
+        if doc.schemabase:
+            expected = namespace_for_curie(doc.schemabase)
+            if uri_norm != expected:
+                raise SchemaPrefixConflict(
+                    f'@iri prefix `schema` ({uri!r}) does not match @schema ({doc.schemabase!r}); '
+                    f'after normalization: {uri_norm!r} vs {expected!r}'
+                )
+        doc.iris['schema'] = uri_norm
+    else:
+        doc.iris[prefix] = uri_norm
+
+
+def _sync_schema_prefix(doc: doc_info) -> None:
+    '''Register ``schema`` in ``doc.iris`` from ``@schema``; raise if ``@iri`` disagrees.'''
+    if not doc.schemabase:
+        return
+    if doc.iris is None:
+        doc.iris = {}
+    canonical = namespace_for_curie(doc.schemabase)
+    if 'schema' in doc.iris and doc.iris['schema'] != canonical:
+        raise SchemaPrefixConflict(
+            f'@iri prefix `schema` ({doc.iris["schema"]!r}) does not match '
+            f'@schema ({doc.schemabase!r}); after normalization: '
+            f'{doc.iris["schema"]!r} vs {canonical!r}'
+        )
+    doc.iris['schema'] = canonical
 
 
 @dataclass
@@ -220,6 +261,8 @@ COMMENT         = htmlComment  # Using HTML-style comments for cleaner markdown 
 OPCOMMENT       = Optional(COMMENT)
 IDENT           = Word(alphas, alphanums + '_' + '-')
 IDENT_KEY       = Combine(Optional('@') + IDENT).leaveWhitespace()
+# Compact CURIE as assertion label (must precede IRIREF, which would stop at the first colon)
+CURIE_LABEL     = Regex(r'[A-Za-z][\w.\-]*:[A-Za-z][\w.\-]*')
 # EXPLICIT_IRI    = QuotedString('<', end_quote_char='>')
 QUOTED_STRING   = MatchFirst((QuotedString('"', escChar='\\'), QuotedString("'", escChar='\\'))) \
                     .setParseAction(literal_parse_action)
@@ -236,18 +279,19 @@ IRIREF          = Regex(r'[^<>"{}|^`\\\[\]%s]*' % ''.join(
 blank_to_eol    = ZeroOrMore(COMMENT) + White('\n')
 explicit_iriref = Combine(Suppress('<') + IRIREF + Suppress('>')) \
                     .setParseAction(iriref_parse_action)
+ASSERTION_LABEL = MatchFirst((explicit_iriref, CURIE_LABEL, IDENT_KEY, IRIREF))
 
 # Text reference definition: :name = '''content'''
 text_ref_def    = Suppress(':') + IDENT + Suppress('=') + TRIPLE_QUOTED_STRING
 
 value_expr      = ( explicit_iriref + Suppress(ZeroOrMore(COMMENT)) ) | ( QUOTED_STRING + Suppress(ZeroOrMore(COMMENT)) ) | rest_of_line  # noqa: E501
 prop            = Optional(White(' \t').leaveWhitespace(), '') + Suppress('*' + White()) + \
-                    ( explicit_iriref | IDENT_KEY | IRIREF ) + Suppress(':') + Optional(value_expr, None)
+                    ASSERTION_LABEL + Suppress(':') + Optional(value_expr, None)
 # Text reference property: label:: reference_name
 prop_text_ref   = Optional(White(' \t').leaveWhitespace(), '') + Suppress('*' + White()) + \
-                    ( explicit_iriref | IDENT_KEY | IRIREF ) + Suppress(DOUBLE_COLON) + Optional(IRIREF, None)
+                    ASSERTION_LABEL + Suppress(DOUBLE_COLON) + Optional(IRIREF, None)
 edge            = Optional(White(' \t').leaveWhitespace(), '') + Suppress('*' + White()) + \
-                    ( explicit_iriref | IDENT_KEY | IRIREF ) + Suppress(RIGHT_ARROW) + Optional(value_expr, None)
+                    ASSERTION_LABEL + Suppress(RIGHT_ARROW) + Optional(value_expr, None)
 propset         = Group(delimited_list(prop_text_ref | prop | edge | COMMENT, delim='\n'))
 node_header = Word('#') + Optional(IRIREF, None) + Optional(QuotedString('[', end_quote_char=']'), None)
 node_block  = Forward()
@@ -355,24 +399,6 @@ def _lexical_join(base: str, ref: str) -> str:
     return f'{base}{ref}'
 
 
-def _join_namespace(namespace: str, local: str) -> str:
-    '''
-    Join an @iri namespace base with a CURIE local name (RDF/XML-style).
-
-    Avoids a duplicate slash when the base already ends with ``/`` and the local
-    part does not start with ``/``, ``#``, or ``?``.
-    '''
-    if not local:
-        return namespace
-    if local[0] in '#?':
-        return namespace + local
-    if local[0] == '/':
-        return namespace.rstrip('/') + local
-    if namespace.endswith(('#', '/', '?')):
-        return namespace + local
-    return f'{namespace}/{local}'
-
-
 def _expand_curie(iri_in: str, doc: doc_info | None) -> str | None:
     '''
     Expand ``prefix:local`` using prefixes from the document ``@iri`` block.
@@ -383,7 +409,7 @@ def _expand_curie(iri_in: str, doc: doc_info | None) -> str | None:
     prefix, local = m.group(1), m.group(2)
     if doc is None or not doc.iris or prefix not in doc.iris:
         return None
-    return _join_namespace(doc.iris[prefix], local)
+    return join_namespace(doc.iris[prefix], local)
 
 
 def expand_iri(iri_in, base, nodecontext=None, doc=None):
@@ -561,6 +587,9 @@ def process_docheader(props, graph_obj, doc):
                 # @typebase for less common cases where types need different base than properties (@schema)
                 # @type-base and @resource-type are legacy aliases for @typebase
                 doc.typebase = prop.value.verbatim if prop.value else None
+            elif prop.key == '@iri':
+                # Prefix block only; nested lines supply mappings (not a document assertion)
+                pass
             #If we have a document node to which to attach them, just attach all other properties
             else:
                 pending_doc_props.append(prop)
@@ -573,12 +602,15 @@ def process_docheader(props, graph_obj, doc):
                     doc.nodebase = uri
                 elif k == '@schema':
                     doc.schemabase = uri
+                    _sync_schema_prefix(doc)
                 elif k == '@typebase' or k == '@type-base' or k == '@resource-type':
                     # @typebase for less common cases where types need different base than properties (@schema)
                     # @type-base and @resource-type are legacy aliases for @typebase
                     doc.typebase = uri
                 else:
-                    doc.iris[k] = uri
+                    _register_iri_prefix(doc, k, uri)
+
+    _sync_schema_prefix(doc)
 
     # Attach all non-reserved docheader assertions to the document node (if any)
     if doc.iri:
