@@ -24,7 +24,7 @@ from onya.serial.literate_lex import (
     doc_info,
     expand_iri,
 )
-from onya.util import compact_iri, join_namespace, namespace_for_curie
+from onya.util import compact_iri, join_namespace # , namespace_for_curie
 from onya import LITERAL, ONYA_BASEIRI
 
 
