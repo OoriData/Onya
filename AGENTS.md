@@ -7,6 +7,7 @@
 - Validate changes with tests before reporting completion. Add test cases if needed.
 - Ask before making destructive or hard-to-reverse changes.
 - When creating directories to be populated with files, e.g. documents or tests, prefer the singular, e.g. `doc` and `test`. Similar for DB entity names.
+- If a `CHANGELOG.md` exists, keep it current: add an entry under the appropriate `[Unreleased]` subsection (Added/Changed/Removed/Fixed) for any user-visible change. If unsure which version stanza an entry belongs in (e.g. a change spanning a release boundary), ask.
 <!-- END MANAGED:agent-preamble -->
 
 ## Project type: python

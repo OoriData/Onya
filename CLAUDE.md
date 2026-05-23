@@ -6,6 +6,7 @@
 - Load only the skills and snippets needed for the task at hand.
 - Prefer small, deterministic changes; validate with tests before reporting done.
 - Ask before making destructive or hard-to-reverse changes.
+- If a `CHANGELOG.md` exists, add an entry under the appropriate `[Unreleased]` subsection (Added/Changed/Removed/Fixed) for any user-visible change. If unsure which version stanza an entry belongs in, ask.
 <!-- END MANAGED:agent-preamble -->
 
 ## Project type: python
