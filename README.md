@@ -1,5 +1,7 @@
 **Onya** is a knowledge graph expression and implementation. This repository combines a [data model and format spec](SPEC.md) with a Python parser and API implementation.
 
+Note: Using our provided [onya-graph.SKILL.md](onya-graph.SKILL.md) with your favorite AI coding agent is a good way to automate Onya authoring and explore the format. Try providing a text document and asking it to generate a graph therefrom.
+
 # Python quick start
 
 [![PyPI - Version](https://img.shields.io/pypi/v/onya.svg)](https://pypi.org/project/Onya)
