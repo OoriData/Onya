@@ -6,7 +6,7 @@ Notable changes to  Format based on [Keep a Changelog](https://keepachangelog.co
 ## [Unreleased]
 -->
 
-## [Unreleased]
+## [0.3.0] - 20260610: Cleanup & AI aids
 
 ### Added
 
@@ -19,6 +19,7 @@ Notable changes to  Format based on [Keep a Changelog](https://keepachangelog.co
 - `onya.serial.literate.read()` implemented as a thin shim over the parser; accepts a string or a file-like object and returns a `ParseResult`
 - `LiterateParser`, `ParseResult`, `SchemaPrefixConflict` are now importable from `onya.serial.literate` (canonical public path)
 - Unicode `→` (U+2192) accepted as a synonym for `->` in edge assertions (documented in SPEC)
+- Aligned to Oori's coding-agent-control: `oori-seed-repo . --kind python,python-prompting,onya-graph  --tools claude,opencode`
 
 ### Changed
 
