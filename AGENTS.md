@@ -4,7 +4,7 @@
 <!-- BEGIN MANAGED:agent-preamble -->
 - Source of truth is the code and git history, not assistant memory.
 - Read existing code before modifying; prefer targeted, minimal changes.
-- Validate changes with tests before reporting completion. Add test cases if needed.
+- Validate changes with the fast unit-test run before reporting completion. Add test cases if needed. Tests that hit unowned code or live services (DB, HTTP, browser) are integration tests — mark them and keep them out of the default run. See the `testing` skill.
 - Ask before making destructive or hard-to-reverse changes.
 - When creating directories to be populated with files, e.g. documents or tests, prefer the singular, e.g. `doc` and `test`. Similar for DB entity names.
 - If a `CHANGELOG.md` exists, keep it current: add an entry under the appropriate `[Unreleased]` subsection (Added/Changed/Removed/Fixed) for any user-visible change. If unsure which version stanza an entry belongs in (e.g. a change spanning a release boundary), ask.

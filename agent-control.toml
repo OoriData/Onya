@@ -11,6 +11,6 @@ agents = 'AGENTS.md'
 config = 'agent-control.toml'
 
 [managed]
-version = '0.2.1'
+version = '0.2.3'
 # Skills installed in this repo (updated by oori-seed-repo)
 skills = ['python']

@@ -4,7 +4,7 @@
 <!-- BEGIN MANAGED:agent-preamble -->
 - Source of truth is the code and git history, not assistant memory.
 - Load only the skills and snippets needed for the task at hand.
-- Prefer small, deterministic changes; validate with tests before reporting done.
+- Prefer small, deterministic changes; validate with the fast unit-test run before reporting done. Tests hitting unowned code or live services (DB, HTTP, browser) are integration tests — mark them and keep them out of the default run. See the `testing` skill.
 - Ask before making destructive or hard-to-reverse changes.
 - If a `CHANGELOG.md` exists, add an entry under the appropriate `[Unreleased]` subsection (Added/Changed/Removed/Fixed) for any user-visible change. If unsure which version stanza an entry belongs in, ask.
 <!-- END MANAGED:agent-preamble -->
