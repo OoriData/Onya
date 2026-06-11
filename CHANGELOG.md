@@ -2,9 +2,11 @@
 
 Notable changes to Onya are recorded here. Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-<!--
 ## [Unreleased]
--->
+
+### Changed
+
+- Onya Literate parser migrated to PEP8 pyparsing API names (`parse_string`/`parse_all`, `set_parse_action`, `leave_whitespace`, `set_default_whitespace_chars`, `html_comment`, `esc_char`, `DelimitedList`). No behavior change; removes `PyparsingDeprecationWarning`s and keeps the parser working under the upcoming pyparsing 4.0, which drops the legacy pre-PEP8 aliases.
 
 ## [0.3.0] - 20260610: Cleanup & AI aids
 
@@ -37,7 +39,7 @@ Notable changes to Onya are recorded here. Format based on [Keep a Changelog](ht
 
 ### Fixed
 
-- `onya.util.compact_iri(..., bracket=False)` now returns the bare IRI (not bracketed) when no prefix matches and the caller has explicitly opted out of bracketing — previously both branches returned `<full>`
+- `onya.util.compact_iri(…, bracket=False)` now returns the bare IRI (not bracketed) when no prefix matches and the caller has explicitly opted out of bracketing — previously both branches returned `<full>`
 - Duplicate self-assignment `RDF_TYPE = RDF_TYPE = ...` in `onya.terms` collapsed to a single assignment
 - Loop variable `prop_info` in `process_nodeblock` no longer shadows the `prop_info` dataclass
 - CURIE expansion is evaluated before Onya `@` vocabulary names, so prefixed terms such as `acme:Client` are not mistaken for Onya built-ins
