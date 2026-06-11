@@ -24,11 +24,11 @@ from onya.terms import ONYA_DOCUMENT, ONYA_SOURCE_REL
 from onya.util import join_namespace, namespace_for_curie
 
 from pyparsing import (
-    ParserElement, Literal, htmlComment, Optional, Word, alphas, alphanums,
+    ParserElement, Literal, html_comment, Optional, Word, alphas, alphanums,
     Combine, MatchFirst, QuotedString, Regex, ZeroOrMore, White, Suppress,
-    Group, delimited_list, Forward, OneOrMore, rest_of_line
+    Group, DelimitedList, Forward, OneOrMore, rest_of_line
 )  # pip install pyparsing
-ParserElement.setDefaultWhitespaceChars(' \t')
+ParserElement.set_default_whitespace_chars(' \t')
 
 URI_EXPLICIT_PAT = re.compile('<(.+)>', re.DOTALL)
 # Compact CURIE: prefix:localName (prefix is a QName NCName; not an absolute IRI scheme)
@@ -159,7 +159,7 @@ class LiterateParser:
         doc.iris = {}  # Initialize the iris dictionary
         doc.text_refs = {}  # Initialize the text references dictionary
 
-        parsed = node_seq.parseString(lit_text, parseAll=True)
+        parsed = node_seq.parse_string(lit_text, parse_all=True)
 
         # First pass: collect all text reference definitions
         for item in parsed:
@@ -256,42 +256,42 @@ def iriref_parse_action(toks):
 RIGHT_ARROW     = Literal('->') | Literal('→')  # U+2192
 DOUBLE_COLON    = Literal('::')  # For text references
 
-COMMENT         = htmlComment  # Using HTML-style comments for cleaner markdown compatibility
+COMMENT         = html_comment  # Using HTML-style comments for cleaner markdown compatibility
 OPCOMMENT       = Optional(COMMENT)
 IDENT           = Word(alphas, alphanums + '_' + '-')
-IDENT_KEY       = Combine(Optional('@') + IDENT).leaveWhitespace()
+IDENT_KEY       = Combine(Optional('@') + IDENT).leave_whitespace()
 # Compact CURIE as assertion label (must precede IRIREF, which would stop at the first colon)
 CURIE_LABEL     = Regex(r'[A-Za-z][\w.\-]*:[A-Za-z][\w.\-]*')
 # EXPLICIT_IRI    = QuotedString('<', end_quote_char='>')
-QUOTED_STRING   = MatchFirst((QuotedString('"', escChar='\\'), QuotedString("'", escChar='\\'))) \
-                    .setParseAction(literal_parse_action)
+QUOTED_STRING   = MatchFirst((QuotedString('"', esc_char='\\'), QuotedString("'", esc_char='\\'))) \
+                    .set_parse_action(literal_parse_action)
 # Triple-quoted strings for text references - handle multiline properly
 TRIPLE_QUOTED_STRING = Regex(r'"""([^"]*(?:"[^"]*)*?)"""', re.DOTALL) \
-                        .setParseAction(lambda tokens: LITERAL(tokens[0]))
+                        .set_parse_action(lambda tokens: LITERAL(tokens[0]))
 # See: https://rdflib.readthedocs.io/en/stable/_modules/rdflib/plugins/sparql/parser.html
 IRIREF          = Regex(r'[^<>"{}|^`\\\[\]%s]*' % ''.join(
                         '\\x%02X' % i for i in range(33)
                     )) \
-                    .setParseAction(iriref_parse_action)
+                    .set_parse_action(iriref_parse_action)
 #REST_OF_LINE = rest_of_line.leave_whitespace()
 
 blank_to_eol    = ZeroOrMore(COMMENT) + White('\n')
 explicit_iriref = Combine(Suppress('<') + IRIREF + Suppress('>')) \
-                    .setParseAction(iriref_parse_action)
+                    .set_parse_action(iriref_parse_action)
 ASSERTION_LABEL = MatchFirst((explicit_iriref, CURIE_LABEL, IDENT_KEY, IRIREF))
 
 # Text reference definition: :name = '''content'''
 text_ref_def    = Suppress(':') + IDENT + Suppress('=') + TRIPLE_QUOTED_STRING
 
 value_expr      = ( explicit_iriref + Suppress(ZeroOrMore(COMMENT)) ) | ( QUOTED_STRING + Suppress(ZeroOrMore(COMMENT)) ) | rest_of_line  # noqa: E501
-prop            = Optional(White(' \t').leaveWhitespace(), '') + Suppress('*' + White()) + \
+prop            = Optional(White(' \t').leave_whitespace(), '') + Suppress('*' + White()) + \
                     ASSERTION_LABEL + Suppress(':') + Optional(value_expr, None)
 # Text reference property: label:: reference_name
-prop_text_ref   = Optional(White(' \t').leaveWhitespace(), '') + Suppress('*' + White()) + \
+prop_text_ref   = Optional(White(' \t').leave_whitespace(), '') + Suppress('*' + White()) + \
                     ASSERTION_LABEL + Suppress(DOUBLE_COLON) + Optional(IRIREF, None)
-edge            = Optional(White(' \t').leaveWhitespace(), '') + Suppress('*' + White()) + \
+edge            = Optional(White(' \t').leave_whitespace(), '') + Suppress('*' + White()) + \
                     ASSERTION_LABEL + Suppress(RIGHT_ARROW) + Optional(value_expr, None)
-propset         = Group(delimited_list(prop_text_ref | prop | edge | COMMENT, delim='\n'))
+propset         = Group(DelimitedList(prop_text_ref | prop | edge | COMMENT, delim='\n'))
 node_header = Word('#') + Optional(IRIREF, None) + Optional(QuotedString('[', end_quote_char=']'), None)
 node_block  = Forward()
 node_block  << Group(node_header + White('\n').suppress() + Suppress(ZeroOrMore(blank_to_eol)) + propset)
@@ -349,11 +349,11 @@ def _make_text_ref_def(string, location, tokens):
     '''
     return ('text_ref_def', tokens[0], tokens[1])
 
-prop.setParseAction(_make_tree)
-prop_text_ref.setParseAction(_make_text_ref_tree)
-edge.setParseAction(_make_edge_tree)
-text_ref_def.setParseAction(_make_text_ref_def)
-value_expr.setParseAction(_make_value)
+prop.set_parse_action(_make_tree)
+prop_text_ref.set_parse_action(_make_text_ref_tree)
+edge.set_parse_action(_make_edge_tree)
+text_ref_def.set_parse_action(_make_text_ref_def)
+value_expr.set_parse_action(_make_value)
 
 
 _SCHEME_RE = re.compile(r'^[a-zA-Z][a-zA-Z0-9+\-.]*:')
