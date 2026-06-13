@@ -114,7 +114,7 @@ These are ignored by the parser and do not appear in the graph in any way. They 
 
 The document header specifies:
 - `@document`: IRI of the document itself (required)
-- `@nodebase`: Base IRI for resolving relative node IDs, whether as origins or edge targets; if omitted, `@document` is used as the node base
+- `@nodebase`: Base IRI for resolving relative node IDs, whether as origins or edge targets; if omitted, `@document` is used as the node base (with a `#` inserted as the separator when `@document` lacks a trailing `/`, `#`, or `?`)
 - `@schema`: Base IRI for schema vocabulary—used to expand both property/edge labels AND types (required in nearly all cases)
 - `@typebase`: Base IRI for resolving relative type IRIs; only needed in less common cases where types use a different base than properties. If omitted, types use `@schema` as the base.
 - `@language`: Default language for string values
@@ -122,6 +122,10 @@ The document header specifies:
 - Other assertions are attached to the document node
 
 **Important**: The `@nodebase` directive is used exclusively for expanding node IDs (e.g., `Chuks` → `http://example.org/people/Chuks`). The `@schema` directive is used for expanding both property labels (e.g., `name` → `https://schema.org/name`) and types (e.g., `[Person]` → `https://schema.org/Person`). It should be extremely unusual for an Onya file not to have a `@schema` directive.
+
+**Bare-name bases must end in a separator.** Node ids join to `@nodebase`, and bare property/edge labels and types join to `@schema`/`@typebase`, by **pure concatenation** — no separator is inserted. So these bases must end in `/`, `#`, or `?`, or they mint mashed IRIs (`@nodebase https://ex.org/g` + `Node` → `https://ex.org/gNode`). As of 0.3.1 the parser warns on a separator-less explicit `@nodebase`/`@schema`/`@typebase` (`DeprecationWarning`), and `LiterateParser(strict_namespace_bases=True)` rejects it with `NamespaceBaseError`; a future release will make strict the default. This is *not* the same as `@iri` CURIE joining, which does insert a separator — see below.
+
+**The `@nodebase`→`@document` fallback is the exception.** When `@nodebase` is omitted, node ids resolve off `@document`, which is an identity IRI and conventionally has no trailing separator (e.g. `…/things-fall-apart`). Rather than mash, Onya inserts a `#` here as an implicit separator, so `@document …/things-fall-apart` + `TFA` → `…/things-fall-apart#TFA`. This is a silent serialization rule; build the parser with `LiterateParser(warn_implicit_doc_ids=True)` to be warned each time it is applied. (A `@document` that already ends in `/`, `#`, or `?` concatenates directly, with no inserted `#`.)
 
 ### Vocabulary prefixes (`@iri`)
 
@@ -143,7 +147,7 @@ Use **compact CURIEs** anywhere an IRI label or type is expected:
 
 **`@schema` and the `schema` prefix:** Top-level `@schema` automatically registers `schema` in the internal prefix map used for CURIE expansion, so `schema:name` and bare `name` resolve to the same IRI. You do not need to repeat `* schema: …` under `@iri` unless you want it visible for readers. If you do declare `schema:` under `@iri`, it must match `@schema` after normalization (trailing `/` ignored); otherwise parsing fails with `SchemaPrefixConflict`.
 
-Namespace joining follows RDF/XML rules: if the namespace base already ends with `/`, `#`, or `?`, the local name is appended directly (no extra `/`). Otherwise a single `/` is inserted between base and local name, so bases should usually be written **without** a trailing slash unless the vocabulary IRIs are defined that way.
+**CURIE** namespace joining (under `@iri`) follows RDF/XML rules: if the prefix base already ends with `/`, `#`, or `?`, the local name is appended directly (no extra `/`); otherwise a single `/` is inserted between base and local name. So `@iri` prefix bases should usually be written **without** a trailing slash unless the vocabulary IRIs are defined that way. This differs from the bare-name `@nodebase`/`@schema`/`@typebase` bases above, which join by pure concatenation and therefore *must* carry their own trailing separator. The two converge for any base that ends in a separator — which is why the auto-registered `schema:` prefix and bare names agree for the usual trailing-slash `@schema`.
 
 Onya built-in names use a leading `@` and the Onya vocabulary (e.g. `@document`, `@source`), not the `@iri` map.
 

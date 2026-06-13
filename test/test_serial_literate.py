@@ -9,6 +9,8 @@ pytest -s test/py/test_serial_literate.py
 # import functools
 
 # Requires pytest-mock
+import warnings
+
 import pytest
 
 from amara.iri import I
@@ -17,7 +19,7 @@ from onya.graph import graph
 #from onya.serial.literate import *
 from io import StringIO
 
-from onya.serial.literate import LiterateParser, SchemaPrefixConflict, read, write
+from onya.serial.literate import LiterateParser, NamespaceBaseError, SchemaPrefixConflict, read, write
 from onya.serial._literate_parse import doc_info, expand_iri
 from onya.util import compact_iri, join_namespace # , namespace_for_curie
 from onya import LITERAL, ONYA_BASEIRI
@@ -468,3 +470,113 @@ def test_read_shim_roundtrip():
     result_fp = read(buf, g2)
     assert result_fp.doc_iri == 'https://acme.example/pulse/kg/sample'
     assert set(g2.nodes.keys()) == set(g1.nodes.keys())
+
+
+# A base missing its trailing separator: bare names concatenate, mashing the IRI.
+_NO_SEP_NODEBASE = '''\
+# @docheader
+* @document: http://e.o/doc
+* @nodebase: http://e.o/g
+* @schema: http://e.o/s/
+
+# MyNode [Thing]
+* name: X
+'''
+
+
+def test_namespace_base_missing_separator_warns_by_default():
+    '''Deprecation window: a separator-less base warns but still parses (mashed IRI).'''
+    g = graph()
+    with pytest.warns(DeprecationWarning, match='@nodebase'):
+        LiterateParser().parse(_NO_SEP_NODEBASE, g)
+    # Concatenation, not separator insertion: the id mashes onto the base.
+    assert I('http://e.o/gMyNode') in g.nodes
+
+
+def test_namespace_base_missing_separator_strict_raises():
+    '''strict_namespace_bases=True rejects the same input with NamespaceBaseError.'''
+    g = graph()
+    with pytest.raises(NamespaceBaseError):
+        LiterateParser(strict_namespace_bases=True).parse(_NO_SEP_NODEBASE, g)
+
+
+@pytest.mark.parametrize('base', ['http://e.o/', 'http://e.o/v#', 'http://e.o/q?'])
+def test_namespace_base_with_separator_ok(base, recwarn):
+    '''Bases ending in `/`, `#`, or `?` neither warn nor raise, under strict or not.'''
+    onya_text = f'''\
+# @docheader
+* @document: http://e.o/doc
+* @nodebase: {base}
+* @schema: {base}
+
+# N [Thing]
+* name: X
+'''
+    g = graph()
+    LiterateParser(strict_namespace_bases=True).parse(onya_text, g)
+    assert not [w for w in recwarn.list if issubclass(w.category, DeprecationWarning)]
+
+
+def test_namespace_base_check_skips_document_fallback():
+    '''The @nodebase->@document fallback is out of scope: a separator-less @document
+    (and no explicit @nodebase) must not warn or raise.'''
+    onya_text = '''\
+# @docheader
+* @document: http://e.o/doc
+* @schema: http://e.o/s/
+
+# N [Thing]
+* name: X
+'''
+    g = graph()
+    with warnings.catch_warnings():
+        warnings.simplefilter('error', DeprecationWarning)
+        LiterateParser(strict_namespace_bases=True).parse(onya_text, g)
+
+
+# No @nodebase + a separator-less @document: relative ids resolve off @document.
+_DOC_FALLBACK = '''\
+# @docheader
+* @document: http://e.o/doc
+* @schema: http://e.o/s/
+
+# A [Person]
+* name: Alice
+* knows -> B
+'''
+
+
+def test_document_fallback_uses_implicit_hash_separator():
+    '''Serialization rule: relative ids get an implicit `#`, silently, for node headers
+    and edge targets alike.'''
+    g = graph()
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')  # silent by default — any warning would fail here
+        LiterateParser().parse(_DOC_FALLBACK, g)
+    assert I('http://e.o/doc#A') in g.nodes
+    assert I('http://e.o/doc#B') in g.nodes  # edge target resolves the same way
+
+
+def test_document_fallback_warns_when_flag_set():
+    '''warn_implicit_doc_ids surfaces each implicit `#` construction.'''
+    g = graph()
+    with pytest.warns(UserWarning, match='implicit `#`'):
+        LiterateParser(warn_implicit_doc_ids=True).parse(_DOC_FALLBACK, g)
+
+
+def test_document_fallback_with_separator_no_implicit_hash():
+    '''A @document already ending in a separator concatenates directly: no `#`, no warning
+    even with the flag on.'''
+    onya_text = '''\
+# @docheader
+* @document: http://e.o/doc/
+* @schema: http://e.o/s/
+
+# A [Person]
+* name: Alice
+'''
+    g = graph()
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        LiterateParser(warn_implicit_doc_ids=True).parse(onya_text, g)
+    assert I('http://e.o/doc/A') in g.nodes

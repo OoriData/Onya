@@ -15,6 +15,7 @@ from onya import I
 from onya.util import compact_iri, namespace_for_curie, shorten_node_id
 from onya.serial._literate_parse import (
     LiterateParser,
+    NamespaceBaseError,
     ParseResult,
     SchemaPrefixConflict,
 )
@@ -26,6 +27,7 @@ __all__ = [
     'LiterateParser',
     'ParseResult',
     'SchemaPrefixConflict',
+    'NamespaceBaseError',
 ]
 
 

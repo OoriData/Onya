@@ -1,13 +1,13 @@
 ---
 name: onya-graph
-description: Author Onya knowledge graphs in the Onya Literate (.onya) Markdown format — docheader, node blocks, properties, edges, types, CURIEs, nested/reified assertions, long text, validation by parsing, and Mermaid/Graphviz export. Use when creating, editing, extracting, or reviewing Onya graphs (e.g. turning a document into a .onya knowledgebase, or hand-writing/fixing one).
+description: Author Onya knowledge graphs in the Onya Literate (.onya.md) Markdown format — docheader, node blocks, properties, edges, types, CURIEs, nested/reified assertions, long text, validation by parsing, and Mermaid/Graphviz export. Use when creating, editing, extracting, or reviewing Onya graphs (e.g. turning a document into a .onya knowledgebase, or hand-writing/fixing one).
 ---
 
 # Authoring Onya Graphs
 
 ## Purpose
 
-Onya is a knowledge-graph model — nodes, edges, properties, all identified by IRIs — with a human-friendly Markdown serialization called **Onya Literate** (`.onya`). This skill is how to author, fix, and validate `.onya` files, including the common task of extracting a knowledge graph from a source document.
+Onya is a knowledge-graph model — nodes, edges, properties, all identified by IRIs — with a human-friendly Markdown serialization called **Onya Literate**. Prefer the **`.onya.md`** extension: it is Markdown, so Markdown-aware tools (GitHub, editors, diff viewers) render and fold it correctly with no Onya support, while a bare `.onya` shows as plain text. This skill is how to author, fix, and validate these files, including the common task of extracting a knowledge graph from a source document.
 
 The model is deliberately tiny: a **node** has an id (IRI), a set of types, and a set of assertions; an **assertion** is either a **property** (label IRI → string value) or an **edge** (label IRI → target node). Assertions are themselves anonymous nodes, so **any assertion can carry its own nested assertions** — that is how Onya does relationship metadata, qualified values, and n-ary relations without extra machinery. Authoritative reference: [the Onya Model Specification](https://github.com/OoriData/Onya/blob/main/SPEC.md). Treat the code and spec as source of truth over this summary.
 
@@ -51,11 +51,13 @@ Resolution rules — keep these straight, they're the #1 source of mistakes:
 | Property / edge label (`name:`, `author ->`) | `@schema` | `name` → `https://schema.org/name` |
 | Type (`[Person]`) | `@schema` (or `@typebase` if set) | `Person` → `https://schema.org/Person` |
 
+When you omit `@nodebase`, node ids resolve off `@document`. Since `@document` is usually a separator-less identity IRI (`…/things-fall-apart`), Onya inserts a `#` there so ids don't mash: `TFA` → `…/things-fall-apart#TFA`. That's a silent serialization rule (`LiterateParser(warn_implicit_doc_ids=True)` surfaces it). If your ontology wants ids minted under a clean path base instead (`…/classics/TFA`), set `@nodebase` explicitly with a trailing separator — choose per the IRI scheme your consumers expect.
+
 ### Properties, edges, types
 
 - **Property**: `* label: string value` — values are **always strings** at the core layer; there are no native numbers/dates/booleans. Write `age: 28` and it's the string `"28"`.
 - **Edge**: `* label -> TargetNodeID` — the target must be (or become) a `# TargetNodeID` block. Reuse the same id to refer to the same node; don't duplicate a person/place under two ids.
-- **Type**: the `[Type]` in a header is optional but strongly encouraged. A node can be referenced before it's defined; define each referenced node somewhere in the file.
+- **Type**: the `[Type]` in a header is optional but strongly encouraged. **Give a node exactly one type — the most specific one.** Onya Literate headers take a single type today; multiple space-separated types (`[Organization lv:Client]`) currently fail to parse. When your domain type specializes a schema.org class (e.g. a "Client" that is a kind of `Organization`), do **not** stack both on the node — pick the specific one (`[<lv:Client>]`) and, if the hierarchy matters to consumers, declare the relationship **once** in your vocabulary: a `lv:Client` node with an edge `<rdfs:subClassOf> -> schema:Organization`. A node can be referenced before it's defined; define each referenced node somewhere in the file.
 
 ### CURIEs and multiple vocabularies
 
@@ -70,7 +72,7 @@ Resolution rules — keep these straight, they're the #1 source of mistakes:
 * <acme:contactPoint> -> acme-cp-main
 ```
 
-Bare names still resolve against `@schema`. The `schema` prefix is auto-registered from `@schema` — don't redeclare it under `@iri` with a conflicting value (parse error `SchemaPrefixConflict`). Namespace joining follows RDF/XML: write bases **without** a trailing `/` unless the vocabulary IRIs genuinely end in `/`, `#`, or `?` (those suppress the inserted separator). Fully explicit IRIs also work: `* <https://schema.org/name>: Chinua Achebe`.
+Bare names still resolve against `@schema`. The `schema` prefix is auto-registered from `@schema` — don't redeclare it under `@iri` with a conflicting value (parse error `SchemaPrefixConflict`). **CURIE** expansion under `@iri` follows RDF/XML namespace joining: Onya inserts a `/` separator unless the prefix base already ends in `/`, `#`, or `?`, so write `@iri` prefix bases **without** a trailing slash unless their IRIs genuinely end in one. (Bare-name `@schema`/`@nodebase` resolution is different — pure concatenation, so those bases *must* carry their own trailing separator; see Common pitfalls.) Note this means the same `@schema` base joins differently for a bare `Client` (concatenation) vs a `schema:Client` CURIE (separator-inserted); with the usual trailing-slash schema.org base both agree. Fully explicit IRIs also work: `* <https://schema.org/name>: Chinua Achebe`.
 
 ### Nested (recursive) assertions — metadata, qualified values, n-ary
 
@@ -144,7 +146,7 @@ result = LiterateParser().parse(open('file.onya').read(), g)
 print(result.doc_iri, len(g), 'nodes')
 ```
 
-Watch for: dangling edge targets (an edge to an id with no block), `SchemaPrefixConflict`, missing `@document`, and bare values that should have been quoted. Fix and re-parse.
+Watch for: dangling edge targets (an edge to an id with no block), `SchemaPrefixConflict`, `NamespaceBaseError` / a separator-less-base `DeprecationWarning`, missing `@document`, and bare values that should have been quoted. Fix and re-parse.
 
 ## Visualize / export
 
@@ -161,7 +163,9 @@ Useful display flags: `--rankdir LR`, `--noshow_properties`, `--noshow_types`, `
 
 ## Common pitfalls
 
-- **Trailing slash on a vocabulary base.** `@schema: https://schema.org/` is correct *because* schema.org IRIs end in `/`; for a base whose IRIs are `…/schema/Client`, write the base as `…/schema` (no trailing slash) and let Onya insert the separator. Getting this wrong yields doubled or missing slashes in expanded IRIs.
+- **One type per node header.** `[Organization lv:Client]` (or any multi-type header) does not parse — the bracket is read as a single IRI and the space makes it invalid. Use one specific type; model "is-a-kind-of" as a vocabulary `rdfs:subClassOf`, not a second header type.
+- **`@nodebase` / `@schema` / `@typebase` must end in a separator (`/`, `#`, or `?`).** Node ids and bare labels/types are joined by **pure concatenation**, so `@nodebase: https://ex.org/g` yields `https://ex.org/gMyNode` (mashed), not `…/g/MyNode`. End these bases with `/`. As of 0.3.1 the parser warns on a separator-less base and `LiterateParser(strict_namespace_bases=True)` raises `NamespaceBaseError` (strict becomes the default in a future release). (This differs from `@iri` CURIE prefixes, which *do* get RDF/XML separator insertion — see below.)
+- **Trailing slash on an `@iri` CURIE base.** CURIEs (`prefix:Local`, `<prefix:local>`) expand by RDF/XML rules: Onya inserts a `/` only when the base lacks a trailing `/`, `#`, or `?`. So write `@iri` prefix bases **without** a trailing slash unless the vocabulary IRIs genuinely end in one — `acme: https://acme.example/kg/schema` with `acme:Client` yields `…/schema/Client`. (Contrast the bullet above: bare names against `@schema`/`@nodebase` are *not* separator-inserted, so those bases must carry their own trailing separator.)
 - **Confusing `@nodebase` and `@schema`.** Node ids resolve against `@nodebase`; labels and types against `@schema`. They are different bases.
 - **Treating values as typed.** Everything is a string. Don't expect `age: 28` to be a number; if order/typing matters, that's a layer above the core model.
 - **Inventing a node for every relationship.** Reify with a nested assertion on the edge instead, unless the relationship is a real entity.

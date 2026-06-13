@@ -2,7 +2,20 @@
 
 Notable changes to Onya are recorded here. Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+<!-- 
 ## [Unreleased]
+ -->
+
+ ## [0.3.1] - 20260615: Strict namespacebases.
+
+### Added
+
+- `NamespaceBaseError` (importable from `onya.serial.literate`) and a `LiterateParser(strict_namespace_bases=True)` flag. Bare node ids, labels, and types join to `@nodebase`/`@schema`/`@typebase` by pure concatenation, so a base without a trailing separator mints mashed IRIs (`@nodebase https://ex.org/g` + `Node` → `https://ex.org/gNode`). Strict mode rejects such a base with `NamespaceBaseError`.
+- Implicit `#` separator for the `@nodebase`→`@document` fallback: when `@nodebase` is omitted and `@document` lacks a trailing separator, relative node ids resolve as `@document` + `#` + id (e.g. `…/things-fall-apart` + `TFA` → `…/things-fall-apart#TFA`) instead of mashing. Silent by default; `LiterateParser(warn_implicit_doc_ids=True)` warns on each application.
+
+### Deprecated
+
+- An explicit `@nodebase`/`@schema`/`@typebase` that does not end in `/`, `#`, or `?` now emits a `DeprecationWarning` (and raises `NamespaceBaseError` under `strict_namespace_bases=True`). A future release will make strict the default. The `@nodebase`→`@document` fallback is exempt. (Distinct from `@iri` CURIE prefixes, which get RDF/XML separator insertion and so are written without a trailing slash.)
 
 ### Changed
 

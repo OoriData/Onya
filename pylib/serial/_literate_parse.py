@@ -14,6 +14,7 @@ see: the [Onya Literate format documentation](https://github.com/OoriData/Onya/b
 '''
 
 import re
+import warnings
 from dataclasses import dataclass
 from enum import Enum
 
@@ -73,6 +74,50 @@ class SchemaPrefixConflict(ValueError):
     '''Raised when ``schema:`` under ``@iri`` disagrees with top-level ``@schema``.'''
 
 
+class NamespaceBaseError(ValueError):
+    '''Raised when a bare-name base (``@nodebase``/``@schema``/``@typebase``) lacks a
+    trailing separator (``/``, ``#``, or ``?``) and would mint mashed IRIs.'''
+
+
+# Bare node ids / labels / types concatenate onto these bases (see ``_lexical_join``),
+# so a base must end in one of these or base and local name silently mash together.
+_NAMESPACE_BASE_TERMINATORS = ('/', '#', '?')
+
+
+def _check_namespace_bases(doc: doc_info, *, strict: bool) -> None:
+    '''
+    Validate the document's bare-name bases end in a separator.
+
+    Unlike ``@iri`` CURIE prefixes (which get RDF/XML separator insertion via
+    ``join_namespace``), ``@nodebase`` / ``@schema`` / ``@typebase`` join bare node
+    ids, labels, and types by pure concatenation (``_lexical_join``). A base lacking a
+    trailing ``/``, ``#``, or ``?`` therefore mints mashed IRIs — e.g.
+    ``@nodebase https://ex.org/g`` + ``Node`` -> ``https://ex.org/gNode``.
+
+    During the deprecation window (``strict=False``) this emits a ``DeprecationWarning``;
+    once ``strict`` is set it raises ``NamespaceBaseError``. Only explicitly-declared
+    bases are checked — the ``@nodebase`` -> ``@document`` fallback is out of scope, since
+    ``@document`` is an identity IRI that conventionally carries no trailing separator.
+    '''
+    for name, base in (('@nodebase', doc.nodebase),
+                       ('@schema', doc.schemabase),
+                       ('@typebase', doc.typebase)):
+        if not base or base.endswith(_NAMESPACE_BASE_TERMINATORS):
+            continue
+        msg = (
+            f'{name} base {base!r} does not end in a separator (`/`, `#`, or `?`). '
+            f'Onya joins bare node ids, labels, and types to this base by concatenation, '
+            f'so it will mint mashed IRIs such as {base + "Local"!r}. Add a trailing `/` '
+            f'(or `#`/`?`).'
+        )
+        if strict:
+            raise NamespaceBaseError(msg)
+        warnings.warn(
+            msg + ' This will raise NamespaceBaseError in a future Onya release.',
+            DeprecationWarning, stacklevel=2,
+        )
+
+
 def _register_iri_prefix(doc: doc_info, prefix: str, uri: str | None) -> None:
     if uri is None:
         return
@@ -130,14 +175,26 @@ class LiterateParser:
     The classic `parse()` function remains available for backwards compatibility,
     but new behavior flags are supported via this class.
     '''
-    def __init__(self, *, document_source_assertions: bool = False, encoding: str = 'utf-8'):
+    def __init__(self, *, document_source_assertions: bool = False, encoding: str = 'utf-8',
+                 strict_namespace_bases: bool = False,
+                 warn_implicit_doc_ids: bool = False):
         '''
         document_source_assertions -- if set, add @source sub-properties on created assertions,
             including nested assertions but excluding document header declarations
         encoding -- character encoding used in processing the input text (defaults to UTF-8)
+        strict_namespace_bases -- if set, raise NamespaceBaseError when an explicit
+            @nodebase/@schema/@typebase lacks a trailing separator (`/`, `#`, or `?`).
+            Defaults to False during the deprecation window, which warns instead; a
+            future Onya release will flip this default to True.
+        warn_implicit_doc_ids -- if set, emit a warning each time a
+            relative node id is resolved off @document (the @nodebase fallback) using an
+            implicit `#` separator. Off by default: that resolution is a silent
+            serialization rule. See `_resolve_node_id`.
         '''
         self.document_source_assertions = document_source_assertions
         self.encoding = encoding
+        self.strict_namespace_bases = strict_namespace_bases
+        self.warn_implicit_doc_ids = warn_implicit_doc_ids
 
     def parse(self, lit_text, graph_obj=None, *, encoding: str | None = None) -> ParseResult:
         '''
@@ -413,15 +470,42 @@ def expand_iri(iri_in, base, nodecontext=None, doc=None):
     return I(fulliri)
 
 
+def _resolve_node_id(ref, doc: doc_info, parser: LiterateParser | None):
+    '''
+    Resolve a node id or edge-target id (``ref``) against the node base.
+
+    With an explicit ``@nodebase``, this is plain concatenation via ``expand_iri`` (the
+    base is required to end in a separator — see ``_check_namespace_bases``). When
+    ``@nodebase`` is omitted, ids resolve off ``@document``; if that document IRI lacks a
+    trailing separator, Onya inserts a ``#`` as an implicit separator — a serialization
+    rule that keeps the natural ``@document http://e.o/doc`` usable as a node base:
+    ``http://e.o/doc`` + ``N`` -> ``http://e.o/doc#N``. Only *relative* refs are affected
+    (absolute IRIs and CURIEs ignore the base). Silent unless the parser was built with
+    ``warn_implicit_doc_ids``.
+    '''
+    node_base = parser._node_base(doc) if parser else doc.nodebase
+    using_doc_fallback = not doc.nodebase and node_base is not None and node_base == doc.iri
+    if using_doc_fallback and not node_base.endswith(_NAMESPACE_BASE_TERMINATORS):
+        result = expand_iri(ref, node_base + '#', doc=doc)
+        implicit_applied = str(result) == node_base + '#' + str(ref)  # ref was relative
+        if implicit_applied and parser and parser.warn_implicit_doc_ids:
+            warnings.warn(
+                f'Relative node id {ref!r} resolved off @document with an implicit `#` '
+                f'separator -> {str(result)!r}. Set @nodebase explicitly to control this.',
+                stacklevel=2,
+            )
+        return result
+    return expand_iri(ref, node_base, doc=doc)
+
+
 def process_nodeblock(nodeblock, graph_obj, doc, parser: LiterateParser | None = None):
     headermarks, nid, ntype, props = nodeblock
 
     if nid == '@docheader':
-        process_docheader(props, graph_obj, doc)
+        process_docheader(props, graph_obj, doc, parser)
         return
 
-    node_base = parser._node_base(doc) if parser else doc.nodebase
-    nid = expand_iri(nid, node_base, doc=doc)
+    nid = _resolve_node_id(nid, doc, parser)
 
     # Get or create the node
     if nid not in graph_obj:
@@ -475,8 +559,7 @@ def process_nodeblock(nodeblock, graph_obj, doc, parser: LiterateParser | None =
 
                 if pi.is_edge:
                     # This is an edge (node to node). Resolve RHS as a node ID.
-                    node_base = parser._node_base(doc) if parser else doc.nodebase
-                    target_id = expand_iri(str(val), node_base, doc=doc)
+                    target_id = _resolve_node_id(str(val), doc, parser)
                     if target_id not in graph_obj:
                         target_node = graph_obj.node(target_id)
                     else:
@@ -508,8 +591,7 @@ def process_nodeblock(nodeblock, graph_obj, doc, parser: LiterateParser | None =
                 val, _ = pi.value.verbatim, pi.value.typeindic
                 if pi.is_edge:
                     # Nested edge
-                    node_base = parser._node_base(doc) if parser else doc.nodebase
-                    target_id = expand_iri(str(val), node_base, doc=doc)
+                    target_id = _resolve_node_id(str(val), doc, parser)
                     if target_id not in graph_obj:
                         target_node = graph_obj.node(target_id)
                     else:
@@ -525,7 +607,7 @@ def process_nodeblock(nodeblock, graph_obj, doc, parser: LiterateParser | None =
                         parser._maybe_add_source(nested, doc)
 
 
-def process_docheader(props, graph_obj, doc):
+def process_docheader(props, graph_obj, doc, parser: LiterateParser | None = None):
     outer_indent = -1
     current_outer_prop = None
     pending_doc_props = []
@@ -576,6 +658,7 @@ def process_docheader(props, graph_obj, doc):
                     _register_iri_prefix(doc, k, uri)
 
     _sync_schema_prefix(doc)
+    _check_namespace_bases(doc, strict=bool(parser and parser.strict_namespace_bases))
 
     # Attach all non-reserved docheader assertions to the document node (if any)
     if doc.iri:
