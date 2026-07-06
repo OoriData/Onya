@@ -130,6 +130,54 @@ def test_assertion_carries_implicit_type():
     assert resolved is knows and ONYA_ASSERTION in resolved.types
 
 
+NESTED_ID = DOCHEADER + '''
+# Chuks [Person]
+
+* knows -> Ify
+  * @id: chuks-ify-friendship
+  * startDate: 2018-03-15
+    * @id: sd-1
+    * precision: day
+
+# Ify [Person]
+
+* name: Ify
+
+# ReviewNote [Thing]
+
+* disputes -> sd-1
+'''
+
+
+def test_nested_assertion_id_and_deep_reference():
+    '''`@id` attaches at the correct nesting depth, and a nested identified assertion can be
+    an edge target — read and write both handle depth > 1.'''
+    g = graph()
+    LiterateParser().parse(NESTED_ID, g)
+
+    knows = _only(g['http://e.o/Chuks'].traverse('https://schema.org/knows'))
+    assert knows.id == FRIEND_ID
+    start_date = _only(knows.getprop('https://schema.org/startDate'))
+    assert start_date.id == I('http://e.o/sd-1')  # @id landed on the nested prop, not on knows
+    assert {str(p.label) for p in start_date.properties} == {'https://schema.org/precision'}
+
+    # An edge can target the nested assertion by its id
+    disputes = _only(g['http://e.o/ReviewNote'].traverse('https://schema.org/disputes'))
+    assert disputes.target is start_date
+
+    # Round-trip: the nested @id (and the nested structure) survives write -> read
+    buf = StringIO()
+    write(g, buf, document='http://e.o/doc', nodebase='http://e.o/', schema='https://schema.org/')
+    assert '@id: sd-1' in buf.getvalue()
+
+    g2 = graph()
+    read(buf.getvalue(), g2)
+    knows2 = _only(g2['http://e.o/Chuks'].traverse('https://schema.org/knows'))
+    sd2 = _only(knows2.getprop('https://schema.org/startDate'))
+    assert sd2.id == I('http://e.o/sd-1')
+    assert _only(g2['http://e.o/ReviewNote'].traverse('https://schema.org/disputes')).target is sd2
+
+
 def test_duplicate_assertion_id_conflicts():
     '''Two assertions declaring the same @id is a parse-time error.'''
     dup = DOCHEADER + '''

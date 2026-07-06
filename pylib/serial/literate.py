@@ -77,31 +77,25 @@ def _format_value(val, nodebase: str | None, prefixes: dict[str, str]) -> str:
     return s
 
 
-def _write_assertions(node, out, indent: str, nodebase, prefixes, bracket_curie: bool):
-    for prop in sorted(node.properties, key=lambda p: str(p.label)):
-        label = _format_label(prop.label, prefixes, bracket_curie=bracket_curie)
-        out.write(f'{indent}* {label}: {_format_value(prop.value, nodebase, prefixes)}\n')
-        if prop.id is not None:
-            out.write(f'{indent}    * @id: {shorten_node_id(prop.id, nodebase)}\n')
-        for nested in sorted(prop.properties, key=lambda p: str(p.label)):
-            nested_label = _format_label(nested.label, prefixes, bracket_curie=bracket_curie)
-            out.write(
-                f'{indent}    * {nested_label}: '
-                f'{_format_value(nested.value, nodebase, prefixes)}\n'
-            )
+def _write_assertion(assertion, is_edge: bool, out, indent: str, nodebase, prefixes, bracket_curie: bool):
+    '''Emit one assertion line, its ``@id`` (if any), then recurse into its own assertions.'''
+    label = _format_label(assertion.label, prefixes, bracket_curie=bracket_curie)
+    if is_edge:
+        out.write(f'{indent}* {label} -> {shorten_node_id(assertion.target.id, nodebase)}\n')
+    else:
+        out.write(f'{indent}* {label}: {_format_value(assertion.value, nodebase, prefixes)}\n')
+    child_indent = indent + '    '
+    if assertion.id is not None:
+        out.write(f'{child_indent}* @id: {shorten_node_id(assertion.id, nodebase)}\n')
+    # Recurse so nested properties AND nested edges round-trip at any depth
+    _write_assertions(assertion, out, child_indent, nodebase, prefixes, bracket_curie)
 
-    for edge in sorted(node.edges, key=lambda e: str(e.label)):
-        label = _format_label(edge.label, prefixes, bracket_curie=bracket_curie)
-        target = shorten_node_id(edge.target.id, nodebase)
-        out.write(f'{indent}* {label} -> {target}\n')
-        if edge.id is not None:
-            out.write(f'{indent}    * @id: {shorten_node_id(edge.id, nodebase)}\n')
-        for nested in sorted(edge.properties, key=lambda p: str(p.label)):
-            nested_label = _format_label(nested.label, prefixes, bracket_curie=bracket_curie)
-            out.write(
-                f'{indent}    * {nested_label}: '
-                f'{_format_value(nested.value, nodebase, prefixes)}\n'
-            )
+
+def _write_assertions(container, out, indent: str, nodebase, prefixes, bracket_curie: bool):
+    for prop in sorted(container.properties, key=lambda p: str(p.label)):
+        _write_assertion(prop, False, out, indent, nodebase, prefixes, bracket_curie)
+    for edge in sorted(container.edges, key=lambda e: str(e.label)):
+        _write_assertion(edge, True, out, indent, nodebase, prefixes, bracket_curie)
 
 
 def write(

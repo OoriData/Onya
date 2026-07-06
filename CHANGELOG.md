@@ -10,6 +10,10 @@ Notable changes to Onya are recorded here. Format based on [Keep a Changelog](ht
 - Implicit `onya:Assertion` type (`ONYA_ASSERTION` in `onya.terms`) carried, read-only, by every assertion as `types` — uniform with `node.types` and the type check that interprets an edge target resolved via `assertion_ids` (node vs. identified assertion). `graph.match()`'s docstring documents the pattern.
 - Empty node blocks (a `#` header with no type and no assertions) now parse instead of raising, fixing a `write()`→`read()` round-trip failure for target-only nodes. By default this warns (`node block … is empty …`); silence it with `LiterateParser(warn_empty_blocks=False)`.
 
+### Fixed
+
+- Onya Literate now handles **arbitrary nesting depth** on both read and write. The parser tracks nesting with an indent stack (previously it collapsed everything below the first level onto that level), so a deeply-nested assertion attaches to its true parent and a nested `@id` names the assertion it is written under (not the top-level one). `write()` is now recursive and emits nested **edges** (previously dropped) and `@id` at every level, so nested assertions — including identified ones and nested n-ary/qualified structures — round-trip.
+
  ## [0.3.1] - 20260615: Strict namespacebases.
 
 ### Added

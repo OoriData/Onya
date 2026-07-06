@@ -632,3 +632,55 @@ def test_typed_block_without_assertions_not_warned():
         warnings.simplefilter('error')
         LiterateParser().parse(onya_text, g)
     assert I('http://e.o/Thing') in g['http://e.o/B'].types
+
+
+def test_deep_nesting_roundtrips():
+    '''Nested edges and depth > 1 now round-trip (previously the reader collapsed depth and
+    the writer dropped nested edges).'''
+    onya_text = '''\
+# @docheader
+
+* @document: http://e.o/doc
+* @nodebase: http://e.o/
+* @schema: http://e.o/
+
+# Sale [Transaction]
+
+* item -> Widget
+  * price: 10
+    * currency: USD
+  * warranty -> WarrantyDoc
+    * months: 12
+
+# Widget [Product]
+
+* name: Widget
+
+# WarrantyDoc [Document]
+
+* name: Warranty
+'''
+    g = graph()
+    LiterateParser().parse(onya_text, g)
+
+    item = list(g['http://e.o/Sale'].traverse('http://e.o/item'))[0]
+    # price is nested under the item edge; currency is nested under price (depth 3)
+    price = list(item.getprop('http://e.o/price'))[0]
+    assert price.value == '10'
+    assert list(price.getprop('http://e.o/currency'))[0].value == 'USD'
+    # warranty is a nested *edge* under the item edge, with its own nested property
+    warranty = list(item.getedge('http://e.o/warranty'))[0]
+    assert warranty.target is g['http://e.o/WarrantyDoc']
+    assert list(warranty.getprop('http://e.o/months'))[0].value == '12'
+
+    # Round-trip preserves the nested edge and the depth-3 property
+    buf = StringIO()
+    write(g, buf, document='http://e.o/doc', nodebase='http://e.o/', schema='http://e.o/')
+    g2 = graph()
+    LiterateParser().parse(buf.getvalue(), g2)
+    item2 = list(g2['http://e.o/Sale'].traverse('http://e.o/item'))[0]
+    price2 = list(item2.getprop('http://e.o/price'))[0]
+    assert list(price2.getprop('http://e.o/currency'))[0].value == 'USD'
+    warranty2 = list(item2.getedge('http://e.o/warranty'))[0]
+    assert warranty2.target is g2['http://e.o/WarrantyDoc']
+    assert list(warranty2.getprop('http://e.o/months'))[0].value == '12'

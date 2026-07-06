@@ -541,6 +541,32 @@ def _resolve_pending_edges(graph_obj, doc: doc_info):
             edge_obj.target = graph_obj.node(target_id)
 
 
+def _create_assertion(parent, pi, assertion_label, doc, parser: LiterateParser | None):
+    '''
+    Create the property or edge described by ``pi`` on ``parent`` (a node or another
+    assertion) and return it, or None when there is nothing to create. Edge targets are
+    deferred (see ``_resolve_pending_edges``); ``@source`` provenance is applied if enabled.
+    '''
+    created = None
+    if pi.is_text_ref:
+        ref_name = str(pi.value) if pi.value else None
+        # Unknown reference falls back to an empty string value (kept lenient rather than raising).
+        str_val = doc.text_refs.get(ref_name, '') if ref_name else ''
+        created = parent.add_property(assertion_label, str_val)
+    elif pi.value is not None:
+        val = pi.value.verbatim
+        if pi.is_edge:
+            # RHS may name a node or an identified assertion, possibly a forward reference.
+            target_id = _resolve_node_id(str(val), doc, parser)
+            created = parent.add_edge(assertion_label, None)
+            doc.pending_edges.append((created, target_id))
+        else:
+            created = parent.add_property(assertion_label, str(val))
+    if created is not None and parser:
+        parser._maybe_add_source(created, doc)
+    return created
+
+
 def process_nodeblock(nodeblock, graph_obj, doc, parser: LiterateParser | None = None):
     headermarks, nid, ntype, props = nodeblock
 
@@ -562,9 +588,11 @@ def process_nodeblock(nodeblock, graph_obj, doc, parser: LiterateParser | None =
         type_iri = expand_iri(ntype, type_base, doc=doc)
         n.types.add(type_iri)
 
-    # Track current assertion for nested assertions
-    outer_indent = -1
-    current_assertion = None
+    # Nesting is tracked with a stack of (indent, assertion) frames. Each assertion's origin is
+    # the nearest enclosing frame with strictly smaller indent (the node itself when none). This
+    # supports arbitrary nesting depth for properties, edges, and `@id` alike.
+    stack = []
+    saw_assertion = False
 
     for pi in props:
         if isinstance(pi, str):
@@ -577,20 +605,21 @@ def process_nodeblock(nodeblock, graph_obj, doc, parser: LiterateParser | None =
             doc.text_refs[ref_name] = str(ref_content)
             continue
 
-        # First assertion encountered determines outer indent
-        if outer_indent == -1:
-            outer_indent = pi.indent
+        # Unwind frames at this indent or deeper: they are siblings/children, not the parent.
+        while stack and stack[-1][0] >= pi.indent:
+            stack.pop()
+        parent = stack[-1][1] if stack else n
 
-        # `@id` is a directive, not an assertion: it names the current assertion (an edge or
-        # property) rather than creating a property on it. Only meaningful nested under an
-        # assertion; at the node's own level there is no assertion to name, so it is ignored.
+        # `@id` is a directive, not an assertion: it names its enclosing assertion (the current
+        # parent) rather than creating a property on it. At the node's own level (no enclosing
+        # assertion) there is nothing to name, so it is ignored.
         if pi.key == '@id':
-            if pi.indent != outer_indent and current_assertion is not None:
+            if stack:
                 raw = pi.value.verbatim if pi.value else None
                 if raw is not None:
                     assertion_id = _resolve_node_id(str(raw), doc, parser)
                     try:
-                        graph_obj.register_assertion_id(assertion_id, current_assertion)
+                        graph_obj.register_assertion_id(assertion_id, parent)
                     except AssertionIdConflict as e:
                         # Within a single document, a repeated @id is rejected as an authoring
                         # error. This is a parser-surface constraint only: the graph *merge*
@@ -603,74 +632,16 @@ def process_nodeblock(nodeblock, graph_obj, doc, parser: LiterateParser | None =
                         ) from e
             continue
 
-        # Expand the assertion label IRI
         assertion_label = expand_iri(pi.key, doc.schemabase, doc=doc)
+        created = _create_assertion(parent, pi, assertion_label, doc, parser)
+        if created is not None:
+            saw_assertion = True
+            stack.append((pi.indent, created))
 
-        if pi.indent == outer_indent:
-            # This is a top-level assertion
-            if pi.is_text_ref:
-                # Handle text reference
-                ref_name = str(pi.value) if pi.value else None
-                if ref_name and ref_name in doc.text_refs:
-                    str_val = doc.text_refs[ref_name]
-                    current_assertion = n.add_property(assertion_label, str_val)
-                else:
-                    # Text reference not found, skip or use empty string
-                    current_assertion = n.add_property(assertion_label, '')
-                if parser and current_assertion is not None:
-                    parser._maybe_add_source(current_assertion, doc)
-            elif pi.value:
-                val, _ = pi.value.verbatim, pi.value.typeindic
-
-                if pi.is_edge:
-                    # This is an edge. The RHS may name a node or an identified assertion, and
-                    # may be a forward reference, so defer target resolution (see
-                    # _resolve_pending_edges).
-                    target_id = _resolve_node_id(str(val), doc, parser)
-                    current_assertion = n.add_edge(assertion_label, None)
-                    doc.pending_edges.append((current_assertion, target_id))
-                    if parser and current_assertion is not None:
-                        parser._maybe_add_source(current_assertion, doc)
-                else:
-                    # This is a property (node to string value)
-                    str_val = str(val)
-                    current_assertion = n.add_property(assertion_label, str_val)
-                    if parser and current_assertion is not None:
-                        parser._maybe_add_source(current_assertion, doc)
-
-        else:
-            # This is a nested assertion on current_assertion
-            if current_assertion is None:
-                continue  # Skip nested without a parent
-
-            if pi.is_text_ref:
-                # Handle nested text reference
-                ref_name = str(pi.value) if pi.value else None
-                if ref_name and ref_name in doc.text_refs:
-                    str_val = doc.text_refs[ref_name]
-                    nested = current_assertion.add_property(assertion_label, str_val)
-                    if parser and nested is not None:
-                        parser._maybe_add_source(nested, doc)
-            elif pi.value:
-                val, _ = pi.value.verbatim, pi.value.typeindic
-                if pi.is_edge:
-                    # Nested edge; defer target resolution as with top-level edges.
-                    target_id = _resolve_node_id(str(val), doc, parser)
-                    nested = current_assertion.add_edge(assertion_label, None)
-                    doc.pending_edges.append((nested, target_id))
-                    if parser and nested is not None:
-                        parser._maybe_add_source(nested, doc)
-                else:
-                    # Nested property
-                    str_val = str(val)
-                    nested = current_assertion.add_property(assertion_label, str_val)
-                    if parser and nested is not None:
-                        parser._maybe_add_source(nested, doc)
-
-    # `outer_indent` stays -1 only if no assertion line was seen. With no type either, the
-    # block ensures the node id exists but otherwise makes no change to the model — usually an
-    # authoring slip or a round-trip artifact (write() emits a bare block for a target-only node).
-    if parser and parser.warn_empty_blocks and outer_indent == -1 and not ntype:
+    # No assertion and no type: the block ensures the node id exists but otherwise makes no change
+    # to the model — usually an authoring slip or a round-trip artifact (write() emits a bare block
+    # for a target-only node).
+    if parser and parser.warn_empty_blocks and not saw_assertion and not ntype:
         warnings.warn(
             f'Onya Literate: node block {str(nid)!r} is empty (no type or assertions); it makes '
             f'no change to the constructed model beyond ensuring the node id exists.',
