@@ -580,3 +580,55 @@ def test_document_fallback_with_separator_no_implicit_hash():
         warnings.simplefilter('error')
         LiterateParser(warn_implicit_doc_ids=True).parse(onya_text, g)
     assert I('http://e.o/doc/A') in g.nodes
+
+
+_EMPTY_BLOCK_DOC = '''\
+# @docheader
+
+* @document: http://e.o/doc
+* @nodebase: http://e.o/
+* @schema: http://e.o/
+
+# A [Thing]
+
+* rel -> B
+
+# B
+'''
+
+
+def test_empty_block_parses_with_warning():
+    '''A node block with no type or assertions now parses, and warns by default.'''
+    g = graph()
+    with pytest.warns(UserWarning, match='empty'):
+        LiterateParser().parse(_EMPTY_BLOCK_DOC, g)
+    assert I('http://e.o/B') in g.nodes
+    # The edge into the (empty) block still resolves to that node
+    edges = list(g['http://e.o/A'].traverse('http://e.o/rel'))
+    assert len(edges) == 1
+    assert edges[0].target is g['http://e.o/B']
+
+
+def test_empty_block_warning_can_be_silenced():
+    '''warn_empty_blocks=False suppresses the empty-block warning (turned into an error here).'''
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        LiterateParser(warn_empty_blocks=False).parse(_EMPTY_BLOCK_DOC, graph())
+
+
+def test_typed_block_without_assertions_not_warned():
+    '''A block with a type but no assertions is not "empty" (the type is content): no warning.'''
+    onya_text = '''\
+# @docheader
+
+* @document: http://e.o/doc
+* @nodebase: http://e.o/
+* @schema: http://e.o/
+
+# B [Thing]
+'''
+    g = graph()
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        LiterateParser().parse(onya_text, g)
+    assert I('http://e.o/Thing') in g['http://e.o/B'].types

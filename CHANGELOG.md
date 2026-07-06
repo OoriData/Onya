@@ -2,9 +2,13 @@
 
 Notable changes to Onya are recorded here. Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-<!-- 
 ## [Unreleased]
- -->
+
+### Added
+
+- Explicit **assertion identifiers** via the `@id` directive (SPEC § Assertion Identifiers). A nested `* @id: name` names an edge or property — resolved against `@nodebase`, sharing the node id space — rather than creating a property on it. Once named, the assertion is a valid edge target (`* disputes -> name` links to the assertion, not a fresh node), and references resolve regardless of declaration order. Identifiers must be unique within the graph: a duplicate `@id`, or an `@id` that collides with a node id, raises `AssertionIdConflict` (importable from `onya.serial.literate`). `write()` emits `@id` for identified assertions so they round-trip. Assertions gain an `id` attribute (`None` by default); graphs gain an `assertion_ids` map and `register_assertion_id()`.
+- Implicit `onya:Assertion` type (`ONYA_ASSERTION` in `onya.terms`) carried, read-only, by every assertion as `types` — uniform with `node.types` and the type check that interprets an edge target resolved via `assertion_ids` (node vs. identified assertion). `graph.match()`'s docstring documents the pattern.
+- Empty node blocks (a `#` header with no type and no assertions) now parse instead of raising, fixing a `write()`→`read()` round-trip failure for target-only nodes. By default this warns (`node block … is empty …`); silence it with `LiterateParser(warn_empty_blocks=False)`.
 
  ## [0.3.1] - 20260615: Strict namespacebases.
 

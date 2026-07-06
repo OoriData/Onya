@@ -1,0 +1,87 @@
+<svg viewBox="0 0 880 400" width="880" height="400" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="t d">
+  <title id="t">Onya friendship graph: the knows edge carries its own assertions</title>
+  <desc id="d">Two Person nodes, Chuks and Ify, connected by a knows edge. The edge itself carries nested assertions: startDate 2018-03-15 and description Met at university. A dashed stub indicates those assertions could carry assertions too.</desc>
+  <style>
+    .card       { fill: #EEF2FA; stroke: #2B3A67; stroke-width: 1.5; }
+    .cardtitle  { fill: #1C2B4A; font: 600 17px ui-sans-serif, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+    .pill       { fill: #2B3A67; }
+    .pilltext   { fill: #EEF2FA; font: 500 11px ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+    .rule       { stroke: #2B3A67; stroke-width: 1; opacity: 0.25; }
+    .prop       { fill: #3D4C6E; font: 12.5px ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+    .edge       { stroke: #2B3A67; stroke-width: 1.75; fill: none; }
+    .edgechip   { fill: #2B3A67; }
+    .edgelabel  { fill: #EEF2FA; font: 600 13px ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+    .arrow      { fill: #2B3A67; }
+    .acard      { fill: #FBF3E4; stroke: #B07818; stroke-width: 1.5; }
+    .aedge      { stroke: #B07818; stroke-width: 1.75; fill: none; }
+    .aarrow     { fill: #B07818; }
+    .aeyebrow   { fill: #8A5C0F; font: 600 10px ui-sans-serif, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; letter-spacing: 1.5px; }
+    .aprop      { fill: #6B4A0C; font: 12.5px ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+    .stub       { stroke: #B07818; stroke-width: 1.5; stroke-dasharray: 3 4; fill: none; opacity: 0.7; }
+    .whisper    { fill: #6B7280; font: italic 11.5px ui-sans-serif, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; }
+    @media (prefers-color-scheme: dark) {
+      .card      { fill: #1B2740; stroke: #7E96C8; }
+      .cardtitle { fill: #DCE4F5; }
+      .pill      { fill: #7E96C8; }
+      .pilltext  { fill: #101827; }
+      .rule      { stroke: #7E96C8; opacity: 0.35; }
+      .prop      { fill: #A9B8D8; }
+      .edge      { stroke: #9FB4DC; }
+      .edgechip  { fill: #9FB4DC; }
+      .edgelabel { fill: #101827; }
+      .arrow     { fill: #9FB4DC; }
+      .acard     { fill: #2A2210; stroke: #C89B4B; }
+      .aeyebrow  { fill: #E8C170; }
+      .aprop     { fill: #E3C48A; }
+      .stub      { stroke: #C89B4B; }
+      .aedge     { stroke: #C89B4B; }
+      .aarrow    { fill: #C89B4B; }
+      .whisper   { fill: #8B95A5; }
+    }
+  </style>
+  <defs>
+    <marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" class="arrow"/>
+    </marker>
+    <marker id="aah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" class="aarrow"/>
+    </marker>
+  </defs>
+
+  <!-- Chuks node -->
+  <rect class="card" x="40" y="60" width="250" height="112" rx="10"/>
+  <text class="cardtitle" x="60" y="90">Chuks</text>
+  <rect class="pill" x="216" y="73" width="58" height="21" rx="10.5"/>
+  <text class="pilltext" x="245" y="87.5" text-anchor="middle">Person</text>
+  <line class="rule" x1="60" y1="102" x2="270" y2="102"/>
+  <text class="prop" x="60" y="126">name: Chukwuemeka Okafor</text>
+  <text class="prop" x="60" y="148">nickname: Chuks</text>
+
+  <!-- Ify node -->
+  <rect class="card" x="590" y="60" width="250" height="112" rx="10"/>
+  <text class="cardtitle" x="610" y="90">Ify</text>
+  <rect class="pill" x="766" y="73" width="58" height="21" rx="10.5"/>
+  <text class="pilltext" x="795" y="87.5" text-anchor="middle">Person</text>
+  <line class="rule" x1="610" y1="102" x2="820" y2="102"/>
+  <text class="prop" x="610" y="126">name: Ifeoma Obasi</text>
+  <text class="prop" x="610" y="148">jobTitle: Software Engineer</text>
+
+  <!-- knows edge -->
+  <line class="edge" x1="290" y1="116" x2="404" y2="116"/>
+  <line class="edge" x1="476" y1="116" x2="584" y2="116" marker-end="url(#ah)"/>
+  <rect class="edgechip" x="404" y="102" width="72" height="28" rx="14"/>
+  <text class="edgelabel" x="440" y="121" text-anchor="middle">knows</text>
+
+  <!-- assertions hanging off the edge: same grammar, one level down -->
+  <line class="aedge" x1="440" y1="130" x2="440" y2="222" marker-end="url(#aah)"/>
+  <text class="whisper" x="454" y="182">the edge carries its own assertions</text>
+
+  <rect class="acard" x="300" y="228" width="280" height="96" rx="10"/>
+  <text class="aeyebrow" x="320" y="252">NESTED ON knows</text>
+  <text class="aprop" x="320" y="276">startDate: 2018-03-15</text>
+  <text class="aprop" x="320" y="300">description: Met at university</text>
+
+  <!-- recursion stub -->
+  <line class="stub" x1="440" y1="324" x2="440" y2="348"/>
+  <text class="whisper" x="440" y="368" text-anchor="middle">…and these can carry assertions too</text>
+</svg>

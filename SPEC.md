@@ -22,10 +22,13 @@ Nodes use **sets** (not sequences) for assertions because pervasive ordering is 
 
 ## Assertions
 
-Edges and properties are collectively called **assertions**. Each assertion is in effect an anonymous node defined by the combination of:
+Edges and properties are collectively called **assertions**. Like a node, an assertion is an instance that can carry its own nested assertions; unlike a node, it is **anonymous by default**, carrying no externally addressable name. Each assertion is distinguished by the combination of:
 - its origin (a node or another assertion)
 - its label (an IRI)
-- an internal marker or tracker to differentiate between other, similar assertions
+- its target node (edge) or string value (property)
+- an internal marker that differentiates it from otherwise-identical assertions
+
+An assertion MAY be given an explicit identifier, making it addressable in the same identifier space as node IDs — see [Assertion Identifiers](#assertion-identifiers).
 
 ### Edge
 
@@ -43,9 +46,105 @@ A **property** connects an origin to a string value via an IRI label.
 origin --[IRI label]--> "string value"
 ```
 
-# Example
+### Literate syntax
 
-A mother can have multiple children. In Onya, each parental relationship can be modeled with an edge from the node representing the mother (the assertion's origin) to the node representing the child (the assertion's target). Each of these edges is a separate, anaonymous node which can have its own assertions, e.g. date of labor (though of course another modeler could choose to model this instead just using a date of birth edge on each child node).
+The above text ilustrations are pseudocode, but not terribly far from the human **and** machine readable **and** editable Onya Literate syntax.
+
+Here is a snippet from a simple friendship graph, describing an entity identified as `Chuks`:
+
+```
+# Chuks [Person]
+
+* name: Chukwuemeka Okafor
+* knows -> Ify
+  * startDate: 2018-03-15
+```
+
+`Chuks`, `Person`, `name`, `Ify`, and `startDate` would all be resolved as full IRIs.
+
+The Unicode arrow `→` (U+2192) is accepted as a synonym for `->`.
+
+```
+# Chuks [Person]
+
+* name: Chukwuemeka Okafor
+* knows → Ify
+  * startDate: 2018-03-15
+```
+
+`Person` is the type asserted for `Chuks`. `name` is a property, so `Chukwuemeka Okafor` is a string, not another entity. `knows` is an edge, so `Ify` is another entity, not defined in this snippet. `startDate` is a property of the `knows` edge.
+
+## Assertion Identifiers
+
+Assertions are **anonymous by default**. Each assertion is an instance,
+distinguished internally from otherwise-identical assertions, but carrying
+no externally addressable name.
+
+An assertion MAY be given an explicit identifier, making it addressable:
+
+- The identifier is an IRI, occupying the same identifier space as node IDs.
+- An identifier is unique within the graph: it MUST NOT collide with a node
+  ID or with another assertion's identifier.
+- An identified assertion may appear as the **target of an edge**, exactly
+  as a node would. (Assertions, identified or not, are never edge *labels*.)
+- An assertion has at most one identifier.
+
+### Literate syntax
+
+In Onya Literate, the identifier is declared with the built-in `@id`
+directive as a nested line, resolved against `@nodebase` like any node ID:
+
+```
+# Chuks [Person]
+
+* knows -> Ify
+  * @id: chuks-ify-friendship
+  * startDate: 2018-03-15
+```
+
+`@id` is a directive, not an assertion: it names the edge or property, and
+does not create a property on it. Once named, the assertion is a valid edge
+target:
+
+```
+# ReviewNote
+
+* disputes -> chuks-ify-friendship
+  * source -> InterviewTranscript03
+```
+
+`@id` resolves into the same space as node IDs. It is a
+parse-time error for an `@id` to collide with a node ID, or with another assertion's `@id`.
+
+### Identity and graph merge
+
+An assertion's **skeleton** is the triple of (origin, label, target) for an
+edge, or (origin, label, value) for a property. The skeleton excludes nested
+assertions and excludes the identifier itself: annotating an assertion never
+changes its identity.
+
+Under graph union:
+
+1. Two assertions bearing the same identifier are the same assertion. Their
+   skeletons MUST match; a mismatch is a merge error. Their nested
+   assertions are unioned, recursively under these same rules.
+2. Two anonymous assertions with equal skeletons merge into one; their
+   nested assertions are unioned, recursively. (Origins compare under the
+   merge: nested assertions whose parents have merged share an origin.)
+3. An identified assertion never merges with an anonymous one, even when
+   skeletons match. An explicit identifier is a declaration that this
+   occurrence is distinct.
+
+Rule 2 gives Onya idempotent merge ergonomics by default, desirable behavior when combining graphs extracted from overlapping sources.
+Rules 1 and 3 preserve occurrence semantics exactly where a modeler has declared they matter. Implementations MAY offer alternative merge policies (e.g., absorbing a structurally equal anonymous assertion into an identified one), but the rules above are the normative default.
+
+# Example: assertions in practice
+
+The pieces above — anonymous assertions that can themselves carry assertions, made addressable only when a modeler chooses — cover a surprising range of modeling needs with no extra machinery. A small scenario shows how they fit together.
+
+A mother can have multiple children. In Onya, each parental relationship can be modeled with an edge from the node representing the mother (the assertion's origin) to the node representing the child (the assertion's target). Each of these edges is a separate assertion (anonymous by default) which can have its own assertions, e.g. date of labor (though of course another modeler could choose to model this instead just using a date of birth edge on each child node).
+
+Because those edges are anonymous, the identity rules above apply automatically: the same parental edge extracted independently from two overlapping sources merges into one when their skeletons match (Rule 2), so combining graphs is idempotent without any bookkeeping. Where a modeler instead needs to hold two structurally identical assertions apart as genuinely distinct occurrences, giving each an `@id` declares that intent and preserves the distinction through merge (Rule 3).
 
 # Notes
 
@@ -347,17 +446,19 @@ Graph
       ├── properties: set[Property]
       └── edges: set[Edge]
       
-Property (anonymous node: origin + label)
+Property (assertion: origin + label, anonymous by default)
   ├── origin: Node | Property | Edge
   ├── label: IRI
   ├── value: str
+  ├── id: IRI | None        (absent by default; see Assertion Identifiers)
   ├── properties: set[Property]
   └── edges: set[Edge]
 
-Edge (anonymous node: origin + label)  
+Edge (assertion: origin + label, anonymous by default)
   ├── origin: Node | Property | Edge
   ├── label: IRI
   ├── target: Node
+  ├── id: IRI | None        (absent by default; see Assertion Identifiers)
   ├── properties: set[Property]
   └── edges: set[Edge]
 ```
@@ -376,7 +477,7 @@ Edge (anonymous node: origin + label)
 Onya is similar to RDF but simpler:
 - Similar: IRIs, triples (s-p-o), reification via recursive structure
 - Simpler: No literals beyond strings, no blank nodes, uniform treatment of properties/edges
-- Different: All assertions are "anonymous nodes", properties are always strings
+- Different: Assertions are anonymous by default but may be given an identifier on demand; properties are always strings
 
 The recursive assertion model is reminiscent of property graphs but more uniform:
 - Similar: Nodes and edges both can have properties

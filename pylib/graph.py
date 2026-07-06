@@ -13,7 +13,8 @@ The Onya graph model:
 - Edges connect nodes to nodes via IRI labels
 - Properties connect nodes to string values via IRI labels
 - Both edges and properties are collectively called "assertions"
-- Each assertion is in effect an anonymous node defined by (origin IRI, assertion IRI)
+- Each assertion is anonymous by default, distinguished by (origin, label, target/value);
+  it MAY carry an explicit identifier (`id`), making it addressable like a node
 - Assertions can themselves be origins for further assertions (natural recursiveness)
 '''
 
@@ -22,6 +23,16 @@ from collections.abc import MutableMapping, Iterator
 from abc import ABC
 
 from amara.iri import I
+
+from onya.terms import ONYA_ASSERTION
+
+
+class AssertionIdConflict(ValueError):
+    '''
+    Raised when an assertion identifier is not unique within the graph — either it is
+    already bound to a different assertion, or it collides with a node id. Assertion
+    ids share the same identifier space as node ids (see SPEC: Assertion Identifiers).
+    '''
 
 
 class assertions_mixin:
@@ -94,15 +105,28 @@ class node(assertions_mixin):
 class assertion(assertions_mixin, ABC):
     '''
     Abstract base class for assertions (edges and properties)
-    
-    Each assertion is an anonymous node defined by the combination of
-    its origin and its label IRI.
+
+    Each assertion is anonymous by default, distinguished by the combination of
+    its origin and its label IRI (plus target/value). It MAY carry an explicit
+    identifier (`id`, an IRI in the same space as node ids), making it addressable
+    as the target of an edge. `id` is None unless one has been assigned.
+
+    Every assertion carries the implicit type `onya:Assertion` (exposed, read-only, as
+    `types` for uniformity with `node.types`). This lets a consumer that has resolved an
+    edge target distinguish an identified assertion from an ordinary node by a type check.
+    The implicit type is class-level and shared: it is not stored per instance and is not
+    serialized.
     '''
-    __slots__ = ['origin', 'label', 'properties', 'edges']
-    
+    __slots__ = ['origin', 'label', 'id', 'properties', 'edges']
+
+    # Implicit, read-only type shared by all assertions (see class docstring). frozenset so
+    # it cannot be mutated through an instance; not part of __slots__, so purely class-level.
+    types = frozenset({ONYA_ASSERTION})
+
     def __init__(self, origin: 'node | assertion', label: I | str):
         self.origin = origin
         self.label = label
+        self.id: I | str | None = None  # optional explicit identifier; see SPEC: Assertion Identifiers
         self.properties: set['property_'] = set()
         self.edges: set['edge'] = set()
 
@@ -136,7 +160,8 @@ class edge(assertion):
         self.target: 'node' = target
     
     def __repr__(self):
-        return f'edge({self.label} -> {self.target.id})'
+        target_id = self.target.id if self.target is not None else '?'
+        return f'edge({self.label} -> {target_id})'
 
 
 class graph(MutableMapping):
@@ -148,6 +173,9 @@ class graph(MutableMapping):
     def __init__(self, nodes: list[node] = ()):
         self.nodes: dict[I | str, node] = {}
         self.nodes.update({n.id: n for n in nodes})
+        # Explicit assertion identifiers (see SPEC: Assertion Identifiers), sharing the
+        # node id space. Maps id -> assertion, so an identified assertion can be an edge target.
+        self.assertion_ids: dict[I | str, assertion] = {}
 
     def __getitem__(self, key: I | str) -> node:
         return self.nodes[key]
@@ -175,6 +203,21 @@ class graph(MutableMapping):
         self[nid] = n
         return n
 
+    def register_assertion_id(self, id_: I | str, assertion_obj: assertion) -> assertion:
+        '''
+        Bind an explicit identifier to an assertion, enforcing uniqueness among
+        assertion ids. Sets `assertion_obj.id` and records it so the assertion can be
+        used as an edge target. Raises `AssertionIdConflict` if `id_` is already bound
+        to a different assertion. (Collision against node ids shares the same id space
+        and is validated separately once all nodes and ids are known.)
+        '''
+        existing = self.assertion_ids.get(id_)
+        if existing is not None and existing is not assertion_obj:
+            raise AssertionIdConflict(f'Assertion id {id_!r} is already assigned to another assertion')
+        assertion_obj.id = id_
+        self.assertion_ids[id_] = assertion_obj
+        return assertion_obj
+
     def typematch(self, types: I | str | set[I | str]) -> Iterator[node]:
         '''Find nodes with matching types'''
         if isinstance(types, (str, I)):
@@ -191,8 +234,15 @@ class graph(MutableMapping):
         Returns an iterator of tuples: (origin, relation, target, annotations)
         - origin: the node ID (same as input)
         - relation: the property/edge label (IRI)
-        - target: for properties, the string value; for edges, the target node ID
+        - target: for properties, the string value; for edges, the target ID
         - annotations: dict mapping property labels to values from assertion properties
+
+        An edge target ID may name either a node or an *identified assertion* (an edge whose
+        RHS was another assertion's `@id`; see SPEC: Assertion Identifiers). To tell them
+        apart, resolve the target: `self.assertion_ids.get(target)` yields the assertion (or
+        None), and every assertion carries the implicit `onya:Assertion` type — so
+        `ONYA_ASSERTION in obj.types` (or `isinstance(obj, assertion)`) is the type check that
+        interprets the result. A future projection/traversal layer will formalize this.
         '''
         if origin not in self.nodes:
             return

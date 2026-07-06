@@ -1,53 +1,30 @@
-**Onya** is a knowledge graph expression and implementation. This repository combines a [data model and format spec](SPEC.md) with a Python parser and API implementation.
+**Onya** is a knowledge graph data model and expression format, with a Python
+implementation. This repository combines the [data model and format spec](SPEC.md) with the Python implementation.
+Onya grew out of a long-standing observation from the RDF
+community: the triple is too expressively weak in practice. Quads and named
+graphs are insufficient RDF-based workarounds; property graphs solve it for relationships but
+abandon the web: no IRIs, no shared vocabularies, no dereferenceability.
+
+Onya takes annotatable, first-class relationships from the property graph
+world and keeps what RDF got right: IRIs throughout, and vocabulary reuse
+(schema.org works out of the box). Its key structural idea is *recursive
+assertion*: every edge and property can itself carry edges and properties,
+uniformly, with no RDF-style reification ceremony. Qualified values, relationship
+metadata, and n-ary relations work well through the same mechanism.
+
+The Onya Literate format is Markdown-native, so easy for humans to write, and
+easy for LLMs to emit and consume, which makes Onya a natural interchange
+for LLMOps (extracted knowledge, agent context and more).
 
 Note: Using our provided [onya-graph.SKILL.md](onya-graph.SKILL.md) with your favorite AI coding agent is a good way to automate Onya authoring and explore the format. Try providing a text document and asking it to generate a graph therefrom.
 
-# Python quick start
+## The model in thirty seconds
 
-[![PyPI - Version](https://img.shields.io/pypi/v/onya.svg)](https://pypi.org/project/Onya)
-[![PyPI - Python Version](https://img.shields.io/pypi/pyversions/onya.svg)](https://pypi.org/project/Onya)
+Here's a complete, valid knowledge graph, first visualized:
 
-## Installation
+![Onya friendship example](onya-friendship.svg)
 
-<!--
-```bash
-pip install amara
-```
-
-Or with uv (recommended):
-
-```bash
-uv pip install amara
-```
--->
-
-Requires Python 3.12 or later. The package is still in early development, so install directly from source:
-
-```bash
-git clone https://github.com/OoriData/Onya.git
-cd Onya
-pip install -U .
-```
-
-<!--
-pip install git+https://github.com/OoriData/Onya.git
--->
-
-## Command line tool
-
-You can use the built-in CLI to export directly from an Onya Literate (`.onya`) file to the Mermaid diagram format:
-
-```sh
-onya convert test/resource/schemaorg/thingsfallapart.onya > out.mmd
-```
-
-Then use a site such as https://mermaid.live/ to generate a diagram such as:
-
-![Running MLX-LM generate within Python](test/resource/schemaorg/thingsfallapart.png)
-
-## Basic Python Usage
-
-Here's a simple example demonstrating the core Onya API. First, let's define a small friendship graph in Onya Literate format:
+Then in Onya Literate format:
 
 ```
 # @docheader
@@ -59,23 +36,68 @@ Here's a simple example demonstrating the core Onya API. First, let's define a s
 # Chuks [Person]
 
 * name: Chukwuemeka Okafor
-* nickname: Chuks
-* age: 28
+* knows -> Ify
+  * startDate: 2018-03-15
+  * description: Met at university
 
 # Ify [Person]
 
 * name: Ifeoma Obasi
-* nickname: Ify
-* age: 27
+* jobTitle: Software Engineer
 ```
 
-Parse this graph and interact with it using the Python API.
+Notice how the `knows` edge carries its
+own assertions: a start date and a description *of the relationship itself*.
+No reification ceremony, no separate "edge properties" mechanism with its own
+rules. Every edge and every property can carry further edges and properties,
+recursively, through one uniform mechanism. Node IDs resolve against
+`@nodebase`; bare labels and types resolve against `@schema`, so schema.org
+(or any vocabulary) works out of the box.
+
+The format is Markdown: renderable anywhere, diffable, and easy for both
+humans and LLMs to read and write — which makes Onya a natural interchange
+for LLM-extracted knowledge and agent context.
+
+# How Onya relates to its conceptual neighbors
+
+|                              | RDF 1.1        | RDF 1.2 / RDF-star   | Property graphs (Neo4j, GQL) | Onya |
+|------------------------------|----------------|-----------------------|------------------------------|------|
+| Identifiers                  | IRIs           | IRIs                  | Opaque internal IDs          | IRIs throughout |
+| Shared vocabularies (e.g. schema.org) | Native | Native               | Ad hoc strings               | Native |
+| Metadata on relationships    | Reification ceremony | Triple terms    | Edge properties              | Nested assertions |
+| Metadata on *property values* | Reification ceremony | Awkward         | Not expressible              | Same nested assertions |
+| Edges from a property/edge   | No             | No                    | No                           | Yes — the mechanism is uniform |
+| Assertion identity           | Statements are types (set semantics) | Contested (type vs. occurrence) | Edges are instances | Assertions are instances |
+| Blank nodes                  | Yes            | Yes                   | —                            | None |
+| Value types in core          | XSD literal system | XSD literal system | Implementation-defined       | Strings; interpretation is layered |
+| Human-writable serialization | Turtle         | Turtle-star           | None standard                | Markdown-native |
+| Query orientation            | SPARQL (aggregate/pattern) | SPARQL-star | Cypher/GQL (path-first)   | Traversal API; path language planned |
+
+Two rows carry the heart of the distinction. Onya assertions are *occurrences*
+by construction — each edge or property is an instance, sidestepping the
+type-versus-occurrence ambiguity that complicated RDF-star standardization.
+And the mechanism is uniform all the way down: a property value can carry
+edges (a temperature with a `measurementMethod` link), which has no clean
+analogue in either the RDF or property-graph lineage.
+
+# Python quick start
+
+[![PyPI - Version](https://img.shields.io/pypi/v/onya.svg)](https://pypi.org/project/Onya) [![PyPI - Python Version](https://img.shields.io/pypi/pyversions/onya.svg)](https://pypi.org/project/Onya)
+
+Requires Python 3.12 or later. The package is still in active development, so you can install directly from source:
+
+```
+git clone https://github.com/OoriData/Onya.git
+cd Onya
+pip install -U .
+```
+
+Parse a small graph in Onya Literate format, then work with it, including adding assertions on an edge:
 
 ```python
 from onya.graph import graph
-from onya.serial.literate import LiterateParser
+from onya.serial.literate import LiterateParser, write
 
-# Parse the Onya Literate text into a graph
 onya_text = '''
 # @docheader
 
@@ -86,94 +108,49 @@ onya_text = '''
 # Chuks [Person]
 
 * name: Chukwuemeka Okafor
-* nickname: Chuks
-* age: 28
 
 # Ify [Person]
 
 * name: Ifeoma Obasi
-* nickname: Ify
-* age: 27
 '''
 
 g = graph()
-op = LiterateParser()
-result = op.parse(onya_text, g)
-doc_iri = result.doc_iri
-print(f'Parsed document: {doc_iri}')
-print(f'Graph has {len(g)} nodes')
+LiterateParser().parse(onya_text, g)
 
-# Access nodes and their properties
 chuks = g['http://example.org/people/Chuks']
 ify = g['http://example.org/people/Ify']
 
-# Get a specific property value
-for prop in chuks.getprop('https://schema.org/name'):
-    print(f'Name: {prop.value}')
-
-# Add a friendship edge between Chuks and Ify
+# Edges are first-class: they can carry their own assertions
 friendship = chuks.add_edge('https://schema.org/knows', ify)
-print(f'Added edge: {friendship}')
-
-# Add nested properties to the friendship (metadata about the relationship)
 friendship.add_property('https://schema.org/startDate', '2018-03-15')
-friendship.add_property('https://schema.org/description', 'Met at university')
 
-# Add a new property to Ify
-ify.add_property('https://schema.org/jobTitle', 'Software Engineer')
-
-# Modify a property by removing the old one and adding a new one
-age_props = list(chuks.getprop('https://schema.org/age'))
-for prop in age_props:
-    chuks.remove_property(prop)
-chuks.add_property('https://schema.org/age', '29')
-
-# Traverse edges
+# Traverse, reading nested assertions along the way
 for edge in chuks.traverse('https://schema.org/knows'):
-    friend = edge.target
-    for name_prop in friend.getprop('https://schema.org/name'):
-        print(f'Chuks knows: {name_prop.value}')
-    # Access nested properties on the edge
-    for date_prop in edge.getprop('https://schema.org/startDate'):
-        print(f'  Friends since: {date_prop.value}')
+    for name in edge.target.getprop('https://schema.org/name'):
+        print(f'Chuks knows: {name.value}')
+    for since in edge.getprop('https://schema.org/startDate'):
+        print(f'  Friends since: {since.value}')
 
-# Find all nodes of a certain type
-for person in g.typematch('https://schema.org/Person'):
-    for name_prop in person.getprop('https://schema.org/name'):
-        print(f'Person in graph: {name_prop.value}')
-
-# Reserialize to Onya literate
-from onya.serial.literate import write
-
+# Round-trip back to Onya Literate
 write(g)
 ```
 
-This example demonstrates:
-- Parsing Onya Literate format
-- Accessing nodes and properties
-- Adding edges with nested properties (reified relationships)
-- Modifying properties
-- Traversing the graph
-- Querying by type
+## Visualize / export
 
-# Visualization / export
+The CLI converts Onya Literate (`.onya`) files to diagram formats:
 
-Onya includes simple serializers to help you visualize graphs:
-
-- **Graphviz (DOT)**: `from onya.serial import graphviz` → `graphviz.write(g, out=f)` (see `demo/graphviz_basic/`)
-- **Mermaid (flowchart)**: `from onya.serial import mermaid` → `mermaid.write(g, out=f)` (see `demo/mermaid_basic/`; quick viewing via [Mermaid Live Editor](https://mermaid.live/))
-
-# Command line tool
-
-You can use the built-in CLI to export directly from an Onya Literate (`.onya`) file:
-
-```bash
-# Mermaid (default)
-onya convert test/resource/schemaorg/thingsfallapart.onya > out.mmd
-
-# Graphviz DOT
-onya convert test/resource/schemaorg/thingsfallapart.onya --dot > out.dot
 ```
+onya convert test/resource/schemaorg/thingsfallapart.onya > out.mmd        # Mermaid (default)
+onya convert test/resource/schemaorg/thingsfallapart.onya --dot > out.dot  # Graphviz DOT
+```
+
+View Mermaid output instantly at [mermaid.live](https://mermaid.live/), producing e.g.:
+
+[![Onya graph of Things Fall Apart, rendered via Mermaid](test/resource/schemaorg/thingsfallapart.png)](https://github.com/OoriData/Onya/blob/main/test/resource/schemaorg/thingsfallapart.png)
+
+For the full API walkthrough — modifying and removing properties, querying by
+type, the serializer modules and their options — see
+[doc/python-tutorial.md](doc/python-tutorial.md).
 
 # Acknowledgments
 
@@ -197,11 +174,11 @@ Contributions welcome! We're interested in feedback from the community about wha
 # License
 
 - **Code** (Python library): Apache 2.0 - See [LICENSE](LICENSE)
-- **Specification** (wordloom_spec.md): [Creative Commons Attribution 4.0 International (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/) - See [LICENSE-spec](LICENSE-spec)
+- **Specification** (SPEC.md): [Creative Commons Attribution 4.0 International (CC BY 4.0)](https://creativecommons.org/licenses/by/4.0/) - See [LICENSE-spec](LICENSE-spec)
 
 The specification is under CC BY 4.0 to encourage broad adoption and derivative work while ensuring attribution. We want the format itself to be as open and reusable as possible, allowing anyone to create implementations in any language or adapt the format for their specific needs.
 
 # Related Work
 
 - [networkx](https://github.com/networkx/networkx): Network Analysis in Python
-- [Apache AGE](https://github.com/apache/incubator-age): PostgreSQL Extension that for graphs. ANSI SQL & openCypher over the same DB.
+- [Apache AGE](https://github.com/apache/incubator-age): PostgreSQL Extension for graphs. ANSI SQL & openCypher over the same DB.

@@ -13,6 +13,7 @@ import sys
 
 from onya import I
 from onya.util import compact_iri, namespace_for_curie, shorten_node_id
+from onya.graph import AssertionIdConflict
 from onya.serial._literate_parse import (
     LiterateParser,
     NamespaceBaseError,
@@ -28,6 +29,7 @@ __all__ = [
     'ParseResult',
     'SchemaPrefixConflict',
     'NamespaceBaseError',
+    'AssertionIdConflict',
 ]
 
 
@@ -79,6 +81,8 @@ def _write_assertions(node, out, indent: str, nodebase, prefixes, bracket_curie:
     for prop in sorted(node.properties, key=lambda p: str(p.label)):
         label = _format_label(prop.label, prefixes, bracket_curie=bracket_curie)
         out.write(f'{indent}* {label}: {_format_value(prop.value, nodebase, prefixes)}\n')
+        if prop.id is not None:
+            out.write(f'{indent}    * @id: {shorten_node_id(prop.id, nodebase)}\n')
         for nested in sorted(prop.properties, key=lambda p: str(p.label)):
             nested_label = _format_label(nested.label, prefixes, bracket_curie=bracket_curie)
             out.write(
@@ -90,6 +94,8 @@ def _write_assertions(node, out, indent: str, nodebase, prefixes, bracket_curie:
         label = _format_label(edge.label, prefixes, bracket_curie=bracket_curie)
         target = shorten_node_id(edge.target.id, nodebase)
         out.write(f'{indent}* {label} -> {target}\n')
+        if edge.id is not None:
+            out.write(f'{indent}    * @id: {shorten_node_id(edge.id, nodebase)}\n')
         for nested in sorted(edge.properties, key=lambda p: str(p.label)):
             nested_label = _format_label(nested.label, prefixes, bracket_curie=bracket_curie)
             out.write(

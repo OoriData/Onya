@@ -21,6 +21,7 @@ from enum import Enum
 from amara import iri  # for absolutize & matches_uri_syntax
 
 from onya import I, ONYA_BASEIRI, ONYA_NULL, LITERAL
+from onya.graph import AssertionIdConflict
 from onya.terms import ONYA_DOCUMENT, ONYA_SOURCE_REL
 from onya.util import join_namespace, namespace_for_curie
 
@@ -68,6 +69,7 @@ class doc_info:
     lang: str = None        # other IRI abbreviations
     iris: dict = None       # iterpretations of untyped values (e.g. string vs list of strs vs IRI)
     text_refs: dict = None  # text references defined with :name = """content"""
+    pending_edges: list = None  # deferred (edge, target_id) links resolved after all @ids are known
 
 
 class SchemaPrefixConflict(ValueError):
@@ -177,7 +179,8 @@ class LiterateParser:
     '''
     def __init__(self, *, document_source_assertions: bool = False, encoding: str = 'utf-8',
                  strict_namespace_bases: bool = False,
-                 warn_implicit_doc_ids: bool = False):
+                 warn_implicit_doc_ids: bool = False,
+                 warn_empty_blocks: bool = True):
         '''
         document_source_assertions -- if set, add @source sub-properties on created assertions,
             including nested assertions but excluding document header declarations
@@ -190,11 +193,16 @@ class LiterateParser:
             relative node id is resolved off @document (the @nodebase fallback) using an
             implicit `#` separator. Off by default: that resolution is a silent
             serialization rule. See `_resolve_node_id`.
+        warn_empty_blocks -- if set (default), warn when a node block has neither a type
+            nor any assertions: such a block contributes nothing to the model beyond
+            ensuring its node id exists. On by default since an empty block is usually an
+            authoring or round-trip artifact; pass False to silence.
         '''
         self.document_source_assertions = document_source_assertions
         self.encoding = encoding
         self.strict_namespace_bases = strict_namespace_bases
         self.warn_implicit_doc_ids = warn_implicit_doc_ids
+        self.warn_empty_blocks = warn_empty_blocks
 
     def parse(self, lit_text, graph_obj=None, *, encoding: str | None = None) -> ParseResult:
         '''
@@ -215,6 +223,7 @@ class LiterateParser:
         doc = doc_info()
         doc.iris = {}  # Initialize the iris dictionary
         doc.text_refs = {}  # Initialize the text references dictionary
+        doc.pending_edges = []  # Edge targets are resolved after all @id declarations are seen
 
         parsed = node_seq.parse_string(lit_text, parse_all=True)
 
@@ -224,10 +233,24 @@ class LiterateParser:
                 ref_name, ref_content = item[1], item[2]
                 doc.text_refs[ref_name] = str(ref_content)
 
-        # Second pass: process node blocks
+        # Second pass: process node blocks (edge targets are deferred, not resolved yet)
         for item in parsed:
             if not (isinstance(item, tuple) and item[0] == 'text_ref_def'):
                 process_nodeblock(item, graph_obj, doc, self)
+
+        # Third pass: resolve deferred edge targets now that every @id is known. A target
+        # id matching a registered assertion @id links to that assertion; otherwise it is a
+        # node id (an existing node, else a freshly-minted one).
+        _resolve_pending_edges(graph_obj, doc)
+
+        # Parse-time collision: an @id shares the node id space, so it must not equal any node id.
+        assertion_ids = getattr(graph_obj, 'assertion_ids', {})
+        node_ids = getattr(graph_obj, 'nodes', {})
+        collisions = set(assertion_ids) & set(node_ids)
+        if collisions:
+            raise AssertionIdConflict(
+                f'Assertion id(s) collide with node id(s): {sorted(map(str, collisions))}'
+            )
 
         nodes_after = set(getattr(graph_obj, 'nodes', {}).keys()) if hasattr(graph_obj, 'nodes') else set(graph_obj)
         nodes_added = nodes_after - nodes_before
@@ -348,7 +371,9 @@ prop_text_ref   = Optional(White(' \t').leave_whitespace(), '') + Suppress('*' +
                     ASSERTION_LABEL + Suppress(DOUBLE_COLON) + Optional(IRIREF, None)
 edge            = Optional(White(' \t').leave_whitespace(), '') + Suppress('*' + White()) + \
                     ASSERTION_LABEL + Suppress(RIGHT_ARROW) + Optional(value_expr, None)
-propset         = Group(DelimitedList(prop_text_ref | prop | edge | COMMENT, delim='\n'))
+# Optional so an assertion-less ("empty") node block parses; Group keeps propset present
+# (as an empty result) for the fixed-arity unpack in process_nodeblock.
+propset         = Group(Optional(DelimitedList(prop_text_ref | prop | edge | COMMENT, delim='\n')))
 node_header = Word('#') + Optional(IRIREF, None) + Optional(QuotedString('[', end_quote_char=']'), None)
 node_block  = Forward()
 node_block  << Group(node_header + White('\n').suppress() + Suppress(ZeroOrMore(blank_to_eol)) + propset)
@@ -498,6 +523,24 @@ def _resolve_node_id(ref, doc: doc_info, parser: LiterateParser | None):
     return expand_iri(ref, node_base, doc=doc)
 
 
+def _resolve_pending_edges(graph_obj, doc: doc_info):
+    '''
+    Bind deferred edge targets. Edge targets are collected during the node-block pass with
+    their target left as ``None`` (see ``process_nodeblock``) so that an edge referencing an
+    assertion by its ``@id`` can be linked whether that ``@id`` is declared before or after the
+    reference. An id matching a registered assertion ``@id`` links to that assertion; otherwise
+    it is treated as a node id — an existing node when present, else a newly-created one (the
+    forward-reference placeholder behavior edges have always had).
+    '''
+    for edge_obj, target_id in (doc.pending_edges or ()):
+        if target_id in graph_obj.assertion_ids:
+            edge_obj.target = graph_obj.assertion_ids[target_id]
+        elif target_id in graph_obj:
+            edge_obj.target = graph_obj[target_id]
+        else:
+            edge_obj.target = graph_obj.node(target_id)
+
+
 def process_nodeblock(nodeblock, graph_obj, doc, parser: LiterateParser | None = None):
     headermarks, nid, ntype, props = nodeblock
 
@@ -538,6 +581,28 @@ def process_nodeblock(nodeblock, graph_obj, doc, parser: LiterateParser | None =
         if outer_indent == -1:
             outer_indent = pi.indent
 
+        # `@id` is a directive, not an assertion: it names the current assertion (an edge or
+        # property) rather than creating a property on it. Only meaningful nested under an
+        # assertion; at the node's own level there is no assertion to name, so it is ignored.
+        if pi.key == '@id':
+            if pi.indent != outer_indent and current_assertion is not None:
+                raw = pi.value.verbatim if pi.value else None
+                if raw is not None:
+                    assertion_id = _resolve_node_id(str(raw), doc, parser)
+                    try:
+                        graph_obj.register_assertion_id(assertion_id, current_assertion)
+                    except AssertionIdConflict as e:
+                        # Within a single document, a repeated @id is rejected as an authoring
+                        # error. This is a parser-surface constraint only: the graph *merge*
+                        # model (SPEC § Identity and graph merge, Rule 1) instead treats two
+                        # assertions bearing the same id as the same assertion.
+                        raise AssertionIdConflict(
+                            f'{e} (a repeated @id within one Onya Literate document is a '
+                            f'parser-surface limitation, not the graph merge rule: under merge, '
+                            f'same-id assertions are the same assertion)'
+                        ) from e
+            continue
+
         # Expand the assertion label IRI
         assertion_label = expand_iri(pi.key, doc.schemabase, doc=doc)
 
@@ -558,13 +623,12 @@ def process_nodeblock(nodeblock, graph_obj, doc, parser: LiterateParser | None =
                 val, _ = pi.value.verbatim, pi.value.typeindic
 
                 if pi.is_edge:
-                    # This is an edge (node to node). Resolve RHS as a node ID.
+                    # This is an edge. The RHS may name a node or an identified assertion, and
+                    # may be a forward reference, so defer target resolution (see
+                    # _resolve_pending_edges).
                     target_id = _resolve_node_id(str(val), doc, parser)
-                    if target_id not in graph_obj:
-                        target_node = graph_obj.node(target_id)
-                    else:
-                        target_node = graph_obj[target_id]
-                    current_assertion = n.add_edge(assertion_label, target_node)
+                    current_assertion = n.add_edge(assertion_label, None)
+                    doc.pending_edges.append((current_assertion, target_id))
                     if parser and current_assertion is not None:
                         parser._maybe_add_source(current_assertion, doc)
                 else:
@@ -590,13 +654,10 @@ def process_nodeblock(nodeblock, graph_obj, doc, parser: LiterateParser | None =
             elif pi.value:
                 val, _ = pi.value.verbatim, pi.value.typeindic
                 if pi.is_edge:
-                    # Nested edge
+                    # Nested edge; defer target resolution as with top-level edges.
                     target_id = _resolve_node_id(str(val), doc, parser)
-                    if target_id not in graph_obj:
-                        target_node = graph_obj.node(target_id)
-                    else:
-                        target_node = graph_obj[target_id]
-                    nested = current_assertion.add_edge(assertion_label, target_node)
+                    nested = current_assertion.add_edge(assertion_label, None)
+                    doc.pending_edges.append((nested, target_id))
                     if parser and nested is not None:
                         parser._maybe_add_source(nested, doc)
                 else:
@@ -605,6 +666,16 @@ def process_nodeblock(nodeblock, graph_obj, doc, parser: LiterateParser | None =
                     nested = current_assertion.add_property(assertion_label, str_val)
                     if parser and nested is not None:
                         parser._maybe_add_source(nested, doc)
+
+    # `outer_indent` stays -1 only if no assertion line was seen. With no type either, the
+    # block ensures the node id exists but otherwise makes no change to the model — usually an
+    # authoring slip or a round-trip artifact (write() emits a bare block for a target-only node).
+    if parser and parser.warn_empty_blocks and outer_indent == -1 and not ntype:
+        warnings.warn(
+            f'Onya Literate: node block {str(nid)!r} is empty (no type or assertions); it makes '
+            f'no change to the constructed model beyond ensuring the node id exists.',
+            stacklevel=2,
+        )
 
 
 def process_docheader(props, graph_obj, doc, parser: LiterateParser | None = None):
