@@ -12,6 +12,7 @@ Notable changes to Onya are recorded here. Format based on [Keep a Changelog](ht
 
 ### Fixed
 
+- **Multi-typed nodes now round-trip.** A node's types form a *set*, and `write()` already emitted them space-separated inside the header brackets (`# acme [Organization lv:Client]`), but the parser expanded the whole bracket group as one IRI — so any graph with a multi-typed node failed `parse → write → parse` and a hand-authored multi-type header raised an opaque error. The parser now tokenizes the bracket content into individual type refs (whitespace-separated, keeping `<…>` wrappers whole), expands each independently, and adds all to `node.types`. SPEC § Node Blocks documents the space-separated multi-type syntax.
 - Onya Literate now handles **arbitrary nesting depth** on both read and write. The parser tracks nesting with an indent stack (previously it collapsed everything below the first level onto that level), so a deeply-nested assertion attaches to its true parent and a nested `@id` names the assertion it is written under (not the top-level one). `write()` is now recursive and emits nested **edges** (previously dropped) and `@id` at every level, so nested assertions — including identified ones and nested n-ary/qualified structures — round-trip.
 
  ## [0.3.1] - 20260615: Strict namespacebases.
