@@ -35,6 +35,9 @@ ParserElement.set_default_whitespace_chars(' \t')
 URI_EXPLICIT_PAT = re.compile('<(.+)>', re.DOTALL)
 # Compact CURIE: prefix:localName (prefix is a QName NCName; not an absolute IRI scheme)
 CURIE_PAT = re.compile(r'^([A-Za-z][\w.\-]*):([^:]+)$')
+# A node header `[…]` holds a set of types, whitespace-separated. `<…>` wrappers
+# (explicit IRIs/CURIEs) are kept whole even if they contain whitespace.
+TYPE_REF_PAT = re.compile(r'<[^>]*>|\S+')
 
 SOURCE_REL = ONYA_SOURCE_REL
 
@@ -582,11 +585,13 @@ def process_nodeblock(nodeblock, graph_obj, doc, parser: LiterateParser | None =
     else:
         n = graph_obj[nid]
 
-    # Add type if specified
+    # Add types if specified. A node may carry a *set* of types, written
+    # whitespace-separated inside the header brackets (e.g. `[Organization lv:Client]`).
     if ntype:
         type_base = parser._type_base(doc) if parser else doc.typebase
-        type_iri = expand_iri(ntype, type_base, doc=doc)
-        n.types.add(type_iri)
+        for type_ref in TYPE_REF_PAT.findall(ntype):
+            type_iri = expand_iri(type_ref, type_base, doc=doc)
+            n.types.add(type_iri)
 
     # Nesting is tracked with a stack of (indent, assertion) frames. Each assertion's origin is
     # the nearest enclosing frame with strictly smaller indent (the node itself when none). This

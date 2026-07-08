@@ -684,3 +684,56 @@ def test_deep_nesting_roundtrips():
     warranty2 = list(item2.getedge('http://e.o/warranty'))[0]
     assert warranty2.target is g2['http://e.o/WarrantyDoc']
     assert list(warranty2.getprop('http://e.o/months'))[0].value == '12'
+
+
+MULTITYPE_ONYA = '''\
+# @docheader
+
+* @document: https://example.org/g/doc
+* @nodebase: https://example.org/g/
+* @schema: https://schema.org/
+* @iri:
+    * lv: https://example.org/g/schema/
+
+# acme [Organization lv:Client]
+
+* name: ACME Corp
+'''
+
+
+def test_parse_multiple_types():
+    '''A node header with a space-separated type list yields a set of expanded types.'''
+    g = graph()
+    LiterateParser().parse(MULTITYPE_ONYA, g)
+
+    acme = g['https://example.org/g/acme']
+    assert acme.types == {
+        I('https://schema.org/Organization'),
+        I('https://example.org/g/schema/Client'),
+    }
+
+
+def test_write_roundtrip_multiple_types():
+    '''A node carrying two types serializes space-separated and parses back to the same set.'''
+    g1 = graph()
+    LiterateParser().parse(MULTITYPE_ONYA, g1)
+
+    buf = StringIO()
+    write(
+        g1,
+        buf,
+        document='https://example.org/g/doc',
+        nodebase='https://example.org/g/',
+        schema='https://schema.org/',
+        prefixes={'lv': 'https://example.org/g/schema/'},
+    )
+    text2 = buf.getvalue()
+
+    # Writer emits both types, space-separated, inside a single bracket group.
+    assert '[' in text2 and ']' in text2
+    header = next(ln for ln in text2.splitlines() if ln.startswith('# ') and '[' in ln)
+    assert len(header.split('[', 1)[1].rstrip(']').split()) == 2
+
+    g2 = graph()
+    LiterateParser().parse(text2, g2)
+    assert g2['https://example.org/g/acme'].types == g1['https://example.org/g/acme'].types

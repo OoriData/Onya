@@ -288,9 +288,13 @@ Each node block defines a node:
 ```
 
 Structure:
-- Header: `# NodeID [OptionalType]`
+- Header: `# NodeID [OptionalType ...]`
   - `NodeID` is resolved relative to `@nodebase` (or `@document` if `@nodebase` is not set)
-  - `Type` is resolved relative to `@schema`
+  - The bracketed portion holds the node's **types**, which form a *set*. Zero or
+    more types may be given, **space-separated** (e.g. `# acme [Organization lv:Client]`).
+    Each type is resolved independently relative to `@typebase` (or `@schema` if
+    `@typebase` is not set), and each may be a bare name, a CURIE (`lv:Client`), or an
+    explicit `<…>`-wrapped IRI/CURIE. Duplicate types collapse into the single set entry.
 - Assertions: list items starting with `*`
   - `label: value` - property (label is IRI, value is string)
   - `label -> TargetID` - edge (label is IRI, TargetID is node ID).
