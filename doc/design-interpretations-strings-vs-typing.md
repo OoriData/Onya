@@ -1,4 +1,4 @@
-**Design document: Interpretations from strings—type systems and beyond**
+**Design document: Data contract layers—interpretations from strings, beyond type systems**
 
 Every native value in Onya is a string. That's a deliberate choice, but it leaves an obvious question unanswered: when a graph says `age: 28`, how does anyone — a program, a database, another person — know that "28" is meant to be a number and not just two characters?
 
@@ -16,6 +16,11 @@ Instead Onya holds that **the value is always the string,** and always valid at 
 Software which understands the value hint can check the value, apply conversions and validations in multiple directions. If software doesn't understand the hint, nothing breaks: the graph is still a complete, usable graph. It's just a bit less computable, the same way a book in a language you don't read is still a book.
 
 This is closer to how contracts work in the Eiffel programming language tradition than how types work in most languages: the check happens at the boundary, when someone actually needs to compute with the value, not at the foundation, where it would dictate what's allowed to exist.
+
+We call this architecture **data contract layers**. The foundation — the graph itself — is unconditionally valid: every value is a string, and every string is welcome. Above it, an author may attach a *contract*: a recorded promise about how a value is meant to be read. Contracts are honored at boundaries, where a consumer chooses to check or convert; they are never enforced ambiently by the
+foundation. In Onya, a single named contract is called an **interpretation**, and the literate syntax that attaches one is `@as`.
+
+A note for readers arriving from data engineering, where "data contract" often also covers shape (required fields), ownership, and service guarantees: this layer is the *value-level* slice of that idea, and only that slice. Shape-level contracts would be a further layer, building on this one.
 
 ## What any solution must provide
 
