@@ -149,6 +149,14 @@ Under graph union:
 Rule 2 gives Onya idempotent merge ergonomics by default, desirable behavior when combining graphs extracted from overlapping sources.
 Rules 1 and 3 preserve occurrence semantics exactly where a modeler has declared they matter. Implementations MAY offer alternative merge policies (e.g., absorbing a structurally equal anonymous assertion into an identified one), but the rules above are the normative default.
 
+Graph union is an explicit, on-demand operation. Parsing or loading a document
+into an existing graph accumulates its assertions as distinct occurrences; the
+identity rules above are applied only when a consumer invokes the union (in the
+Python library, `graph.merge()`). This mirrors the interpretation layer: nothing
+about a graph's contents changes ambiently as a side effect of reading a file.
+The distinct-occurrence rule holds within a single document too — two identical
+assertion lines in one document are two occurrences until a union collapses them.
+
 ## Interpretations (data contract layers)
 
 Every Onya value is a string, and the string layer is unconditionally valid:
@@ -246,7 +254,7 @@ The pieces above — anonymous assertions that can themselves carry assertions, 
 
 A mother can have multiple children. In Onya, each parental relationship can be modeled with an edge from the node representing the mother (the assertion's origin) to the node representing the child (the assertion's target). Each of these edges is a separate assertion (anonymous by default) which can have its own assertions, e.g. date of labor (though of course another modeler could choose to model this instead just using a date of birth edge on each child node).
 
-Because those edges are anonymous, the identity rules above apply automatically: the same parental edge extracted independently from two overlapping sources merges into one when their skeletons match (Rule 2), so combining graphs is idempotent without any bookkeeping. Where a modeler instead needs to hold two structurally identical assertions apart as genuinely distinct occurrences, giving each an `@id` declares that intent and preserves the distinction through merge (Rule 3).
+Because those edges are anonymous, the identity rules above apply cleanly: the same parental edge extracted independently from two overlapping sources merges into one when their skeletons match (Rule 2), so combining graphs is idempotent **under merge**, without any bookkeeping beyond invoking it. Where a modeler instead needs to hold two structurally identical assertions apart as genuinely distinct occurrences, giving each an `@id` declares that intent and preserves the distinction through merge (Rule 3).
 
 # Notes
 

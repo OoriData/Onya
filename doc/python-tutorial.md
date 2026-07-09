@@ -192,6 +192,15 @@ genuinely distinct occurrences apart), and applying those rules is the caller's 
 a side effect of reading a file. Give two structurally identical assertions distinct `@id`s,
 or differing `@as` contracts, and `merge()` keeps them apart.
 
+The same rule applies *within* a single document: two identical `* foundingDate: 1999`
+lines in one file are two distinct occurrences until you merge, not a parse-time dedup.
+If you want the parse-then-merge in one step, pass `merge=True`:
+
+```python
+from onya.serial.literate import read
+read(text, g, merge=True)   # equivalent to read(text, g) followed by g.merge()
+```
+
 # Data contracts: interpretations
 
 Every Onya value is a string. An **interpretation** is a recorded promise about
