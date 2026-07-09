@@ -260,7 +260,11 @@ def test_duplicate_label_in_interpretations_stanza_is_error():
 # --- merge across documents (behavioral example 3) ----------------------------------
 
 def test_merge_across_docs_one_sided_adopts_then_conflict_stays_distinct():
-    '''Doc with number + doc with no contract merge (adopt number); a datetime doc stays distinct.'''
+    '''On an explicit merge: number + no-contract adopt number; a datetime doc stays distinct.
+
+    Merge is on demand, so the founded assertions accumulate across parses and collapse
+    only when `merge()` is called.
+    '''
     doc_a = DOCHEADER + '''
 # Acme [Organization]
 
@@ -278,12 +282,16 @@ def test_merge_across_docs_one_sided_adopts_then_conflict_stays_distinct():
 * founded: 1999
   * @as: datetime
 '''
-    g = _parse(doc_a, doc_c)  # merges: one assertion, adopts number
+    g = _parse(doc_a, doc_c)
+    assert len(list(g['http://e.o/Acme'].getprop('https://schema.org/founded'))) == 2  # not merged yet
+
+    g.merge()  # one assertion, adopts number (one-sided adoption)
     founded = list(g['http://e.o/Acme'].getprop('https://schema.org/founded'))
     assert len(founded) == 1
     assert founded[0].interp == NUMBER
 
-    LiterateParser().parse(doc_b, g)  # does NOT merge: contracts differ
+    LiterateParser().parse(doc_b, g)
+    g.merge()  # datetime contract differs from number -> stays distinct (not an error)
     founded = list(g['http://e.o/Acme'].getprop('https://schema.org/founded'))
     assert len(founded) == 2
     assert {p.interp for p in founded} == {NUMBER, DATETIME}

@@ -54,10 +54,6 @@ recursively, through one uniform mechanism. Node IDs resolve against
 `@nodebase`; bare labels and types resolve against `@schema`, so schema.org
 (or any vocabulary) works out of the box.
 
-The format is Markdown: renderable anywhere, diffable, and easy for both
-humans and LLMs to read and write — which makes Onya a natural interchange
-for LLM-extracted knowledge and agent context.
-
 # How Onya relates to its conceptual neighbors
 
 |                              | RDF 1.1        | RDF 1.2 / RDF-star   | Property graphs (Neo4j, GQL) | Onya |
@@ -69,7 +65,7 @@ for LLM-extracted knowledge and agent context.
 | Edges from a property/edge   | No             | No                    | No                           | Yes — the mechanism is uniform |
 | Assertion identity           | Statements are types (set semantics) | Contested (type vs. occurrence) | Edges are instances | Assertions are instances |
 | Blank nodes                  | Yes            | Yes                   | —                            | None |
-| Value types in core          | XSD literal system | XSD literal system | Implementation-defined       | Strings; interpretation is layered |
+| Value types in core          | XSD literal system | XSD literal system | Implementation-defined       | Strings; data contracts layered above (`@as`) |
 | Human-writable serialization | Turtle         | Turtle-star           | None standard                | Markdown-native |
 | Query orientation            | SPARQL (aggregate/pattern) | SPARQL-star | Cypher/GQL (path-first)   | Traversal API; path language planned |
 
@@ -79,6 +75,62 @@ type-versus-occurrence ambiguity that complicated RDF-star standardization.
 And the mechanism is uniform all the way down: a property value can carry
 edges (a temperature with a `measurementMethod` link), which has no clean
 analogue in either the RDF or property-graph lineage.
+
+# Values are strings, with data contracts layered above
+
+Every Onya value is a string, and the string layer is unconditionally valid:
+`birthDate: spring 1958` is welcome exactly as written. Onya deliberately has
+no built-in type system — in the XSD/OWL lineage, types describe how computers
+store things, not what the things are, and data models built on them end up
+rejecting true statements that don't fit the machinery.
+
+Instead, an author may attach an **interpretation**: a recorded promise about
+how a value is meant to be read, declared inline with `@as` or once per
+property label in the docheader. Contracts are honored at boundaries, on
+demand — never enforced ambiently by the model:
+
+```python
+from onya.graph import graph
+from onya.serial.literate import LiterateParser
+from onya import interp
+
+onya_text = '''
+# @docheader
+
+* @document: http://example.org/people-graph
+* @nodebase: http://example.org/people/
+* @schema: https://schema.org/
+* @interpretations:
+    * age: number
+
+# Chuks [Person]
+
+* age: 28
+* birthDate: spring 1958
+  * @as: datetime
+'''
+
+g = graph()
+LiterateParser().parse(onya_text, g)
+chuks = g['http://example.org/people/Chuks']
+
+age = next(chuks.getprop('https://schema.org/age'))
+age.value               # '28' — the model always stores the string
+interp.value_of(age)    # 28 — the contract, honored where you ask
+
+report = interp.validate(g)
+report.ok               # False: 'spring 1958' fails its datetime contract —
+print(report)           # a reported finding, never a parse error or rejection
+```
+
+An interpretation your software doesn't recognize is data, not an error: it
+parses, merges, and round-trips untouched. The built-in starter set (`number`,
+`datetime`, `boolean`, `iri`, `text`) is deliberately modest, and the plugin
+registry lets any community define its own. If you're arriving from data
+engineering, note that this is the *value-level* slice of "data contract" —
+shape, ownership, and SLAs would be further layers, deliberately not this one.
+The design rationale is in
+[doc/design-interpretations-strings-vs-typing.md](doc/design-interpretations-strings-vs-typing.md).
 
 # Python quick start
 
@@ -149,7 +201,8 @@ View Mermaid output instantly at [mermaid.live](https://mermaid.live/), producin
 [![Onya graph of Things Fall Apart, rendered via Mermaid](test/resource/schemaorg/thingsfallapart.png)](https://github.com/OoriData/Onya/blob/main/test/resource/schemaorg/thingsfallapart.png)
 
 For the full API walkthrough — modifying and removing properties, querying by
-type, the serializer modules and their options — see
+type, data contracts and validation, explicit graph merge, the serializer
+modules and their options — see
 [doc/python-tutorial.md](doc/python-tutorial.md).
 
 # Acknowledgments
@@ -165,7 +218,7 @@ Onya is based on experience from developing [Versa](https://github.com/uogbuji/v
 
 The URL used for metavocabulary is [managed via purl.org](https://purl.archive.org/purl/onya/vocab).
 
-The name is from Igbo "ọ́nyà", web, snare, trap, and by extension, network. The expanded sense is ọ́nyà úchè, web of knowledge.
+The name is from Igbo "ọ́nyà", web, snare, trap, and by extension, network. The expanded sense is ọ́nyà úchè, web of knowledge.
 
 # Contributing
 

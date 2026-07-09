@@ -266,12 +266,19 @@ class LiterateParser:
         self.warn_implicit_doc_ids = warn_implicit_doc_ids
         self.warn_empty_blocks = warn_empty_blocks
 
-    def parse(self, lit_text, graph_obj=None, *, encoding: str | None = None) -> ParseResult:
+    def parse(self, lit_text, graph_obj=None, *, encoding: str | None = None,
+              merge: bool = False) -> ParseResult:
         '''
         Parse Onya Literate source text
 
-        - If `graph_obj` is provided, assertions are added to it (merge workflow)
+        - If `graph_obj` is provided, assertions are added to it. Parsing does not merge:
+          overlapping assertions accumulate as distinct occurrences until the caller
+          explicitly invokes `graph_obj.merge()`.
         - If `graph_obj` is None, a new `onya.graph.graph` is created
+        - `merge` -- convenience: when True, call `graph_obj.merge()` once after parsing
+          (collapsing duplicate assertions per the SPEC identity rules). Defaults to False,
+          preserving the on-demand, never-ambient default; it is purely a one-call
+          shorthand for the common parse-then-merge workflow.
 
         Returns: `ParseResult(doc_iri, graph, nodes_added)`
         '''
@@ -314,10 +321,11 @@ class LiterateParser:
                 f'Assertion id(s) collide with node id(s): {sorted(map(str, collisions))}'
             )
 
-        # Collapse duplicate assertions into a single occurrence per the SPEC identity
-        # rules. Parsing several overlapping documents into one graph is a merge (see the
-        # `parse` docstring); without this, duplicates would simply accumulate.
-        if hasattr(graph_obj, 'merge'):
+        # Parsing does NOT merge by default: duplicate/overlapping assertions accumulate as
+        # distinct occurrences until a consumer calls `graph.merge()` — merge is on-demand,
+        # never ambient (consistent with the interpretation layer). The `merge` flag is an
+        # opt-in shorthand for the common parse-then-merge workflow, nothing more.
+        if merge:
             graph_obj.merge()
 
         nodes_after = set(getattr(graph_obj, 'nodes', {}).keys()) if hasattr(graph_obj, 'nodes') else set(graph_obj)

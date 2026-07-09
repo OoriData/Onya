@@ -101,7 +101,7 @@ A stanza in `@docheader`, directly inheriting the Versa shape:
 * @document: http://example.org/people-graph
 * @nodebase: http://example.org/people/
 * @schema: https://schema.org/
-* @interpretations
+* @interpretations:
   * age: number
   * birthDate: datetime
   * url: iri

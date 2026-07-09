@@ -186,7 +186,8 @@ def write(
     return
 
 
-def read(fp, g=None, *, document_source_assertions: bool = False, encoding: str = 'utf-8'):
+def read(fp, g=None, *, document_source_assertions: bool = False, encoding: str = 'utf-8',
+         merge: bool = False):
     '''
     Read Onya Literate format from a file-like object (or text string) into a graph.
 
@@ -194,6 +195,8 @@ def read(fp, g=None, *, document_source_assertions: bool = False, encoding: str 
     g -- graph to populate; if None, a new ``onya.graph.graph`` is created
     document_source_assertions -- if True, tag each created assertion with an @source sub-property
     encoding -- character encoding hint passed through to the parser
+    merge -- convenience: when True, call ``graph.merge()`` once after reading. Defaults to
+        False (parsing accumulates distinct occurrences; merge stays on-demand).
 
     Returns: ``ParseResult(doc_iri, graph, nodes_added)``
     '''
@@ -202,4 +205,4 @@ def read(fp, g=None, *, document_source_assertions: bool = False, encoding: str 
         document_source_assertions=document_source_assertions,
         encoding=encoding,
     )
-    return parser.parse(text, g, encoding=encoding)
+    return parser.parse(text, g, encoding=encoding, merge=merge)

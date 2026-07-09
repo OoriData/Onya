@@ -205,15 +205,6 @@ class edge(assertion):
         return ('edge', self.label, target_key)
 
 
-def _interp_of(a: assertion):
-    '''
-    The assertion's interpretation, tolerant of the model surface predating the `interp`
-    slot (returns None when absent). Interpretations are excluded from the skeleton but
-    do gate merge — see `_mergeable`.
-    '''
-    return getattr(a, 'interp', None)
-
-
 def _mergeable(a: assertion, b: assertion) -> bool:
     '''
     Whether sibling assertions `a` and `b` denote the same assertion under the identity
@@ -236,7 +227,7 @@ def _mergeable(a: assertion, b: assertion) -> bool:
             )
         # Same-id, differing non-absent interps: a merge error, parallel to skeleton
         # mismatch — same declared occurrence cannot carry two contracts.
-        ai, bi = _interp_of(a), _interp_of(b)
+        ai, bi = a.interp, b.interp
         if ai is not None and bi is not None and ai != bi:
             raise GraphMergeError(
                 f'Assertions sharing id {a_id!r} carry differing interpretations: '
@@ -249,7 +240,7 @@ def _mergeable(a: assertion, b: assertion) -> bool:
     # error). Equal-or-one-absent interps merge (the merged assertion adopts the present).
     if a._skeleton != b._skeleton:
         return False
-    ai, bi = _interp_of(a), _interp_of(b)
+    ai, bi = a.interp, b.interp
     if ai is not None and bi is not None and ai != bi:
         return False
     return True
@@ -261,7 +252,7 @@ def _absorb(keeper: assertion, other: assertion) -> None:
     lacks (one-sided adoption), then `other`'s nested assertions are reparented onto the
     keeper. The caller re-merges the combined nested set.
     '''
-    if _interp_of(keeper) is None and _interp_of(other) is not None:
+    if keeper.interp is None and other.interp is not None:
         keeper.interp = other.interp
     for p in other.properties:
         p.origin = keeper
@@ -350,9 +341,11 @@ class graph(MutableMapping):
         per the SPEC identity rules (idempotent graph union). Anonymous assertions with
         equal skeletons merge, unioning their nested assertions recursively; assertions
         sharing an explicit `id` merge and must agree (else `GraphMergeError`); an
-        identified assertion never merges with an anonymous one. The parser calls this at
-        the end of every parse, so parsing overlapping documents into one graph yields a
-        properly merged model rather than accumulating duplicates.
+        identified assertion never merges with an anonymous one.
+
+        This is an **explicit, on-demand** operation — never called automatically.
+        Parsing several overlapping documents into one graph accumulates their assertions
+        as distinct occurrences; they collapse only when a consumer calls `merge()`.
         '''
         for n in self.nodes.values():
             _merge_container(n)

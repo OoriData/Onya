@@ -2,7 +2,7 @@ Onya Model Specification
 
 # Overview
 
-Onya is a knowledge graph framework with a simple, recursive model for representing structured information. The core model is intentionally minimal—just nodes, edges, and properties, identifiable by IRIs.
+Onya is a knowledge graph framework with a simple, recursive model for representing structured information. The core model is intentionally minimal—just nodes, edges, and properties, identifiable by IRIs. Everything beyond that minimum—value typing, ordering, schema constraints—is deliberately left to layers above the core, the most developed of which is the value-level data contract layer (see [Interpretations](#interpretations-data-contract-layers)).
 
 # Core Concepts
 
@@ -28,7 +28,7 @@ Edges and properties are collectively called **assertions**. Like a node, an ass
 - its target node (edge) or string value (property)
 - an internal marker that differentiates it from otherwise-identical assertions
 
-An assertion MAY be given an explicit identifier, making it addressable in the same identifier space as node IDs — see [Assertion Identifiers](#assertion-identifiers).
+An assertion MAY be given an explicit identifier, making it addressable — see [Assertion Identifiers](#assertion-identifiers). A property MAY additionally carry an interpretation, a recorded contract about how its string value is meant to be read — see [Interpretations](#interpretations-data-contract-layers).
 
 ### Edge
 
@@ -48,7 +48,7 @@ origin --[IRI label]--> "string value"
 
 ### Literate syntax
 
-The above text ilustrations are pseudocode, but not terribly far from the human **and** machine readable **and** editable Onya Literate syntax.
+The above text illustrations are pseudocode, but not terribly far from the human **and** machine readable **and** editable Onya Literate syntax.
 
 Here is a snippet from a simple friendship graph, describing an entity identified as `Chuks`:
 
@@ -252,7 +252,7 @@ Because those edges are anonymous, the identity rules above apply automatically:
 
 ## String Properties
 
-Properties in Onya always have string values. There are no numbers, dates, or other types at the core layer. Annotation systems can be built on top to add typing semantics.
+Properties in Onya always have string values. There are no numbers, dates, or other types at the core layer; typing semantics live in the layers above, beginning with the value-level data contract layer specified in [Interpretations](#interpretations-data-contract-layers), which records how a string is meant to be read without ever making the string less valid.
 
 ## Recursive Structure
 
@@ -281,7 +281,7 @@ This provides a uniform, standard way to identify and dereference all elements o
 
 The human-friendly Onya Literate format is based on Markdown, making it easy to read and write knowledge graphs.
 
-### File Structure
+## File Structure
 
 An Onya Literate file contains:
 
@@ -320,6 +320,7 @@ The document header specifies:
 - `@typebase`: Base IRI for resolving relative type IRIs; only needed in less common cases where types use a different base than properties. If omitted, types use `@schema` as the base.
 - `@language`: Default language for string values
 - `@iri`: Optional block declaring extra vocabulary namespace bases (see below)
+- `@interpretations`: Optional block declaring default interpretations per property label (see [Interpretations](#interpretations-data-contract-layers))
 - Other assertions are attached to the document node
 
 **Important**: The `@nodebase` directive is used exclusively for expanding node IDs (e.g., `Chuks` → `http://example.org/people/Chuks`). The `@schema` directive is used for expanding both property labels (e.g., `name` → `https://schema.org/name`) and types (e.g., `[Person]` → `https://schema.org/Person`). It should be extremely unusual for an Onya file not to have a `@schema` directive.
@@ -350,7 +351,7 @@ Use **compact CURIEs** anywhere an IRI label or type is expected:
 
 **CURIE** namespace joining (under `@iri`) follows RDF/XML rules: if the prefix base already ends with `/`, `#`, or `?`, the local name is appended directly (no extra `/`); otherwise a single `/` is inserted between base and local name. So `@iri` prefix bases should usually be written **without** a trailing slash unless the vocabulary IRIs are defined that way. This differs from the bare-name `@nodebase`/`@schema`/`@typebase` bases above, which join by pure concatenation and therefore *must* carry their own trailing separator. The two converge for any base that ends in a separator — which is why the auto-registered `schema:` prefix and bare names agree for the usual trailing-slash `@schema`.
 
-Onya built-in names use a leading `@` and the Onya vocabulary (e.g. `@document`, `@source`), not the `@iri` map.
+Onya built-in names use a leading `@` and the Onya vocabulary (e.g. `@document`, `@source`, `@id`, `@as`), not the `@iri` map.
 
 Example (Acme client with schema.org contact details):
 
@@ -449,8 +450,13 @@ Assertions can have nested assertions:
 * name: Boston
   * stateCode: MA
   * country -> USA
+```
 
-Keys to demonstrate qualified values:
+And a key demonstration, qualified values:
+
+```
+# Boston [City]
+
 * temperature: 25
   * unit: Celsius
   * measurementMethod -> InfraredThermometer
@@ -533,6 +539,8 @@ Graphs can be written back to Onya Literate with `write()`. Supply the same base
 - `bracket_curie` — if true, non-schema labels use `<prefix:local>`; default is `prefix:local` (e.g. `acme:contactPoint`)
 - `bracket_types` — if true, types use bracketed CURIE form in headers
 
+An assertion's `@id` and `@as` are emitted as nested directive lines at every depth. `@as` is currently always emitted inline on each property (no generated `@interpretations` factoring), with interpretation IRIs rendered back to reserved bare names or declared abbreviations where they apply. The writer never consults an interpretation registry: serialization is a model operation, and its output must not vary with installed plugins.
+
 Document-level properties stored on the document node are emitted as top-level docheader bullets. The document node itself is not written as a `#` block.
 
 ## Optional assertion provenance (`@source`)
@@ -551,12 +559,13 @@ Graph
       ├── types: set[IRI]
       ├── properties: set[Property]
       └── edges: set[Edge]
-      
+
 Property (assertion: origin + label, anonymous by default)
   ├── origin: Node | Property | Edge
   ├── label: IRI
   ├── value: str
   ├── id: IRI | None        (absent by default; see Assertion Identifiers)
+  ├── interp: IRI | None    (absent by default; see Interpretations)
   ├── properties: set[Property]
   └── edges: set[Edge]
 
@@ -565,6 +574,7 @@ Edge (assertion: origin + label, anonymous by default)
   ├── label: IRI
   ├── target: Node
   ├── id: IRI | None        (absent by default; see Assertion Identifiers)
+  ├── interp: IRI | None    (reserved; `@as` on an edge is ignored with a warning)
   ├── properties: set[Property]
   └── edges: set[Edge]
 ```
@@ -573,7 +583,7 @@ Edge (assertion: origin + label, anonymous by default)
 
 1. **Simplicity**: Core model uses only nodes, edges, and properties
 2. **IRI-based**: All identifiers are IRIs for global uniqueness
-3. **String values only**: Keep the core model simple; add typing in layers above
+3. **String values only, contracts above**: The core stores only strings, unconditionally valid; how a value is meant to be read is a layered data contract (an interpretation), recorded in the model and honored only at boundaries a consumer chooses
 4. **No pervasive ordering**: Use sets for assertions; ordering can be added when needed
 5. **Recursive assertions**: Edges and properties are first-class, can have their own assertions
 6. **Graph, not model**: The container is a "graph", elements within use "assertions" terminology
@@ -583,7 +593,7 @@ Edge (assertion: origin + label, anonymous by default)
 Onya is similar to RDF but simpler:
 - Similar: IRIs, triples (s-p-o), reification via recursive structure
 - Simpler: No literals beyond strings, no blank nodes, uniform treatment of properties/edges
-- Different: Assertions are anonymous by default but may be given an identifier on demand; properties are always strings
+- Different: Assertions are anonymous by default but may be given an identifier on demand; properties are always strings, with value typing available as layered, on-demand data contracts rather than as XSD-style typed literals baked into the model
 
 The recursive assertion model is reminiscent of property graphs but more uniform:
 - Similar: Nodes and edges both can have properties

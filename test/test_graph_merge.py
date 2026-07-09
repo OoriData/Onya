@@ -4,9 +4,9 @@
 Tests for graph merge — collapsing duplicate assertions into a single occurrence
 under the SPEC identity rules (SPEC.md § Identity and graph merge).
 
-Merge runs automatically at the end of every parse, so parsing overlapping documents
-into one graph is a union rather than an accumulation of duplicates. `graph.merge()` is
-also exercised directly for the id-conflict paths the parser guards against upstream.
+Merge is an **explicit, on-demand** operation: `graph.merge()`. Parsing never merges —
+parsing several overlapping documents into one graph accumulates their assertions as
+distinct occurrences, which collapse only when a consumer calls `merge()`.
 
     pytest -s test/test_graph_merge.py
 '''
@@ -29,10 +29,17 @@ DOCHEADER = '''\
 
 
 def _parse(*docs):
-    '''Parse one or more Onya Literate strings into a single graph (a merge workflow).'''
+    '''Parse one or more Onya Literate strings into a single graph (no merge).'''
     g = graph()
     for d in docs:
         LiterateParser().parse(d, g)
+    return g
+
+
+def _merged(*docs):
+    '''Parse then explicitly merge — the deliberate, on-demand union.'''
+    g = _parse(*docs)
+    g.merge()
     return g
 
 
@@ -44,11 +51,39 @@ def _edges(n, label):
     return list(n.traverse(label))
 
 
+# --- parsing does not merge ---------------------------------------------------------
+
+def test_parse_alone_does_not_merge():
+    '''Duplicates accumulate on parse; they collapse only on an explicit merge().'''
+    doc = DOCHEADER + '''
+# Chuks [Person]
+
+* age: 28
+'''
+    g = _parse(doc, doc)  # parsed twice, not merged
+    assert len(_props(g['http://e.o/Chuks'], 'https://schema.org/age')) == 2
+    g.merge()
+    assert len(_props(g['http://e.o/Chuks'], 'https://schema.org/age')) == 1
+
+
+def test_parse_merge_flag_is_convenience():
+    '''parse(..., merge=True) runs merge() once after parsing — a one-call shorthand.'''
+    doc = DOCHEADER + '''
+# Chuks [Person]
+
+* age: 28
+'''
+    g = graph()
+    LiterateParser().parse(doc, g)                 # first pass: accumulates
+    LiterateParser().parse(doc, g, merge=True)     # second pass + merge in one call
+    assert len(_props(g['http://e.o/Chuks'], 'https://schema.org/age')) == 1
+
+
 # --- Rule 2: anonymous assertions with equal skeletons merge -------------------------
 
-def test_identical_property_merges_within_one_document():
-    '''Two identical property lines in one document collapse to a single assertion.'''
-    g = _parse(DOCHEADER + '''
+def test_identical_property_merges():
+    '''Two identical property lines collapse to a single assertion under merge.'''
+    g = _merged(DOCHEADER + '''
 # Chuks [Person]
 
 * age: 28
@@ -57,20 +92,9 @@ def test_identical_property_merges_within_one_document():
     assert len(_props(g['http://e.o/Chuks'], 'https://schema.org/age')) == 1
 
 
-def test_parse_is_idempotent():
-    '''Parsing the same document twice into a graph yields one occurrence, not two.'''
-    doc = DOCHEADER + '''
-# Chuks [Person]
-
-* age: 28
-'''
-    g = _parse(doc, doc)
-    assert len(_props(g['http://e.o/Chuks'], 'https://schema.org/age')) == 1
-
-
 def test_distinct_values_stay_distinct():
-    '''Same label, different value: two genuine claims, both retained.'''
-    g = _parse(DOCHEADER + '''
+    '''Same label, different value: two genuine claims, both retained through merge.'''
+    g = _merged(DOCHEADER + '''
 # Chuks [Person]
 
 * nickname: Chuk
@@ -82,7 +106,7 @@ def test_distinct_values_stay_distinct():
 
 def test_merged_edges_union_their_nested_assertions():
     '''Two extractions of the same edge merge; their nested assertions are unioned.'''
-    g = _parse(
+    g = _merged(
         DOCHEADER + '''
 # Chuks [Person]
 
@@ -110,7 +134,7 @@ def test_nested_duplicate_merges_recursively():
 * knows -> Ify
   * since: 2018
 '''
-    g = _parse(doc, doc)
+    g = _merged(doc, doc)
     knows = _edges(g['http://e.o/Chuks'], 'https://schema.org/knows')
     assert len(knows) == 1
     assert len(list(knows[0].getprop('https://schema.org/since'))) == 1
@@ -118,7 +142,7 @@ def test_nested_duplicate_merges_recursively():
 
 def test_edges_to_different_targets_stay_distinct():
     '''An edge's target is part of its skeleton: different targets do not merge.'''
-    g = _parse(DOCHEADER + '''
+    g = _merged(DOCHEADER + '''
 # Chuks [Person]
 
 * knows -> Ify
@@ -131,7 +155,7 @@ def test_edges_to_different_targets_stay_distinct():
 
 def test_identified_and_anonymous_stay_distinct():
     '''Equal skeletons, but one carries an @id: they remain two distinct assertions.'''
-    g = _parse(DOCHEADER + '''
+    g = _merged(DOCHEADER + '''
 # Chuks [Person]
 
 * age: 28
@@ -178,7 +202,7 @@ def test_same_id_mismatched_skeleton_is_merge_error():
 
 def test_merge_is_idempotent_operation():
     '''Running merge twice changes nothing after the first pass.'''
-    g = _parse(DOCHEADER + '''
+    g = _merged(DOCHEADER + '''
 # Chuks [Person]
 
 * age: 28

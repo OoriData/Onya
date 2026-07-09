@@ -152,6 +152,46 @@ This example demonstrates:
 - Traversing the graph
 - Querying by type
 
+# Merging graphs
+
+Parsing several documents into one graph **accumulates** their assertions — it does
+*not* deduplicate. Merge is an explicit, on-demand operation you invoke when you want it,
+never something parsing does behind your back:
+
+```python
+from onya.graph import graph
+from onya.serial.literate import LiterateParser
+
+doc = '''\
+# @docheader
+
+* @document: http://e.o/doc
+* @nodebase: http://e.o/
+* @schema: https://schema.org/
+
+# Acme [Organization]
+
+* foundingDate: 1999
+'''
+
+g = graph()
+for _ in range(3):                      # e.g. the same fact extracted from three sources
+    LiterateParser().parse(doc, g)
+
+acme = g['http://e.o/Acme']
+len(list(acme.getprop('https://schema.org/foundingDate')))   # 3 — three distinct occurrences
+
+g.merge()                               # collapse duplicates, on demand
+len(list(acme.getprop('https://schema.org/foundingDate')))   # 1
+```
+
+**Until you call `g.merge()`, three parses mean three `foundingDate` assertions.** That is
+deliberate: merge follows the identity rules in SPEC § Identity and graph merge (anonymous
+assertions with equal skeletons collapse; an `@id` or a differing interpretation holds
+genuinely distinct occurrences apart), and applying those rules is the caller's choice, not
+a side effect of reading a file. Give two structurally identical assertions distinct `@id`s,
+or differing `@as` contracts, and `merge()` keeps them apart.
+
 # Data contracts: interpretations
 
 Every Onya value is a string. An **interpretation** is a recorded promise about
