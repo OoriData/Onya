@@ -47,6 +47,7 @@ dev = [
     "pytest",
     "pytest-mock",
     "pytest-asyncio",
+    "hypothesis",  # property-based tests for the interp `number` round-trip law (test-only)
 ]
 
 demo = [
@@ -59,7 +60,7 @@ Issues = 'https://github.com/OoriData/Onya/issues'
 
 [tool.pytest.ini_options]
 testpaths = ["test"]
-norecursedirs = ["scratch", "demo", ".git", ".venv", "dist", "build"]
+norecursedirs = ["scratch", "demo", ".git", ".venv", "dist", "build", ".hypothesis"]
 
 [tool.hatch.version]
 path = 'pylib/__about__.py'

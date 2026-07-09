@@ -21,8 +21,8 @@ from enum import Enum
 from amara import iri  # for absolutize & matches_uri_syntax
 
 from onya import I, ONYA_BASEIRI, ONYA_NULL, LITERAL
-from onya.graph import AssertionIdConflict
-from onya.terms import ONYA_DOCUMENT, ONYA_SOURCE_REL
+from onya.graph import AssertionIdConflict, edge as edge_cls
+from onya.terms import ONYA_DOCUMENT, ONYA_SOURCE_REL, ONYA_INTERP, RESERVED_INTERP_NAMES, INTERP_NONE
 from onya.util import join_namespace, namespace_for_curie
 
 from pyparsing import (
@@ -73,10 +73,69 @@ class doc_info:
     iris: dict = None       # iterpretations of untyped values (e.g. string vs list of strs vs IRI)
     text_refs: dict = None  # text references defined with :name = """content"""
     pending_edges: list = None  # deferred (edge, target_id) links resolved after all @ids are known
+    interp_defaults: dict = None  # docheader @interpretations: resolved label IRI -> interp IRI/_CANCEL
+    interp_defaults_raw: list = None  # raw (label_str, interp_raw) pairs, resolved after header parse
 
 
 class SchemaPrefixConflict(ValueError):
     '''Raised when ``schema:`` under ``@iri`` disagrees with top-level ``@schema``.'''
+
+
+class InterpretationParseError(ValueError):
+    '''
+    Raised for `@as` / `@interpretations` authoring errors: a second `@as` on one
+    property, or a repeated label within an `@interpretations` stanza. An *unknown*
+    interpretation name is never an error — the IRI is recorded and travels with the data
+    (see SPEC: @as).
+    '''
+
+
+# Sentinel for the reserved bare name `none`: it names no interpretation. Its only role is
+# to cancel a docheader default on one property (precedence: inline `@as` > docheader >
+# nothing); it is never stored, so a property resolving to `_CANCEL` keeps `interp` unset.
+class _Cancel:
+    def __repr__(self):
+        return '<interp none>'
+
+
+_CANCEL = _Cancel()
+
+
+def _resolve_interp(raw, doc: 'doc_info'):
+    '''
+    Resolve an interpretation name (the RHS of `@as` or an `@interpretations` line) to an
+    IRI, or to `_CANCEL` for the bare name `none`. Reserved bare names resolve into the
+    Onya interpretation vocabulary; everything else resolves through the document's IRI
+    machinery (absolute IRIs pass through, `@iri` abbreviations apply). An unknown name is
+    not an error — the IRI is recorded regardless.
+    '''
+    name = str(raw).strip()
+    if name == INTERP_NONE:
+        return _CANCEL
+    if name in RESERVED_INTERP_NAMES:
+        return ONYA_INTERP(name)
+    # Non-reserved: an IRI reference. base=None so absolute IRIs and CURIEs pass through
+    # without being joined to a node/schema base (an interpretation is not a schema label).
+    return expand_iri(name, None, doc=doc)
+
+
+def _resolve_interp_defaults(doc: 'doc_info') -> None:
+    '''
+    Resolve a docheader `@interpretations` stanza's raw (label, interp-name) pairs into
+    `doc.interp_defaults` (resolved label IRI -> interp IRI or `_CANCEL`). Labels resolve
+    against `@schema` exactly as assertion labels do; interp names resolve as `@as` does.
+    A repeated resolved label within the stanza is a parse error.
+    '''
+    if not doc.interp_defaults_raw:
+        return
+    doc.interp_defaults = {}
+    for label_raw, interp_raw in doc.interp_defaults_raw:
+        label_iri = expand_iri(label_raw, doc.schemabase, doc=doc)
+        if label_iri in doc.interp_defaults:
+            raise InterpretationParseError(
+                f'Duplicate label {str(label_iri)!r} in @interpretations stanza'
+            )
+        doc.interp_defaults[label_iri] = _resolve_interp(interp_raw, doc)
 
 
 class NamespaceBaseError(ValueError):
@@ -254,6 +313,12 @@ class LiterateParser:
             raise AssertionIdConflict(
                 f'Assertion id(s) collide with node id(s): {sorted(map(str, collisions))}'
             )
+
+        # Collapse duplicate assertions into a single occurrence per the SPEC identity
+        # rules. Parsing several overlapping documents into one graph is a merge (see the
+        # `parse` docstring); without this, duplicates would simply accumulate.
+        if hasattr(graph_obj, 'merge'):
+            graph_obj.merge()
 
         nodes_after = set(getattr(graph_obj, 'nodes', {}).keys()) if hasattr(graph_obj, 'nodes') else set(graph_obj)
         nodes_added = nodes_after - nodes_before
@@ -434,6 +499,7 @@ def _make_text_ref_def(string, location, tokens):
     '''
     return ('text_ref_def', tokens[0], tokens[1])
 
+
 prop.set_parse_action(_make_tree)
 prop_text_ref.set_parse_action(_make_text_ref_tree)
 edge.set_parse_action(_make_edge_tree)
@@ -598,6 +664,7 @@ def process_nodeblock(nodeblock, graph_obj, doc, parser: LiterateParser | None =
     # supports arbitrary nesting depth for properties, edges, and `@id` alike.
     stack = []
     saw_assertion = False
+    seen_as = set()  # id(parent) of assertions that already took an inline @as (dup -> parse error)
 
     for pi in props:
         if isinstance(pi, str):
@@ -637,10 +704,46 @@ def process_nodeblock(nodeblock, graph_obj, doc, parser: LiterateParser | None =
                         ) from e
             continue
 
+        # `@as` is a directive, not an assertion: like `@id`, it annotates its enclosing
+        # assertion (the current parent) rather than creating a property. It sets `interp`.
+        if pi.key == '@as':
+            if not stack:
+                # No enclosing assertion to annotate (node's own level): nothing to do.
+                continue
+            if isinstance(parent, edge_cls):
+                # An edge's value is a node, not a string, so there is nothing to interpret.
+                # Ignored with a warning; the syntax position is reserved (see SPEC: @as).
+                warnings.warn(
+                    '@as nested directly under an edge is ignored: an edge target is a node, '
+                    'not a string to interpret. The position is reserved for a future meaning.',
+                    stacklevel=2,
+                )
+                continue
+            if id(parent) in seen_as:
+                raise InterpretationParseError(
+                    'Duplicate @as on one property: a property has at most one interpretation'
+                )
+            seen_as.add(id(parent))
+            raw = pi.value.verbatim if pi.value else None
+            if raw is not None:
+                resolved = _resolve_interp(raw, doc)
+                # `none` cancels a docheader default; anything else sets the interp. Inline @as
+                # has already run *after* any docheader default was applied at creation, so it
+                # wins (precedence: inline @as > docheader > nothing).
+                parent.interp = None if resolved is _CANCEL else resolved
+            continue
+
         assertion_label = expand_iri(pi.key, doc.schemabase, doc=doc)
         created = _create_assertion(parent, pi, assertion_label, doc, parser)
         if created is not None:
             saw_assertion = True
+            # Desugar a docheader @interpretations default onto this property (any depth). Edges
+            # carry no interpretation; a `none` default (`_CANCEL`) leaves `interp` unset. A later
+            # inline @as on this same property overrides (handled above).
+            if not pi.is_edge and doc.interp_defaults:
+                default = doc.interp_defaults.get(assertion_label)
+                if default is not None and default is not _CANCEL:
+                    created.interp = default
             stack.append((pi.indent, created))
 
     # No assertion and no type: the block ensures the node id exists but otherwise makes no change
@@ -685,6 +788,13 @@ def process_docheader(props, graph_obj, doc, parser: LiterateParser | None = Non
             elif prop.key == '@iri':
                 # Prefix block only; nested lines supply mappings (not a document assertion)
                 pass
+            elif prop.key == '@interpretations':
+                # Interpretation defaults block; nested lines supply label -> interp mappings.
+                # Collected raw and resolved after the whole header is parsed (so @schema and
+                # @iri prefixes are known regardless of stanza order), then desugared onto each
+                # matching assertion's `interp` — the stanza itself is not part of the graph.
+                if doc.interp_defaults_raw is None:
+                    doc.interp_defaults_raw = []
             #If we have a document node to which to attach them, just attach all other properties
             else:
                 pending_doc_props.append(prop)
@@ -703,9 +813,17 @@ def process_docheader(props, graph_obj, doc, parser: LiterateParser | None = Non
                     doc.typebase = uri
                 else:
                     _register_iri_prefix(doc, k, uri)
+            elif current_outer_prop and current_outer_prop.key == '@interpretations':
+                # Defer resolution: labels resolve against @schema, which may be declared
+                # after this stanza. Keep raw (label, interp-name) pairs for now.
+                if prop.value is not None:
+                    if doc.interp_defaults_raw is None:
+                        doc.interp_defaults_raw = []
+                    doc.interp_defaults_raw.append((prop.key, prop.value.verbatim))
 
     _sync_schema_prefix(doc)
     _check_namespace_bases(doc, strict=bool(parser and parser.strict_namespace_bases))
+    _resolve_interp_defaults(doc)
 
     # Attach all non-reserved docheader assertions to the document node (if any)
     if doc.iri:

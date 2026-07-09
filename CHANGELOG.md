@@ -2,20 +2,33 @@
 
 Notable changes to Onya are recorded here. Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+<!-- 
 ## [Unreleased]
+ -->
+
+## [0.4.0] - 20260709: Graph merge. Data contract layers. Asserdion IDs. Empty node blocks. Multi-typed nodes.
 
 ### Added
 
+- **Data contract layers** — the value-level slice of "data contract": a named **interpretation** (a recorded promise about how a string value is meant to be read) attachable to any property, honored at boundaries a consumer chooses, never ambiently. The graph's string layer stays unconditionally valid: nothing here mutates a stored value, rejects a parse, or varies the model by installed plugins.
+  - **`@as` directive** (SPEC § `@as`): a nested `* @as: name` records an interpretation on its enclosing property (like `@id`, it creates no property). Valid on properties at any depth; on an edge it is ignored with a warning (an edge's value is a node). A duplicate `@as` on one property is a parse error. Reserved bare names `number`, `datetime`, `boolean`, `iri`, `text` resolve into the Onya interpretation vocabulary (`ONYA_INTERP(name)` in `onya.terms`); `none` cancels a default and is never stored; anything else resolves as an IRI (absolute IRIs pass through, `@iri` abbreviations apply). An **unknown interpretation is never a parse error** — the IRI travels with the data.
+  - **`@interpretations:` docheader stanza** mapping property labels to interpretation names (Versa lineage, minus Versa's parse-time coercion). It is pure sugar: at parse time each effective interpretation (precedence: inline `@as` > docheader default > nothing) is desugared onto the property's `interp`, and the stanza is discarded — the model carries only per-assertion contracts, so merge needs no header logic. A duplicate label in the stanza is a parse error. (The block header is written with a trailing colon, `@interpretations:`, like `@iri:`.)
+  - Assertions gain an `interp` slot (`None` by default), excluded from the merge skeleton like `id`. `add_property(label, value, interp=None)` grows the keyword. `write()` emits `@as` for every interpreted assertion at every depth, rendering reserved names back to bare form and IRIs through declared abbreviations (a pure model operation — the writer never consults a registry).
+  - **`onya.interp`** plugin layer (imported by nothing in the core model or parser): the `Interpretation` protocol (`check`/`to_python`/`from_python` with a round-trip law), `InterpretationRegistry` + module-level `DEFAULT`, the **Onya Lightweight Types** starter set (`number` — `int`/`Decimal`, never binary `float`; `datetime`; `boolean`; `iri`; `text`), and an application API honored on demand: `value_of` (strict/non-strict on unknown contracts), `set_value` (builder inverse), `validate` → `ValidationReport` (a failed check is a **finding**, never an exception), and `unknown_interps`. `InterpretationError` / `UnknownInterpretation` carry the value, interp IRI, and assertion.
 - Explicit **assertion identifiers** via the `@id` directive (SPEC § Assertion Identifiers). A nested `* @id: name` names an edge or property — resolved against `@nodebase`, sharing the node id space — rather than creating a property on it. Once named, the assertion is a valid edge target (`* disputes -> name` links to the assertion, not a fresh node), and references resolve regardless of declaration order. Identifiers must be unique within the graph: a duplicate `@id`, or an `@id` that collides with a node id, raises `AssertionIdConflict` (importable from `onya.serial.literate`). `write()` emits `@id` for identified assertions so they round-trip. Assertions gain an `id` attribute (`None` by default); graphs gain an `assertion_ids` map and `register_assertion_id()`.
 - Implicit `onya:Assertion` type (`ONYA_ASSERTION` in `onya.terms`) carried, read-only, by every assertion as `types` — uniform with `node.types` and the type check that interprets an edge target resolved via `assertion_ids` (node vs. identified assertion). `graph.match()`'s docstring documents the pattern.
 - Empty node blocks (a `#` header with no type and no assertions) now parse instead of raising, fixing a `write()`→`read()` round-trip failure for target-only nodes. By default this warns (`node block … is empty …`); silence it with `LiterateParser(warn_empty_blocks=False)`.
+
+### Changed
+
+- **Graph merge is now implemented** (SPEC § Identity and graph merge). `graph.merge()` collapses duplicate assertions into a single occurrence — anonymous assertions with equal skeletons union their nested assertions recursively; assertions sharing an `id` merge and must agree (`GraphMergeError`, importable from `onya.graph`); an identified assertion never merges with an anonymous one. The parser calls `merge()` at the end of every parse, so parsing overlapping documents into one graph is now an idempotent **union** rather than an accumulation of duplicates. The interpretation compatibility condition rides on this: equal-or-one-absent `interp` merge (one-sided adopts the present interp); differing `interp` on anonymous assertions blocks merge and the two stay distinct (not an error); differing non-absent `interp` on same-`id` assertions is a `GraphMergeError`.
 
 ### Fixed
 
 - **Multi-typed nodes now round-trip.** A node's types form a *set*, and `write()` already emitted them space-separated inside the header brackets (`# acme [Organization lv:Client]`), but the parser expanded the whole bracket group as one IRI — so any graph with a multi-typed node failed `parse → write → parse` and a hand-authored multi-type header raised an opaque error. The parser now tokenizes the bracket content into individual type refs (whitespace-separated, keeping `<…>` wrappers whole), expands each independently, and adds all to `node.types`. SPEC § Node Blocks documents the space-separated multi-type syntax.
 - Onya Literate now handles **arbitrary nesting depth** on both read and write. The parser tracks nesting with an indent stack (previously it collapsed everything below the first level onto that level), so a deeply-nested assertion attaches to its true parent and a nested `@id` names the assertion it is written under (not the top-level one). `write()` is now recursive and emits nested **edges** (previously dropped) and `@id` at every level, so nested assertions — including identified ones and nested n-ary/qualified structures — round-trip.
 
- ## [0.3.1] - 20260615: Strict namespacebases.
+## [0.3.1] - 20260615: Strict namespacebases.
 
 ### Added
 

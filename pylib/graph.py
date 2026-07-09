@@ -35,12 +35,24 @@ class AssertionIdConflict(ValueError):
     '''
 
 
+class GraphMergeError(ValueError):
+    '''
+    Raised when a graph merge violates an identity rule (see SPEC: Identity and graph
+    merge). Two assertions bearing the same explicit `id` must agree on their skeleton;
+    a mismatch — a differing (label, value/target), or a differing non-absent `interp` —
+    is a merge error, consistent with the skeleton-mismatch rule for identified
+    assertions.
+    '''
+
+
 class assertions_mixin:
     '''
     Mixin for objects that can have assertions (edges and properties)
     '''
-    def add_property(self, label: I | str, value: str):
+    def add_property(self, label: I | str, value: str, interp: I | str | None = None):
         p = property_(self, label, value)
+        if interp is not None:
+            p.interp = interp
         self.properties.add(p)
         return p
 
@@ -117,7 +129,7 @@ class assertion(assertions_mixin, ABC):
     The implicit type is class-level and shared: it is not stored per instance and is not
     serialized.
     '''
-    __slots__ = ['origin', 'label', 'id', 'properties', 'edges']
+    __slots__ = ['origin', 'label', 'id', 'interp', 'properties', 'edges']
 
     # Implicit, read-only type shared by all assertions (see class docstring). frozenset so
     # it cannot be mutated through an instance; not part of __slots__, so purely class-level.
@@ -127,6 +139,10 @@ class assertion(assertions_mixin, ABC):
         self.origin = origin
         self.label = label
         self.id: I | str | None = None  # optional explicit identifier; see SPEC: Assertion Identifiers
+        # Optional interpretation: a recorded contract about how this assertion's string value is
+        # meant to be read (see SPEC: Data contract layers). Excluded from the merge skeleton, like
+        # `id`; the model stores the IRI as data and never applies it. None means no contract.
+        self.interp: I | str | None = None
         self.properties: set['property_'] = set()
         self.edges: set['edge'] = set()
 
@@ -144,9 +160,19 @@ class property_(assertion):
     def __init__(self, origin: 'node | assertion', label: I | str, value: str):
         super().__init__(origin, label)
         self.value: str = value
-    
+
     def __repr__(self):
         return f'property_({self.label}={self.value!r})'
+
+    @property
+    def _skeleton(self):
+        '''
+        Identity core used for merge (see SPEC: Identity and graph merge). Excludes the
+        `id`, the `interp`, and nested assertions: annotating an assertion never changes
+        its identity. Origin is excluded because skeletons are only ever compared among
+        assertions that already share an origin (siblings under one container).
+        '''
+        return ('property', self.label, self.value)
 
 
 class edge(assertion):
@@ -163,11 +189,111 @@ class edge(assertion):
         target_id = self.target.id if self.target is not None else '?'
         return f'edge({self.label} -> {target_id})'
 
+    @property
+    def _skeleton(self):
+        '''
+        Identity core used for merge (see `property_._skeleton`). An edge's target is part
+        of its skeleton. An identified assertion target is keyed by object identity (it is
+        a distinct occurrence); an ordinary node target is keyed by its node id, so the
+        same edge extracted from two sources — pointing at the same node — merges.
+        '''
+        tgt = self.target
+        if isinstance(tgt, assertion):
+            target_key = ('assertion', id(tgt))
+        else:
+            target_key = ('node', tgt.id if tgt is not None else None)
+        return ('edge', self.label, target_key)
+
+
+def _interp_of(a: assertion):
+    '''
+    The assertion's interpretation, tolerant of the model surface predating the `interp`
+    slot (returns None when absent). Interpretations are excluded from the skeleton but
+    do gate merge — see `_mergeable`.
+    '''
+    return getattr(a, 'interp', None)
+
+
+def _mergeable(a: assertion, b: assertion) -> bool:
+    '''
+    Whether sibling assertions `a` and `b` denote the same assertion under the identity
+    rules (SPEC: Identity and graph merge). Assumes both are the same kind (properties or
+    edges). Raises `GraphMergeError` only for the same-id conflict cases; a plain
+    skeleton or interp difference between anonymous assertions is not an error, it just
+    means "do not merge".
+    '''
+    a_id, b_id = a.id, b.id
+    if a_id is not None or b_id is not None:
+        # Identity by explicit id. Rule 3: an identified assertion never merges with an
+        # anonymous one; two distinct ids are two distinct assertions.
+        if a_id != b_id:
+            return False
+        # Rule 1: same id => the same assertion, so skeletons MUST match.
+        if a._skeleton != b._skeleton:
+            raise GraphMergeError(
+                f'Assertions sharing id {a_id!r} have mismatched skeletons: '
+                f'{a._skeleton!r} vs {b._skeleton!r}'
+            )
+        # Same-id, differing non-absent interps: a merge error, parallel to skeleton
+        # mismatch — same declared occurrence cannot carry two contracts.
+        ai, bi = _interp_of(a), _interp_of(b)
+        if ai is not None and bi is not None and ai != bi:
+            raise GraphMergeError(
+                f'Assertions sharing id {a_id!r} carry differing interpretations: '
+                f'{ai!r} vs {bi!r}'
+            )
+        return True
+    # Rule 2: both anonymous. Equal skeletons merge, UNLESS both carry an interpretation
+    # and the interps differ — two parties attaching different contracts to the same
+    # words are making genuinely different claims, so the assertions stay distinct (no
+    # error). Equal-or-one-absent interps merge (the merged assertion adopts the present).
+    if a._skeleton != b._skeleton:
+        return False
+    ai, bi = _interp_of(a), _interp_of(b)
+    if ai is not None and bi is not None and ai != bi:
+        return False
+    return True
+
+
+def _absorb(keeper: assertion, other: assertion) -> None:
+    '''
+    Fold `other` into `keeper` (already found mergeable): the keeper adopts an interp it
+    lacks (one-sided adoption), then `other`'s nested assertions are reparented onto the
+    keeper. The caller re-merges the combined nested set.
+    '''
+    if _interp_of(keeper) is None and _interp_of(other) is not None:
+        keeper.interp = other.interp
+    for p in other.properties:
+        p.origin = keeper
+        keeper.properties.add(p)
+    for e in other.edges:
+        e.origin = keeper
+        keeper.edges.add(e)
+
+
+def _merge_container(container) -> None:
+    '''
+    Collapse the direct child assertions of `container` (a node or an assertion) into one
+    occurrence each per the identity rules, then recurse into the survivors. Idempotent:
+    re-running on an already-merged container is a no-op.
+    '''
+    for attr in ('properties', 'edges'):
+        kept: list = []
+        for a in list(getattr(container, attr)):
+            dest = next((k for k in kept if _mergeable(k, a)), None)
+            if dest is None:
+                kept.append(a)
+            elif dest is not a:
+                _absorb(dest, a)
+        setattr(container, attr, set(kept))
+        for a in kept:
+            _merge_container(a)
+
 
 class graph(MutableMapping):
     '''
     A collection of nodes managed and queried together.
-    
+
     This is the top-level container for an Onya graph.
     '''
     def __init__(self, nodes: list[node] = ()):
@@ -217,6 +343,20 @@ class graph(MutableMapping):
         assertion_obj.id = id_
         self.assertion_ids[id_] = assertion_obj
         return assertion_obj
+
+    def merge(self) -> 'graph':
+        '''
+        Normalize the graph by collapsing duplicate assertions into a single occurrence,
+        per the SPEC identity rules (idempotent graph union). Anonymous assertions with
+        equal skeletons merge, unioning their nested assertions recursively; assertions
+        sharing an explicit `id` merge and must agree (else `GraphMergeError`); an
+        identified assertion never merges with an anonymous one. The parser calls this at
+        the end of every parse, so parsing overlapping documents into one graph yields a
+        properly merged model rather than accumulating duplicates.
+        '''
+        for n in self.nodes.values():
+            _merge_container(n)
+        return self
 
     def typematch(self, types: I | str | set[I | str]) -> Iterator[node]:
         '''Find nodes with matching types'''

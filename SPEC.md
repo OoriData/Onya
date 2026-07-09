@@ -120,23 +120,125 @@ parse-time error for an `@id` to collide with a node ID, or with another asserti
 
 An assertion's **skeleton** is the triple of (origin, label, target) for an
 edge, or (origin, label, value) for a property. The skeleton excludes nested
-assertions and excludes the identifier itself: annotating an assertion never
-changes its identity.
+assertions, excludes the identifier itself, and excludes the interpretation
+(see § `@as`): annotating an assertion — with an `id` or an interpretation —
+never changes its identity.
 
 Under graph union:
 
 1. Two assertions bearing the same identifier are the same assertion. Their
    skeletons MUST match; a mismatch is a merge error. Their nested
-   assertions are unioned, recursively under these same rules.
+   assertions are unioned, recursively under these same rules. If both carry
+   an interpretation and the two differ, that too is a merge error — a single
+   declared occurrence cannot hold two contracts.
 2. Two anonymous assertions with equal skeletons merge into one; their
    nested assertions are unioned, recursively. (Origins compare under the
    merge: nested assertions whose parents have merged share an origin.)
+   **Interpretation compatibility condition:** if neither carries an
+   interpretation, or both carry the same one, they merge (the result keeps
+   that state); if exactly one carries an interpretation, they merge and the
+   result adopts it; if both carry an interpretation and they differ, they do
+   **not** merge — the two remain distinct assertions. This is not an error:
+   two sources attaching different contracts to the same string are making
+   genuinely different claims, and a merge must not quietly pick a winner. The
+   disagreement stays in the graph, visible to queries and validation.
 3. An identified assertion never merges with an anonymous one, even when
    skeletons match. An explicit identifier is a declaration that this
    occurrence is distinct.
 
 Rule 2 gives Onya idempotent merge ergonomics by default, desirable behavior when combining graphs extracted from overlapping sources.
 Rules 1 and 3 preserve occurrence semantics exactly where a modeler has declared they matter. Implementations MAY offer alternative merge policies (e.g., absorbing a structurally equal anonymous assertion into an identified one), but the rules above are the normative default.
+
+## Interpretations (data contract layers)
+
+Every Onya value is a string, and the string layer is unconditionally valid:
+every string is a welcome value, always. Above that foundation, an author MAY
+attach an **interpretation** to a property — a recorded promise about how its
+string value is meant to be read (as a number, a datetime, an IRI, and so on).
+This is the architecture Onya calls **data contract layers**, and an
+interpretation is a single contract at the *value level*.
+
+A note for readers arriving from data engineering, where "data contract" often
+also covers shape (required fields), ownership, and service guarantees: this
+layer is the value-level slice of that idea, and only that slice — shape,
+ownership, and SLAs would be further layers, deliberately not this one.
+
+An interpretation is named by an IRI, like everything else in Onya. Each
+assertion carries at most one, in an `interp` slot alongside `id`. The core
+model only *records* it; interpretations are **never applied during parsing**,
+even for validation. Checking or converting a value happens at a boundary a
+consumer chooses (see the Python library's `onya.interp`), never ambiently, so
+a graph parses, merges, and round-trips identically regardless of what software
+can honor its contracts. An interpretation whose IRI the local software has
+never heard of is not an error: the hint simply travels with the data.
+
+### `@as`
+
+`@as` is a **directive**, exactly like `@id`: nested one level under a
+property, it records that property's interpretation without creating a property
+on it.
+
+```
+# Chuks [Person]
+
+* age: 28
+  * @as: number
+* birthDate: 1998-03-15
+  * @as: datetime
+```
+
+Rules:
+
+- `@as` is valid nested under a **property** at any nesting depth (including a
+  property nested on an edge or another assertion). Nested directly under an
+  **edge** it is ignored with a parse warning — an edge's value is a node, not
+  a string, so there is nothing to interpret; the syntax position is reserved.
+- A property has at most one interpretation. A second `@as` on the same
+  property is a parse error.
+- The interpretation does not create a property: after parsing, the property's
+  value is still exactly the string `28`, with `interp` set.
+
+Interpretation names resolve in this order: the reserved bare names `number`,
+`datetime`, `boolean`, `iri`, `text` name the **Onya Lightweight Types** in the
+Onya interpretation vocabulary; `none` names *no* interpretation (its only role
+is to cancel a document-level default — see below — and it is never stored);
+anything else is an IRI reference resolved through the document's existing IRI
+machinery (absolute IRIs pass through, `@iri` abbreviations apply). It is never
+a parse error for the name to be unknown to local software.
+
+### `@interpretations`
+
+A docheader stanza names a default interpretation for every property with a
+given label in the document (Onya inherits the Versa shape, without Versa's
+eager parse-time coercion). The block header is written with a trailing colon,
+like the sibling `@iri:` block:
+
+```
+# @docheader
+
+* @schema: https://schema.org/
+* @interpretations:
+    * age: number
+    * birthDate: datetime
+```
+
+Each nested line maps a property label (resolved against `@schema` as assertion
+labels are) to an interpretation name (resolved as `@as` values are). The
+default applies to every matching property at any depth. A repeated label
+within one stanza is a parse error.
+
+**Precedence**, strongest to weakest, for any one property: an inline `@as` on
+the property (with `@as: none` cancelling); the document's `@interpretations`
+default for its label; nothing (`interp` unset).
+
+**Desugaring — the load-bearing rule.** Document-level declarations are
+serialization-layer sugar. At parse time each property's effective
+interpretation (after precedence) is written to that property's `interp`, and
+the stanza is then discarded — it is not part of the graph. So the model
+carries only per-assertion interpretations: queries, merge, and the
+interpretation layer never consult document context, and two documents with
+different `@interpretations` defaults merge with no rule for reconciling headers
+(there are no headers to reconcile).
 
 # Example: assertions in practice
 
