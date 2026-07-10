@@ -4,6 +4,9 @@ Notable changes to Onya are recorded here. Format based on [Keep a Changelog](ht
 
 ## [Unreleased]
 
+
+## [0.4.0] - 20260709: Graph merge. Data contract layers. Asserdion IDs. Empty node blocks. Multi-typed nodes. Persistence store.
+
 ### Added
 
 - **`onya.store` — pluggable persistence for Onya graphs.** A store is *correct* exactly when a round trip through it is indistinguishable from an in-memory graph union; storage is a peripheral (`onya.store` imports the core, never the reverse — enforced by a layering test). `connect(url)` dispatches on URL scheme through the `onya.store.backends` entry-point group; an unknown scheme raises `ValueError` naming the known schemes.
@@ -14,15 +17,6 @@ Notable changes to Onya are recorded here. Format based on [Keep a Changelog](ht
   - **Merge is the write semantics**: `put(merge=True)` unions with the stored graph under SPEC merge Rules 1–3 plus the interp amendment (including the ratified NULL-adopts ruling). The shared relational core (`onya.store._relational`) holds the dialect-parameterized DDL, **skeleton hash v1** (versioned in `onya_meta`; an unrecognized version refuses to open), and the write-path merge algorithm.
   - `onya.store.sync` — a minimal blocking facade (per-call `asyncio.run`, context-manager lifecycle) for scripts and REPL use.
 - **Model-level graph union** — `graph.union(other)` folds another graph in and normalizes per the SPEC identity rules (the operation every backend's `put(merge=True)` is defined against). `graph.validate_id_space()` surfaces a node-id vs assertion-`@id` collision as `AssertionIdConflict`.
-
-### Fixed
-
-- **Onya Literate serializer now round-trips awkward string values.** `write()` escapes `"`/`\` in quoted values and emits multi-line text as triple-quoted text references, so values with newlines, embedded quotes, or backslashes survive `write → read` byte-for-byte. Triple-quoted text-reference values now store their *inner* content (the `"""` delimiters were previously kept in the value, which was both surprising and un-round-trippable), and a quoted docheader property value is stored as a plain `str` (matching body assertions) rather than a `LITERAL`.
-
-## [0.4.0] - 20260709: Graph merge. Data contract layers. Asserdion IDs. Empty node blocks. Multi-typed nodes.
-
-### Added
-
 - **Data contract layers** — the value-level slice of "data contract": a named **interpretation** (a recorded promise about how a string value is meant to be read) attachable to any property, honored at boundaries a consumer chooses, never ambiently. The graph's string layer stays unconditionally valid: nothing here mutates a stored value, rejects a parse, or varies the model by installed plugins.
   - **`@as` directive** (SPEC § `@as`): a nested `* @as: name` records an interpretation on its enclosing property (like `@id`, it creates no property). Valid on properties at any depth; on an edge it is ignored with a warning (an edge's value is a node). A duplicate `@as` on one property is a parse error. Reserved bare names `number`, `datetime`, `boolean`, `iri`, `text` resolve into the Onya interpretation vocabulary (`ONYA_INTERP(name)` in `onya.terms`); `none` cancels a default and is never stored; anything else resolves as an IRI (absolute IRIs pass through, `@iri` abbreviations apply). An **unknown interpretation is never a parse error** — the IRI travels with the data.
   - **`@interpretations:` docheader stanza** mapping property labels to interpretation names (Versa lineage, minus Versa's parse-time coercion). It is pure sugar: at parse time each effective interpretation (precedence: inline `@as` > docheader default > nothing) is desugared onto the property's `interp`, and the stanza is discarded — the model carries only per-assertion contracts, so merge needs no header logic. A duplicate label in the stanza is a parse error. (The block header is written with a trailing colon, `@interpretations:`, like `@iri:`.)
@@ -38,6 +32,7 @@ Notable changes to Onya are recorded here. Format based on [Keep a Changelog](ht
 
 ### Fixed
 
+- **Onya Literate serializer now round-trips awkward string values.** `write()` escapes `"`/`\` in quoted values and emits multi-line text as triple-quoted text references, so values with newlines, embedded quotes, or backslashes survive `write → read` byte-for-byte. Triple-quoted text-reference values now store their *inner* content (the `"""` delimiters were previously kept in the value, which was both surprising and un-round-trippable), and a quoted docheader property value is stored as a plain `str` (matching body assertions) rather than a `LITERAL`.
 - **Multi-typed nodes now round-trip.** A node's types form a *set*, and `write()` already emitted them space-separated inside the header brackets (`# acme [Organization lv:Client]`), but the parser expanded the whole bracket group as one IRI — so any graph with a multi-typed node failed `parse → write → parse` and a hand-authored multi-type header raised an opaque error. The parser now tokenizes the bracket content into individual type refs (whitespace-separated, keeping `<…>` wrappers whole), expands each independently, and adds all to `node.types`. SPEC § Node Blocks documents the space-separated multi-type syntax.
 - Onya Literate now handles **arbitrary nesting depth** on both read and write. The parser tracks nesting with an indent stack (previously it collapsed everything below the first level onto that level), so a deeply-nested assertion attaches to its true parent and a nested `@id` names the assertion it is written under (not the top-level one). `write()` is now recursive and emits nested **edges** (previously dropped) and `@id` at every level, so nested assertions — including identified ones and nested n-ary/qualified structures — round-trip.
 
