@@ -115,10 +115,14 @@ def ddl_statements(d: Dialect) -> list[str]:
         " CHECK ((kind = 'E' AND target_ident IS NOT NULL AND value IS NULL)"
         "     OR (kind = 'P' AND value IS NOT NULL AND target_ident IS NULL)))",
 
+        # source/target_ident cascade too: deleting a graph cascades to onya_ident, and
+        # Postgres checks this FK before the row's assertion_pk cascade clears it (SQLite
+        # happens to order the cascades the other way). Cascading from every parent keeps the
+        # companion table consistent regardless of which cascade path fires first.
         'CREATE TABLE IF NOT EXISTS onya_edge_hop ('
         ' assertion_pk BIGINT PRIMARY KEY REFERENCES onya_assertion(assertion_pk) ON DELETE CASCADE,'
-        ' source_ident BIGINT NOT NULL REFERENCES onya_ident(ident_pk),'
-        ' target_ident BIGINT NOT NULL REFERENCES onya_ident(ident_pk),'
+        ' source_ident BIGINT NOT NULL REFERENCES onya_ident(ident_pk) ON DELETE CASCADE,'
+        ' target_ident BIGINT NOT NULL REFERENCES onya_ident(ident_pk) ON DELETE CASCADE,'
         ' label TEXT NOT NULL)',
 
         'CREATE INDEX IF NOT EXISTS onya_assertion_origin_node'
