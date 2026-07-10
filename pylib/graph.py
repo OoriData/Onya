@@ -391,6 +391,98 @@ class graph(MutableMapping):
             _merge_container(n)
         return self
 
+    def _iter_assertions(self) -> Iterator[assertion]:
+        '''Yield every assertion in the graph, recursively (properties then edges).'''
+        def rec(container):
+            for a in list(container.properties):
+                yield a
+                yield from rec(a)
+            for a in list(container.edges):
+                yield a
+                yield from rec(a)
+        for n in self.nodes.values():
+            yield from rec(n)
+
+    def _rebind_node_targets(self) -> None:
+        '''
+        Point every node-valued edge target at this graph's canonical node object for that
+        id. After a `union`, edges brought in from the other graph still reference the other
+        graph's node objects; rebinding keeps traversal and `reverse()` consistent. Edge
+        targets that are identified assertions are handled in `_reindex_assertion_ids`.
+        '''
+        for a in self._iter_assertions():
+            if isinstance(a, edge):
+                tgt = a.target
+                if tgt is not None and not isinstance(tgt, assertion):
+                    canon = self.nodes.get(tgt.id)
+                    if canon is not None:
+                        a.target = canon
+
+    def _reindex_assertion_ids(self) -> None:
+        '''
+        Rebuild `assertion_ids` from the assertions that actually survive in the graph, then
+        rebind any edge pointing at an identified assertion to the surviving occurrence. A
+        `merge()` collapses same-id duplicates onto one keeper; this makes the id index and
+        edge targets agree with that keeper.
+        '''
+        surviving: dict[I | str, assertion] = {}
+        for a in self._iter_assertions():
+            if a.id is not None:
+                surviving[a.id] = a
+        self.assertion_ids = surviving
+        for a in self._iter_assertions():
+            if isinstance(a, edge) and isinstance(a.target, assertion) and a.target.id is not None:
+                canon = surviving.get(a.target.id)
+                if canon is not None:
+                    a.target = canon
+
+    def validate_id_space(self) -> None:
+        '''
+        Enforce the shared identifier space (SPEC: Assertion Identifiers): no explicit
+        assertion `@id` may equal a node id. Raises `AssertionIdConflict` listing the
+        offending ids. The parser checks this at parse time; the store write path calls it
+        so a graph assembled programmatically (or by `union`) cannot persist a collision.
+        '''
+        collisions = set(self.assertion_ids) & set(self.nodes)
+        if collisions:
+            raise AssertionIdConflict(
+                f'Assertion id(s) collide with node id(s): {sorted(map(str, collisions))}'
+            )
+
+    def union(self, other: 'graph') -> 'graph':
+        '''
+        Merge `other` into this graph, in place, and normalize per the SPEC identity rules —
+        the model-level graph union that every store backend's ``put(merge=True)`` is defined
+        against. Nodes present in both graphs combine (types unioned, assertions accumulated);
+        nodes only in `other` are adopted. Explicit assertion ids carry over. Node-valued
+        edge targets are then rebound to this graph's canonical node objects and the combined
+        assertions are collapsed by `merge()`, so the result is observationally identical to
+        parsing both sources into one graph and calling `merge()`.
+
+        Raises `GraphMergeError` on a Rule 1 violation (same `@id`, mismatched skeleton or
+        conflicting non-absent interp) and `AssertionIdConflict` on a node-id vs
+        assertion-id collision.
+        '''
+        for nid, onode in other.nodes.items():
+            keeper = self.nodes.get(nid)
+            if keeper is None:
+                self.nodes[nid] = onode
+                continue
+            keeper.types |= set(onode.types)
+            for p in list(onode.properties):
+                p.origin = keeper
+                keeper.properties.add(p)
+            for e in list(onode.edges):
+                e.origin = keeper
+                keeper.edges.add(e)
+        for aid, a in other.assertion_ids.items():
+            self.assertion_ids.setdefault(aid, a)
+        self._rebind_node_targets()
+        self.validate_id_space()
+        self.merge()
+        self._reindex_assertion_ids()
+        return self
+
     def typematch(self, types: I | str | set[I | str]) -> Iterator[node]:
         '''Find nodes with matching types'''
         if isinstance(types, (str, I)):

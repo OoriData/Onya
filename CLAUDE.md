@@ -23,3 +23,6 @@ Skills are in `.claude/skills/`. Load a skill's `SKILL.md` when the task matches
 ## Local overrides
 
 <!-- Add repo-specific instructions below. This section is never overwritten by `oori-sync-repo`. -->
+
+- **ALWAYS load the `python` skill before touching anything under `pylib/`.** Do this first, before any edit or test run — no exceptions.
+- **NEVER use editable installs** (`pip install -e`, hatch dev-mode, `sys.path` hacks). The running interpreter imports the copy in `.venv/.../site-packages/onya/`, so edits to `pylib/*.py` are invisible until reinstalled. After any change under `pylib/`, run `uv pip install -U .` before running tests or the CLI.

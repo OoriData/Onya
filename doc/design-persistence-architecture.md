@@ -278,8 +278,16 @@ CREATE INDEX ON onya_assertion (graph_pk, origin_node, label);
 CREATE INDEX ON onya_assertion (graph_pk, origin_assertion, label);
 CREATE INDEX ON onya_assertion (graph_pk, target_ident);   -- reverse traversal
 CREATE UNIQUE INDEX onya_assertion_skeleton
-    ON onya_assertion (graph_pk, skeleton_hash, COALESCE(interp, ''));
+    ON onya_assertion (graph_pk, skeleton_hash, COALESCE(interp, ''))
+    WHERE ident_pk IS NULL;   -- anonymous rows only; see below
 ```
+
+The skeleton uniqueness index is **partial** — scoped to anonymous rows
+(`ident_pk IS NULL`). Rule 3 lets an identified assertion coexist with an
+anonymous one of the same skeleton *and* interp, so an unpartitioned unique
+index would wrongly collide the two. Uniqueness is a concurrency backstop for
+anonymous merge only; identified assertions are policed by their own
+`ident_pk UNIQUE`. (Both PostgreSQL and SQLite support partial indexes.)
 
 Nested assertions are the self-reference `origin_assertion` — the
 model's natural recursion, kept as adjacency rather than flattened,
@@ -338,26 +346,42 @@ with a rebuild.
 
 The interp merge amendment
 (design-interpretations-literate.md § Merge semantics) means anonymous
-merge is *not* a bare `ON CONFLICT DO NOTHING`. For an incoming anonymous
-assertion, within one transaction:
+merge is *not* a bare `ON CONFLICT DO NOTHING`. The amendment includes the
+ratified **NULL-adopts ruling**: a contract-free (interp-absent) incoming
+assertion whose skeleton is already represented by *two or more differing
+contracts* can pick no side, so it adopts nothing and adds nothing — it is
+dropped. The write path must reproduce the model's group semantics
+(`onya.graph`), applied incrementally. Because the partial unique index
+guarantees at most one anonymous row per distinct interp (including at most one
+NULL row), the case analysis for an incoming anonymous assertion, within one
+transaction, is:
 
 ```
 rows := SELECT ... WHERE graph_pk = $g AND skeleton_hash = $h FOR UPDATE
         (excluding identified rows — Rule 3)
-case rows where interp matches incoming, or incoming interp is NULL
-        and a row exists                      → merged; recurse into children
-case incoming has interp X, a row has interp NULL
-                                              → UPDATE that row SET interp = X   (one-sided adopts)
-case incoming has interp X, rows exist but none NULL, none X
-                                              → INSERT new row                    (conflicting stays distinct)
-case no rows                                  → INSERT
+
+incoming interp is X (non-NULL):
+    a row has interp X                        → merge; recurse into children
+    else a row has interp NULL                → UPDATE that row SET interp = X   (one-sided adopts)
+    else                                      → INSERT new row                   (conflicting stays distinct)
+
+incoming interp is NULL:
+    a row has interp NULL                     → merge; recurse into children
+    else exactly one contract row present     → merge into it                    (NULL adopts the sole contract)
+    else two or more differing contracts      → DROP                             (NULL-adopts-nothing ruling)
+    else (no rows)                            → INSERT new NULL row
 ```
+
+This is order-independent and idempotent, matching the batch group logic in the
+model. (An earlier draft of this section treated "incoming interp NULL and a row
+exists" as an unconditional merge; that predated the NULL-adopts ruling and is
+superseded above — "merge semantics are the write semantics.")
 
 For identified assertions: match on `ident_pk`; skeleton mismatch or
 conflicting non-absent interp is a merge error, per Rule 1 and its interp
-parallel. The unique index over `(graph_pk, skeleton_hash,
-COALESCE(interp, ''))` is the concurrency backstop under serialization
-anomalies, not the mechanism.
+parallel. The **partial** unique index over `(graph_pk, skeleton_hash,
+COALESCE(interp, '')) WHERE ident_pk IS NULL` is the concurrency backstop for
+anonymous merge under serialization anomalies, not the mechanism.
 
 Batch shape: the driver loads graphs in topological order (nodes, then
 assertions by nesting depth), using `executemany`/`COPY` per stratum;

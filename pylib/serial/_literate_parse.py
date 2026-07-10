@@ -421,9 +421,12 @@ CURIE_LABEL     = Regex(r'[A-Za-z][\w.\-]*:[A-Za-z][\w.\-]*')
 # EXPLICIT_IRI    = QuotedString('<', end_quote_char='>')
 QUOTED_STRING   = MatchFirst((QuotedString('"', esc_char='\\'), QuotedString("'", esc_char='\\'))) \
                     .set_parse_action(literal_parse_action)
-# Triple-quoted strings for text references - handle multiline properly
+# Triple-quoted strings for text references - handle multiline properly. Store the *inner*
+# content (delimiters stripped): the value is the text, not `"""text"""`. Keeping the
+# delimiters was a latent bug that also made the value un-round-trippable (a serializer
+# cannot re-emit a value that embeds its own delimiters).
 TRIPLE_QUOTED_STRING = Regex(r'"""([^"]*(?:"[^"]*)*?)"""', re.DOTALL) \
-                        .set_parse_action(lambda tokens: LITERAL(tokens[0]))
+                        .set_parse_action(lambda tokens: LITERAL(tokens[0][3:-3]))
 # See: https://rdflib.readthedocs.io/en/stable/_modules/rdflib/plugins/sparql/parser.html
 IRIREF          = Regex(r'[^<>"{}|^`\\\[\]%s]*' % ''.join(
                         '\\x%02X' % i for i in range(33)
@@ -845,5 +848,7 @@ def process_docheader(props, graph_obj, doc, parser: LiterateParser | None = Non
             if prop.value is None:
                 continue
             fullprop = expand_iri(prop.key, doc.schemabase, doc=doc)
-            doc_node.add_property(fullprop, prop.value.verbatim)
+            # Core model property values are strings; str-ify so a quoted docheader value
+            # (parsed as LITERAL) matches the plain-str form body assertions already store.
+            doc_node.add_property(fullprop, str(prop.value.verbatim))
     return

@@ -76,7 +76,10 @@ def _format_value(val, nodebase: str | None, prefixes: dict[str, str]) -> str:
         return compact_iri(str(val), prefixes)
     s = str(val)
     if re.search(r'[\s:"\\]', s) or s == '':
-        return f'"{s}"'
+        # Quote and escape so the parser's QuotedString (esc_char='\\') recovers the value
+        # byte-for-byte. Multi-line values never reach here — they go via a text reference.
+        esc = s.replace('\\', '\\\\').replace('"', '\\"')
+        return f'"{esc}"'
     return s
 
 
@@ -95,13 +98,29 @@ def _format_interp(interp, prefixes: dict[str, str]) -> str:
     return compact_iri(s, prefixes)
 
 
-def _write_assertion(assertion, is_edge: bool, out, indent: str, nodebase, prefixes, bracket_curie: bool):
+def _write_prop_line(out, indent: str, label: str, value, nodebase, prefixes, textrefs: list) -> None:
+    '''
+    Write a property's ``* label: value`` line. A multi-line string value is emitted as a
+    text reference (``* label:: _ltN``) with its content collected into ``textrefs`` for a
+    trailing ``:_ltN = """..."""`` definition — the only value form the parser reads back
+    across line boundaries.
+    '''
+    if isinstance(value, str) and '\n' in value:
+        name = f'lt{len(textrefs)}'  # text-ref names must start with a letter (parser IDENT)
+        textrefs.append((name, value))
+        out.write(f'{indent}* {label}:: {name}\n')
+    else:
+        out.write(f'{indent}* {label}: {_format_value(value, nodebase, prefixes)}\n')
+
+
+def _write_assertion(assertion, is_edge: bool, out, indent: str, nodebase, prefixes, bracket_curie: bool,
+                     textrefs: list):
     '''Emit one assertion line, its ``@id`` / ``@as`` (if any), then recurse into its assertions.'''
     label = _format_label(assertion.label, prefixes, bracket_curie=bracket_curie)
     if is_edge:
         out.write(f'{indent}* {label} -> {shorten_node_id(assertion.target.id, nodebase)}\n')
     else:
-        out.write(f'{indent}* {label}: {_format_value(assertion.value, nodebase, prefixes)}\n')
+        _write_prop_line(out, indent, label, assertion.value, nodebase, prefixes, textrefs)
     child_indent = indent + '    '
     if assertion.id is not None:
         out.write(f'{child_indent}* @id: {shorten_node_id(assertion.id, nodebase)}\n')
@@ -110,14 +129,14 @@ def _write_assertion(assertion, is_edge: bool, out, indent: str, nodebase, prefi
     if getattr(assertion, 'interp', None) is not None:
         out.write(f'{child_indent}* @as: {_format_interp(assertion.interp, prefixes)}\n')
     # Recurse so nested properties AND nested edges round-trip at any depth
-    _write_assertions(assertion, out, child_indent, nodebase, prefixes, bracket_curie)
+    _write_assertions(assertion, out, child_indent, nodebase, prefixes, bracket_curie, textrefs)
 
 
-def _write_assertions(container, out, indent: str, nodebase, prefixes, bracket_curie: bool):
+def _write_assertions(container, out, indent: str, nodebase, prefixes, bracket_curie: bool, textrefs: list):
     for prop in sorted(container.properties, key=lambda p: str(p.label)):
-        _write_assertion(prop, False, out, indent, nodebase, prefixes, bracket_curie)
+        _write_assertion(prop, False, out, indent, nodebase, prefixes, bracket_curie, textrefs)
     for edge in sorted(container.edges, key=lambda e: str(e.label)):
-        _write_assertion(edge, True, out, indent, nodebase, prefixes, bracket_curie)
+        _write_assertion(edge, True, out, indent, nodebase, prefixes, bracket_curie, textrefs)
 
 
 def write(
@@ -143,6 +162,10 @@ def write(
     '''
     all_prefixes = _prefixes_for_write(schema, prefixes)
     document_s = str(document) if document else None
+    # Collected multi-line property values, emitted as `:name = """..."""` text-ref
+    # definitions after the node blocks (the parser gathers these in a first pass, so their
+    # position relative to the referencing lines does not matter).
+    textrefs: list = []
 
     if document or nodebase or schema or prefixes:
         out.write('# @docheader\n\n')
@@ -161,9 +184,7 @@ def write(
             doc_node = model.nodes[document_s]
             for prop in sorted(doc_node.properties, key=lambda p: str(p.label)):
                 key = _format_label(prop.label, all_prefixes, bracket_curie=bracket_curie)
-                out.write(
-                    f'* {key}: {_format_value(prop.value, nodebase, all_prefixes)}\n'
-                )
+                _write_prop_line(out, '', key, prop.value, nodebase, all_prefixes, textrefs)
         out.write('\n')
 
     for nid in sorted(model.nodes.keys(), key=str):
@@ -181,8 +202,12 @@ def write(
             out.write(f'# {header_id} [{type_str}]\n\n')
         else:
             out.write(f'# {header_id}\n\n')
-        _write_assertions(node, out, '', nodebase, all_prefixes, bracket_curie)
+        _write_assertions(node, out, '', nodebase, all_prefixes, bracket_curie, textrefs)
         out.write('\n')
+
+    # Trailing text-reference definitions for any multi-line values emitted above.
+    for name, value in textrefs:
+        out.write(f':{name} = """{value}"""\n')
     return
 
 
