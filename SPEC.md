@@ -142,6 +142,14 @@ Under graph union:
    two sources attaching different contracts to the same string are making
    genuinely different claims, and a merge must not quietly pick a winner. The
    disagreement stays in the graph, visible to queries and validation.
+   Because a union collapses a whole group of same-skeleton assertions at once,
+   the pairwise conditions resolve per skeleton to: one merged assertion per
+   distinct interpretation. An interpretation-free assertion adopts a
+   contract (one-sided merge) only when that contract is unambiguous — the group
+   holds exactly one. If the group already holds two or more differing
+   contracts, an interpretation-free assertion merges into none of them and adds
+   no row: its skeleton is already represented and it cannot non-arbitrarily
+   pick a side. This keeps union order-independent.
 3. An identified assertion never merges with an anonymous one, even when
    skeletons match. An explicit identifier is a declaration that this
    occurrence is distinct.

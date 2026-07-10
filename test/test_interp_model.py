@@ -107,6 +107,28 @@ def test_same_id_conflicting_interps_is_merge_error():
         g.merge()
 
 
+def test_interp_free_row_drops_against_a_standing_conflict():
+    '''An interp-free row that matches two already-conflicting contracts merges into neither.
+
+    Ratified ruling: with X and Y already distinct on the same skeleton, a contract-free
+    claim cannot pick a side, its skeleton is already represented, so it adds nothing — no
+    third row, and it does not silently attach (with its nested assertions) to X or Y.
+    '''
+    g = graph()
+    n = g.node(I('http://e.o/N'))
+    n.add_property(AGE, '1999', interp=NUMBER)
+    n.add_property(AGE, '1999', interp=DATETIME)
+    bare = n.add_property(AGE, '1999')            # interp-free duplicate of the conflicted skeleton
+    bare.add_property(I('https://schema.org/prov'), 'from-bare')
+
+    g.merge()
+    survivors = _props(n, AGE)
+    assert len(survivors) == 2
+    assert {p.interp for p in survivors} == {NUMBER, DATETIME}
+    # The dropped NULL's nested prov attached to neither contract row (no arbitrary winner).
+    assert all(list(p.getprop('https://schema.org/prov')) == [] for p in survivors)
+
+
 def test_same_id_one_absent_interp_adopts():
     '''Same id, one interp absent: merge succeeds and adopts the present interp.'''
     g = graph()

@@ -166,6 +166,27 @@ skeletons merge) is amended with a compatibility condition:
 - If both have `interp` and they differ: **do not merge** — the two
   remain distinct assertions. This is not an error; two sources attaching different contracts to the same string are making genuinely different claims, and a merge must not quietly pick a winner. The disagreement stays in the graph, visible to queries and to `validate()`.
 
+The three bullets above compare two assertions, but merge operates on a whole
+group of same-skeleton anonymous assertions at once, which raises a case the
+pairwise reading leaves ambiguous:
+
+- **An interp-free row against a standing conflict.** When a skeleton already
+  carries two or more *differing* contracts (a legitimate post-conflict state —
+  e.g. `founded: 1999` asserted as `number` by one source and as `datetime` by
+  another), and a third, **interp-free** row with that same skeleton arrives, it
+  merges into **neither**, and no new row is added. Rationale: its skeleton is
+  already represented, and a contract-free claim cannot non-arbitrarily pick
+  between the standing contracts, so it adds nothing. (Merging it into whichever
+  row set-iteration happens to reach first — the naive pairwise outcome — would
+  attach its nested assertions to an arbitrary contract; refused.) A dropped
+  interp-free row's own nested assertions go with it, since there is no
+  non-arbitrary contract row to receive them. Equivalently: an interp-free row
+  adopts a contract (one-sided merge) only when the target contract is
+  *unambiguous* — the group holds exactly one.
+
+This makes merge order-independent: the surviving set for a skeleton group is
+always one row per distinct non-absent `interp`, plus a single interp-free row
+only when the group holds no contract at all.
 
 Rule 1 (same explicit `id` ⇒ same assertion) gains the parallel condition:
 differing non-absent `interp` values on same-id assertions is a merge

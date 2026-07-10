@@ -205,52 +205,11 @@ class edge(assertion):
         return ('edge', self.label, target_key)
 
 
-def _mergeable(a: assertion, b: assertion) -> bool:
-    '''
-    Whether sibling assertions `a` and `b` denote the same assertion under the identity
-    rules (SPEC: Identity and graph merge). Assumes both are the same kind (properties or
-    edges). Raises `GraphMergeError` only for the same-id conflict cases; a plain
-    skeleton or interp difference between anonymous assertions is not an error, it just
-    means "do not merge".
-    '''
-    a_id, b_id = a.id, b.id
-    if a_id is not None or b_id is not None:
-        # Identity by explicit id. Rule 3: an identified assertion never merges with an
-        # anonymous one; two distinct ids are two distinct assertions.
-        if a_id != b_id:
-            return False
-        # Rule 1: same id => the same assertion, so skeletons MUST match.
-        if a._skeleton != b._skeleton:
-            raise GraphMergeError(
-                f'Assertions sharing id {a_id!r} have mismatched skeletons: '
-                f'{a._skeleton!r} vs {b._skeleton!r}'
-            )
-        # Same-id, differing non-absent interps: a merge error, parallel to skeleton
-        # mismatch — same declared occurrence cannot carry two contracts.
-        ai, bi = a.interp, b.interp
-        if ai is not None and bi is not None and ai != bi:
-            raise GraphMergeError(
-                f'Assertions sharing id {a_id!r} carry differing interpretations: '
-                f'{ai!r} vs {bi!r}'
-            )
-        return True
-    # Rule 2: both anonymous. Equal skeletons merge, UNLESS both carry an interpretation
-    # and the interps differ — two parties attaching different contracts to the same
-    # words are making genuinely different claims, so the assertions stay distinct (no
-    # error). Equal-or-one-absent interps merge (the merged assertion adopts the present).
-    if a._skeleton != b._skeleton:
-        return False
-    ai, bi = a.interp, b.interp
-    if ai is not None and bi is not None and ai != bi:
-        return False
-    return True
-
-
 def _absorb(keeper: assertion, other: assertion) -> None:
     '''
-    Fold `other` into `keeper` (already found mergeable): the keeper adopts an interp it
-    lacks (one-sided adoption), then `other`'s nested assertions are reparented onto the
-    keeper. The caller re-merges the combined nested set.
+    Fold `other` into `keeper` (already found to be the same assertion): the keeper adopts
+    an interp it lacks (one-sided adoption), then `other`'s nested assertions are reparented
+    onto the keeper. The caller re-merges the combined nested set.
     '''
     if keeper.interp is None and other.interp is not None:
         keeper.interp = other.interp
@@ -262,20 +221,101 @@ def _absorb(keeper: assertion, other: assertion) -> None:
         keeper.edges.add(e)
 
 
+def _merge_identified(rows: list) -> list:
+    '''
+    Collapse identified assertions (Rule 1): rows sharing an explicit id are the same
+    assertion, so their skeletons MUST match and their interps must be compatible
+    (equal-or-one-absent) — a mismatch is a `GraphMergeError`. Nested assertions are
+    unioned. Rows with distinct ids stay distinct. (Rule 3 — identified never merges with
+    anonymous — falls out because anonymous rows are grouped separately.)
+    '''
+    keepers: dict = {}
+    order: list = []
+    for a in rows:
+        keeper = keepers.get(a.id)
+        if keeper is None:
+            keepers[a.id] = a
+            order.append(a.id)
+            continue
+        if keeper._skeleton != a._skeleton:
+            raise GraphMergeError(
+                f'Assertions sharing id {a.id!r} have mismatched skeletons: '
+                f'{keeper._skeleton!r} vs {a._skeleton!r}'
+            )
+        ki, ai = keeper.interp, a.interp
+        if ki is not None and ai is not None and ki != ai:
+            raise GraphMergeError(
+                f'Assertions sharing id {a.id!r} carry differing interpretations: '
+                f'{ki!r} vs {ai!r}'
+            )
+        _absorb(keeper, a)
+    return [keepers[i] for i in order]
+
+
+def _merge_anonymous_skeleton_group(rows: list) -> list:
+    '''
+    Collapse anonymous assertions that share a skeleton (Rule 2), partitioned by interp:
+
+    - Rows with the same non-absent interp merge into one (nested unioned).
+    - Rows carrying *different* non-absent interps stay distinct — two parties attaching
+      different contracts to the same words make genuinely different claims (not an error).
+    - Interp-free (NULL) rows: if the group has no contract, they merge into a single NULL
+      row; if it has exactly one contract, they merge into it (one-sided adoption). But if
+      the group already holds two or more *differing* contracts, a NULL row merges into
+      **neither** and is dropped — its skeleton is already represented and a contract-free
+      claim, unable to pick a side, adds nothing. (Ratified ruling; see the interpretation
+      design docs. A dropped NULL's own nested assertions go with it, since there is no
+      non-arbitrary contract row to attach them to.)
+    '''
+    by_interp: dict = {}
+    interp_order: list = []
+    nulls: list = []
+    for r in rows:
+        if r.interp is None:
+            nulls.append(r)
+            continue
+        keeper = by_interp.get(r.interp)
+        if keeper is None:
+            by_interp[r.interp] = r
+            interp_order.append(r.interp)
+        else:
+            _absorb(keeper, r)
+    survivors = [by_interp[i] for i in interp_order]
+
+    if not survivors:  # no contract in the group: all NULLs are one claim
+        keeper = nulls[0]
+        for other in nulls[1:]:
+            _absorb(keeper, other)
+        return [keeper]
+    if len(survivors) == 1:  # a single contract: NULLs adopt it (one-sided)
+        keeper = survivors[0]
+        for other in nulls:
+            _absorb(keeper, other)
+        return survivors
+    # Two or more differing contracts already present: a NULL can pick no side, so it is
+    # dropped as redundant (skeleton already represented).
+    return survivors
+
+
 def _merge_container(container) -> None:
     '''
     Collapse the direct child assertions of `container` (a node or an assertion) into one
-    occurrence each per the identity rules, then recurse into the survivors. Idempotent:
-    re-running on an already-merged container is a no-op.
+    occurrence each per the SPEC identity rules, then recurse into the survivors.
+    Order-independent and idempotent: re-running on an already-merged container is a no-op.
     '''
     for attr in ('properties', 'edges'):
-        kept: list = []
-        for a in list(getattr(container, attr)):
-            dest = next((k for k in kept if _mergeable(k, a)), None)
-            if dest is None:
-                kept.append(a)
-            elif dest is not a:
-                _absorb(dest, a)
+        identified: list = []
+        anon_by_skeleton: dict = {}
+        for a in getattr(container, attr):
+            if a.id is not None:
+                identified.append(a)
+            else:
+                anon_by_skeleton.setdefault(a._skeleton, []).append(a)
+
+        kept = _merge_identified(identified)
+        for group in anon_by_skeleton.values():
+            kept.extend(_merge_anonymous_skeleton_group(group))
+
         setattr(container, attr, set(kept))
         for a in kept:
             _merge_container(a)
