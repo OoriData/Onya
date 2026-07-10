@@ -14,7 +14,9 @@ import sys
 from onya import I
 from onya.util import compact_iri, namespace_for_curie, shorten_node_id
 from onya.graph import AssertionIdConflict
+from onya.terms import ONYA_INTERP, RESERVED_INTERP_NAMES
 from onya.serial._literate_parse import (
+    InterpretationParseError,
     LiterateParser,
     NamespaceBaseError,
     ParseResult,
@@ -29,6 +31,7 @@ __all__ = [
     'ParseResult',
     'SchemaPrefixConflict',
     'NamespaceBaseError',
+    'InterpretationParseError',
     'AssertionIdConflict',
 ]
 
@@ -77,8 +80,23 @@ def _format_value(val, nodebase: str | None, prefixes: dict[str, str]) -> str:
     return s
 
 
+def _format_interp(interp, prefixes: dict[str, str]) -> str:
+    '''
+    Render an interpretation IRI back to `@as` name form: a reserved bare name for a
+    Lightweight Types IRI, a declared abbreviation where one applies, else the full IRI.
+    Pure model operation — never consults an interpretation registry (see pylib design).
+    '''
+    s = str(interp)
+    prefix = str(ONYA_INTERP)
+    if s.startswith(prefix):
+        local = s[len(prefix):]
+        if local in RESERVED_INTERP_NAMES:
+            return local
+    return compact_iri(s, prefixes)
+
+
 def _write_assertion(assertion, is_edge: bool, out, indent: str, nodebase, prefixes, bracket_curie: bool):
-    '''Emit one assertion line, its ``@id`` (if any), then recurse into its own assertions.'''
+    '''Emit one assertion line, its ``@id`` / ``@as`` (if any), then recurse into its assertions.'''
     label = _format_label(assertion.label, prefixes, bracket_curie=bracket_curie)
     if is_edge:
         out.write(f'{indent}* {label} -> {shorten_node_id(assertion.target.id, nodebase)}\n')
@@ -87,6 +105,10 @@ def _write_assertion(assertion, is_edge: bool, out, indent: str, nodebase, prefi
     child_indent = indent + '    '
     if assertion.id is not None:
         out.write(f'{child_indent}* @id: {shorten_node_id(assertion.id, nodebase)}\n')
+    # Emit `@as` for a set interpretation, at every depth (mirrors `@id`; the recursion below
+    # carries it into nested assertions). Phase 1 is always inline — no header factoring.
+    if getattr(assertion, 'interp', None) is not None:
+        out.write(f'{child_indent}* @as: {_format_interp(assertion.interp, prefixes)}\n')
     # Recurse so nested properties AND nested edges round-trip at any depth
     _write_assertions(assertion, out, child_indent, nodebase, prefixes, bracket_curie)
 
@@ -164,7 +186,8 @@ def write(
     return
 
 
-def read(fp, g=None, *, document_source_assertions: bool = False, encoding: str = 'utf-8'):
+def read(fp, g=None, *, document_source_assertions: bool = False, encoding: str = 'utf-8',
+         merge: bool = False):
     '''
     Read Onya Literate format from a file-like object (or text string) into a graph.
 
@@ -172,6 +195,8 @@ def read(fp, g=None, *, document_source_assertions: bool = False, encoding: str 
     g -- graph to populate; if None, a new ``onya.graph.graph`` is created
     document_source_assertions -- if True, tag each created assertion with an @source sub-property
     encoding -- character encoding hint passed through to the parser
+    merge -- convenience: when True, call ``graph.merge()`` once after reading. Defaults to
+        False (parsing accumulates distinct occurrences; merge stays on-demand).
 
     Returns: ``ParseResult(doc_iri, graph, nodes_added)``
     '''
@@ -180,4 +205,4 @@ def read(fp, g=None, *, document_source_assertions: bool = False, encoding: str 
         document_source_assertions=document_source_assertions,
         encoding=encoding,
     )
-    return parser.parse(text, g, encoding=encoding)
+    return parser.parse(text, g, encoding=encoding, merge=merge)

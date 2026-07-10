@@ -2,7 +2,7 @@ Onya Model Specification
 
 # Overview
 
-Onya is a knowledge graph framework with a simple, recursive model for representing structured information. The core model is intentionally minimal—just nodes, edges, and properties, identifiable by IRIs.
+Onya is a knowledge graph framework with a simple, recursive model for representing structured information. The core model is intentionally minimal—just nodes, edges, and properties, identifiable by IRIs. Everything beyond that minimum—value typing, ordering, schema constraints—is deliberately left to layers above the core, the most developed of which is the value-level data contract layer (see [Interpretations](#interpretations-data-contract-layers)).
 
 # Core Concepts
 
@@ -28,7 +28,7 @@ Edges and properties are collectively called **assertions**. Like a node, an ass
 - its target node (edge) or string value (property)
 - an internal marker that differentiates it from otherwise-identical assertions
 
-An assertion MAY be given an explicit identifier, making it addressable in the same identifier space as node IDs — see [Assertion Identifiers](#assertion-identifiers).
+An assertion MAY be given an explicit identifier, making it addressable — see [Assertion Identifiers](#assertion-identifiers). A property MAY additionally carry an interpretation, a recorded contract about how its string value is meant to be read — see [Interpretations](#interpretations-data-contract-layers).
 
 ### Edge
 
@@ -48,7 +48,7 @@ origin --[IRI label]--> "string value"
 
 ### Literate syntax
 
-The above text ilustrations are pseudocode, but not terribly far from the human **and** machine readable **and** editable Onya Literate syntax.
+The above text illustrations are pseudocode, but not terribly far from the human **and** machine readable **and** editable Onya Literate syntax.
 
 Here is a snippet from a simple friendship graph, describing an entity identified as `Chuks`:
 
@@ -120,17 +120,36 @@ parse-time error for an `@id` to collide with a node ID, or with another asserti
 
 An assertion's **skeleton** is the triple of (origin, label, target) for an
 edge, or (origin, label, value) for a property. The skeleton excludes nested
-assertions and excludes the identifier itself: annotating an assertion never
-changes its identity.
+assertions, excludes the identifier itself, and excludes the interpretation
+(see § `@as`): annotating an assertion — with an `id` or an interpretation —
+never changes its identity.
 
 Under graph union:
 
 1. Two assertions bearing the same identifier are the same assertion. Their
    skeletons MUST match; a mismatch is a merge error. Their nested
-   assertions are unioned, recursively under these same rules.
+   assertions are unioned, recursively under these same rules. If both carry
+   an interpretation and the two differ, that too is a merge error — a single
+   declared occurrence cannot hold two contracts.
 2. Two anonymous assertions with equal skeletons merge into one; their
    nested assertions are unioned, recursively. (Origins compare under the
    merge: nested assertions whose parents have merged share an origin.)
+   **Interpretation compatibility condition:** if neither carries an
+   interpretation, or both carry the same one, they merge (the result keeps
+   that state); if exactly one carries an interpretation, they merge and the
+   result adopts it; if both carry an interpretation and they differ, they do
+   **not** merge — the two remain distinct assertions. This is not an error:
+   two sources attaching different contracts to the same string are making
+   genuinely different claims, and a merge must not quietly pick a winner. The
+   disagreement stays in the graph, visible to queries and validation.
+   Because a union collapses a whole group of same-skeleton assertions at once,
+   the pairwise conditions resolve per skeleton to: one merged assertion per
+   distinct interpretation. An interpretation-free assertion adopts a
+   contract (one-sided merge) only when that contract is unambiguous — the group
+   holds exactly one. If the group already holds two or more differing
+   contracts, an interpretation-free assertion merges into none of them and adds
+   no row: its skeleton is already represented and it cannot non-arbitrarily
+   pick a side. This keeps union order-independent.
 3. An identified assertion never merges with an anonymous one, even when
    skeletons match. An explicit identifier is a declaration that this
    occurrence is distinct.
@@ -138,19 +157,118 @@ Under graph union:
 Rule 2 gives Onya idempotent merge ergonomics by default, desirable behavior when combining graphs extracted from overlapping sources.
 Rules 1 and 3 preserve occurrence semantics exactly where a modeler has declared they matter. Implementations MAY offer alternative merge policies (e.g., absorbing a structurally equal anonymous assertion into an identified one), but the rules above are the normative default.
 
+Graph union is an explicit, on-demand operation. Parsing or loading a document
+into an existing graph accumulates its assertions as distinct occurrences; the
+identity rules above are applied only when a consumer invokes the union (in the
+Python library, `graph.merge()`). This mirrors the interpretation layer: nothing
+about a graph's contents changes ambiently as a side effect of reading a file.
+The distinct-occurrence rule holds within a single document too — two identical
+assertion lines in one document are two occurrences until a union collapses them.
+
+## Interpretations (data contract layers)
+
+Every Onya value is a string, and the string layer is unconditionally valid:
+every string is a welcome value, always. Above that foundation, an author MAY
+attach an **interpretation** to a property — a recorded promise about how its
+string value is meant to be read (as a number, a datetime, an IRI, and so on).
+This is the architecture Onya calls **data contract layers**, and an
+interpretation is a single contract at the *value level*.
+
+A note for readers arriving from data engineering, where "data contract" often
+also covers shape (required fields), ownership, and service guarantees: this
+layer is the value-level slice of that idea, and only that slice — shape,
+ownership, and SLAs would be further layers, deliberately not this one.
+
+An interpretation is named by an IRI, like everything else in Onya. Each
+assertion carries at most one, in an `interp` slot alongside `id`. The core
+model only *records* it; interpretations are **never applied during parsing**,
+even for validation. Checking or converting a value happens at a boundary a
+consumer chooses (see the Python library's `onya.interp`), never ambiently, so
+a graph parses, merges, and round-trips identically regardless of what software
+can honor its contracts. An interpretation whose IRI the local software has
+never heard of is not an error: the hint simply travels with the data.
+
+### `@as`
+
+`@as` is a **directive**, exactly like `@id`: nested one level under a
+property, it records that property's interpretation without creating a property
+on it.
+
+```
+# Chuks [Person]
+
+* age: 28
+  * @as: number
+* birthDate: 1998-03-15
+  * @as: datetime
+```
+
+Rules:
+
+- `@as` is valid nested under a **property** at any nesting depth (including a
+  property nested on an edge or another assertion). Nested directly under an
+  **edge** it is ignored with a parse warning — an edge's value is a node, not
+  a string, so there is nothing to interpret; the syntax position is reserved.
+- A property has at most one interpretation. A second `@as` on the same
+  property is a parse error.
+- The interpretation does not create a property: after parsing, the property's
+  value is still exactly the string `28`, with `interp` set.
+
+Interpretation names resolve in this order: the reserved bare names `number`,
+`datetime`, `boolean`, `iri`, `text` name the **Onya Lightweight Types** in the
+Onya interpretation vocabulary; `none` names *no* interpretation (its only role
+is to cancel a document-level default — see below — and it is never stored);
+anything else is an IRI reference resolved through the document's existing IRI
+machinery (absolute IRIs pass through, `@iri` abbreviations apply). It is never
+a parse error for the name to be unknown to local software.
+
+### `@interpretations`
+
+A docheader stanza names a default interpretation for every property with a
+given label in the document (Onya inherits the Versa shape, without Versa's
+eager parse-time coercion). The block header is written with a trailing colon,
+like the sibling `@iri:` block:
+
+```
+# @docheader
+
+* @schema: https://schema.org/
+* @interpretations:
+    * age: number
+    * birthDate: datetime
+```
+
+Each nested line maps a property label (resolved against `@schema` as assertion
+labels are) to an interpretation name (resolved as `@as` values are). The
+default applies to every matching property at any depth. A repeated label
+within one stanza is a parse error.
+
+**Precedence**, strongest to weakest, for any one property: an inline `@as` on
+the property (with `@as: none` cancelling); the document's `@interpretations`
+default for its label; nothing (`interp` unset).
+
+**Desugaring — the load-bearing rule.** Document-level declarations are
+serialization-layer sugar. At parse time each property's effective
+interpretation (after precedence) is written to that property's `interp`, and
+the stanza is then discarded — it is not part of the graph. So the model
+carries only per-assertion interpretations: queries, merge, and the
+interpretation layer never consult document context, and two documents with
+different `@interpretations` defaults merge with no rule for reconciling headers
+(there are no headers to reconcile).
+
 # Example: assertions in practice
 
 The pieces above — anonymous assertions that can themselves carry assertions, made addressable only when a modeler chooses — cover a surprising range of modeling needs with no extra machinery. A small scenario shows how they fit together.
 
 A mother can have multiple children. In Onya, each parental relationship can be modeled with an edge from the node representing the mother (the assertion's origin) to the node representing the child (the assertion's target). Each of these edges is a separate assertion (anonymous by default) which can have its own assertions, e.g. date of labor (though of course another modeler could choose to model this instead just using a date of birth edge on each child node).
 
-Because those edges are anonymous, the identity rules above apply automatically: the same parental edge extracted independently from two overlapping sources merges into one when their skeletons match (Rule 2), so combining graphs is idempotent without any bookkeeping. Where a modeler instead needs to hold two structurally identical assertions apart as genuinely distinct occurrences, giving each an `@id` declares that intent and preserves the distinction through merge (Rule 3).
+Because those edges are anonymous, the identity rules above apply cleanly: the same parental edge extracted independently from two overlapping sources merges into one when their skeletons match (Rule 2), so combining graphs is idempotent **under merge**, without any bookkeeping beyond invoking it. Where a modeler instead needs to hold two structurally identical assertions apart as genuinely distinct occurrences, giving each an `@id` declares that intent and preserves the distinction through merge (Rule 3).
 
 # Notes
 
 ## String Properties
 
-Properties in Onya always have string values. There are no numbers, dates, or other types at the core layer. Annotation systems can be built on top to add typing semantics.
+Properties in Onya always have string values. There are no numbers, dates, or other types at the core layer; typing semantics live in the layers above, beginning with the value-level data contract layer specified in [Interpretations](#interpretations-data-contract-layers), which records how a string is meant to be read without ever making the string less valid.
 
 ## Recursive Structure
 
@@ -179,7 +297,7 @@ This provides a uniform, standard way to identify and dereference all elements o
 
 The human-friendly Onya Literate format is based on Markdown, making it easy to read and write knowledge graphs.
 
-### File Structure
+## File Structure
 
 An Onya Literate file contains:
 
@@ -218,6 +336,7 @@ The document header specifies:
 - `@typebase`: Base IRI for resolving relative type IRIs; only needed in less common cases where types use a different base than properties. If omitted, types use `@schema` as the base.
 - `@language`: Default language for string values
 - `@iri`: Optional block declaring extra vocabulary namespace bases (see below)
+- `@interpretations`: Optional block declaring default interpretations per property label (see [Interpretations](#interpretations-data-contract-layers))
 - Other assertions are attached to the document node
 
 **Important**: The `@nodebase` directive is used exclusively for expanding node IDs (e.g., `Chuks` → `http://example.org/people/Chuks`). The `@schema` directive is used for expanding both property labels (e.g., `name` → `https://schema.org/name`) and types (e.g., `[Person]` → `https://schema.org/Person`). It should be extremely unusual for an Onya file not to have a `@schema` directive.
@@ -248,7 +367,7 @@ Use **compact CURIEs** anywhere an IRI label or type is expected:
 
 **CURIE** namespace joining (under `@iri`) follows RDF/XML rules: if the prefix base already ends with `/`, `#`, or `?`, the local name is appended directly (no extra `/`); otherwise a single `/` is inserted between base and local name. So `@iri` prefix bases should usually be written **without** a trailing slash unless the vocabulary IRIs are defined that way. This differs from the bare-name `@nodebase`/`@schema`/`@typebase` bases above, which join by pure concatenation and therefore *must* carry their own trailing separator. The two converge for any base that ends in a separator — which is why the auto-registered `schema:` prefix and bare names agree for the usual trailing-slash `@schema`.
 
-Onya built-in names use a leading `@` and the Onya vocabulary (e.g. `@document`, `@source`), not the `@iri` map.
+Onya built-in names use a leading `@` and the Onya vocabulary (e.g. `@document`, `@source`, `@id`, `@as`), not the `@iri` map.
 
 Example (Acme client with schema.org contact details):
 
@@ -347,8 +466,13 @@ Assertions can have nested assertions:
 * name: Boston
   * stateCode: MA
   * country -> USA
+```
 
-Keys to demonstrate qualified values:
+And a key demonstration, qualified values:
+
+```
+# Boston [City]
+
 * temperature: 25
   * unit: Celsius
   * measurementMethod -> InfraredThermometer
@@ -431,6 +555,8 @@ Graphs can be written back to Onya Literate with `write()`. Supply the same base
 - `bracket_curie` — if true, non-schema labels use `<prefix:local>`; default is `prefix:local` (e.g. `acme:contactPoint`)
 - `bracket_types` — if true, types use bracketed CURIE form in headers
 
+An assertion's `@id` and `@as` are emitted as nested directive lines at every depth. `@as` is currently always emitted inline on each property (no generated `@interpretations` factoring), with interpretation IRIs rendered back to reserved bare names or declared abbreviations where they apply. The writer never consults an interpretation registry: serialization is a model operation, and its output must not vary with installed plugins.
+
 Document-level properties stored on the document node are emitted as top-level docheader bullets. The document node itself is not written as a `#` block.
 
 ## Optional assertion provenance (`@source`)
@@ -449,12 +575,13 @@ Graph
       ├── types: set[IRI]
       ├── properties: set[Property]
       └── edges: set[Edge]
-      
+
 Property (assertion: origin + label, anonymous by default)
   ├── origin: Node | Property | Edge
   ├── label: IRI
   ├── value: str
   ├── id: IRI | None        (absent by default; see Assertion Identifiers)
+  ├── interp: IRI | None    (absent by default; see Interpretations)
   ├── properties: set[Property]
   └── edges: set[Edge]
 
@@ -463,6 +590,7 @@ Edge (assertion: origin + label, anonymous by default)
   ├── label: IRI
   ├── target: Node
   ├── id: IRI | None        (absent by default; see Assertion Identifiers)
+  ├── interp: IRI | None    (reserved; `@as` on an edge is ignored with a warning)
   ├── properties: set[Property]
   └── edges: set[Edge]
 ```
@@ -471,7 +599,7 @@ Edge (assertion: origin + label, anonymous by default)
 
 1. **Simplicity**: Core model uses only nodes, edges, and properties
 2. **IRI-based**: All identifiers are IRIs for global uniqueness
-3. **String values only**: Keep the core model simple; add typing in layers above
+3. **String values only, contracts above**: The core stores only strings, unconditionally valid; how a value is meant to be read is a layered data contract (an interpretation), recorded in the model and honored only at boundaries a consumer chooses
 4. **No pervasive ordering**: Use sets for assertions; ordering can be added when needed
 5. **Recursive assertions**: Edges and properties are first-class, can have their own assertions
 6. **Graph, not model**: The container is a "graph", elements within use "assertions" terminology
@@ -481,7 +609,7 @@ Edge (assertion: origin + label, anonymous by default)
 Onya is similar to RDF but simpler:
 - Similar: IRIs, triples (s-p-o), reification via recursive structure
 - Simpler: No literals beyond strings, no blank nodes, uniform treatment of properties/edges
-- Different: Assertions are anonymous by default but may be given an identifier on demand; properties are always strings
+- Different: Assertions are anonymous by default but may be given an identifier on demand; properties are always strings, with value typing available as layered, on-demand data contracts rather than as XSD-style typed literals baked into the model
 
 The recursive assertion model is reminiscent of property graphs but more uniform:
 - Similar: Nodes and edges both can have properties

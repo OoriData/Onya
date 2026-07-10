@@ -49,3 +49,6 @@ nosetests.xml
 .mr.developer.cfg
 .project
 .pydevproject
+
+# Hypothesis property-based testing cache
+.hypothesis/
