@@ -18,11 +18,18 @@ See also the note in `pyproject.toml` at `[tool.hatch.build.targets.wheel]` for 
 ## Daily Development
 
 ```bash
-# Install in current virtualenv
+# First-time setup: install Onya plus the test/dev dependencies (pytest, pytest-asyncio,
+# hypothesis, ruff, …). Extras are declared in [project.optional-dependencies].
+uv pip install -U '.[dev]'
+
+# For PostgreSQL store work, also install the postgres extra (asyncpg):
+uv pip install -U '.[dev,postgres]'
+
+# After editing code under pylib/, reinstall (deps already present):
 uv pip install -U .
 
-# Run tests
-pytest test/ -v
+# Run the fast test suite (excludes live-service integration tests)
+pytest test/ -v -m "not integration"
 
 # Run specific test file
 pytest test/test_graph.py -v
@@ -37,6 +44,9 @@ ruff check --fix .
 pytest test/ --cov=onya --cov-report=html
 ```
 
+The async store suite needs `pytest-asyncio`; the interp property tests need `hypothesis`
+(they self-skip if it is absent). Both come with the `[dev]` extra.
+
 ## Making Changes
 
 ```bash
@@ -49,6 +59,51 @@ uv pip install -U .
 # After editing tests only (no reinstall needed)
 pytest test/ -v
 ```
+
+## Persistence backends & integration tests
+
+`onya.store` ships three backends behind one async protocol: the filesystem (`file:`,
+default), SQLite (`sqlite:`, stdlib), and PostgreSQL (`postgresql://`, extras-gated). The
+behavioral conformance suite in `test/store/` is written once and parameterized over every
+available backend.
+
+- **Filesystem and SQLite run everywhere** — no configuration, no services, part of the
+  default `pytest` run.
+- **PostgreSQL is opt-in.** Live-DB tests are marked `@pytest.mark.integration` and/or gated
+  on environment variables, so they are excluded from the fast run and skipped when unset
+  (this is why CI passes without a database). When `ONYA_TEST_PG_DSN` is set, the conformance
+  suite additionally parameterizes over the `postgres` backend.
+
+### Running the PostgreSQL integration tests via Docker
+
+Spin up a throwaway PostgreSQL 17 and point the tests at it:
+
+```bash
+# Start a disposable PostgreSQL 17
+docker run -d --name pg17-test -e POSTGRES_PASSWORD=secret -p 5432:5432 postgres:17
+
+# Point the tests at it (the conformance suite auto-adds the `postgres` backend)
+export ONYA_TEST_PG_DSN='postgresql://postgres:secret@localhost:5432/postgres'
+
+# Make sure asyncpg is installed
+uv pip install -U '.[dev,postgres]'
+
+# Run the whole store suite, integration tests included
+pytest test/store/ -v
+
+# ...or just the PostgreSQL-specific tests (reachable(), etc.)
+pytest test/store/test_store_postgres.py -v
+
+# Tear down when done
+docker rm -f pg17-test
+```
+
+The test fixture empties the schema (`DELETE FROM onya_graph`, which cascades) between tests,
+so a single database instance is reused safely. Each test graph is isolated by name.
+
+**PostgreSQL ≥ 19 / SQL-PGQ** is a separate, currently-notional path. Its property-graph
+tests gate additionally on `ONYA_TEST_PG19_DSN` and are otherwise skipped; PG 19 is still
+beta, so this is intentionally left unverified for now.
 
 ## Useful Commands
 
@@ -93,54 +148,57 @@ unzip -l dist/Onya-0.X.Y-py3-none-any.whl
 
 ```
 Onya/
-├── pylib/              # Source code (becomes 'onya' package when installed)
+├── pylib/                    # Source code (becomes 'onya' package when installed)
 │   ├── __init__.py
-│   ├── __about__.py    # Version info
-│   ├── graph.py        # Graph, node, edge, property classes
-│   ├── terms.py        # Common IRI vocabulary terms
-│   └── serial/         # Serialization modules
-│       ├── __init__.py
-│       ├── literate.py
-│       ├── literate_lex.py
-│       └── litparse_util.py
-├── test/               # Tests
+│   ├── __about__.py          # Version info
+│   ├── graph.py              # Graph, node, edge, property classes; merge & union
+│   ├── interp.py             # Interpretation (data-contract) plugin layer
+│   ├── terms.py              # Common IRI vocabulary terms
+│   ├── util.py               # IRI/CURIE helpers
+│   ├── cli/                  # `onya` console script (fire-based)
+│   │   ├── __init__.py
+│   │   └── onya.py
+│   ├── serial/               # Serialization
+│   │   ├── __init__.py
+│   │   ├── literate.py        # Onya Literate read()/write() (public API)
+│   │   ├── _literate_parse.py # Onya Literate parser internals
+│   │   ├── graphviz.py
+│   │   └── mermaid.py
+│   └── store/                # Pluggable persistence (onya.store)
+│       ├── __init__.py       # connect() factory, entry-point dispatch
+│       ├── base.py           # GraphStore/AssertionStore/GraphQueryStore protocols
+│       ├── exceptions.py
+│       ├── filesystem.py     # file: backend (default; the testing fake)
+│       ├── _relational.py    # shared DDL, skeleton hash, write-path merge
+│       ├── sqlite.py         # sqlite: backend
+│       ├── postgres.py       # postgresql:// backend (asyncpg, extras-gated)
+│       └── sync.py           # blocking facade
+├── test/                     # Tests (test/store/ holds the store conformance suite)
 │   ├── conftest.py
 │   ├── test_graph.py
-│   ├── test_graphobj.py
-│   ├── test_readme.py
+│   ├── test_graph_union.py
 │   ├── test_serial_literate.py
-│   └── resource/       # Test resources
-│       └── schemaorg/
-│           ├── achebe-bio.onya
-│           └── thingsfallapart.onya
-├── pyproject.toml      # Project config
+│   ├── store/                # store conformance, capabilities, relational, guards
+│   └── resource/schemaorg/   # fixture .onya documents
+├── doc/                      # Design docs and the Python tutorial
+├── pyproject.toml            # Project config
 ├── README.md
-└── SPEC.md             # Format specification
+└── SPEC.md                   # Format specification
 ```
 
-When installed, becomes:
-
-```
-site-packages/
-└── onya/
-    ├── __init__.py
-    ├── __about__.py
-    ├── graph.py
-    ├── terms.py
-    └── serial/
-        ├── __init__.py
-        ├── literate.py
-        ├── literate_lex.py
-        └── litparse_util.py
-```
+When installed, `pylib/` becomes the `onya/` package under `site-packages/` with the same
+internal layout (the `pylib` → `onya` remap; see the note in `pyproject.toml`).
 
 ## Key Files
 
 - `pylib/__about__.py` - Version number (update for releases)
-- `pyproject.toml` - Dependencies, metadata, build config
-- `pylib/graph.py` - Core graph model implementation
-- `pylib/serial/literate_lex.py` - Onya Literate format parser
+- `pyproject.toml` - Dependencies, metadata, build config, store backend entry points
+- `pylib/graph.py` - Core graph model, `merge()`, and model-level `union()`
+- `pylib/serial/_literate_parse.py` - Onya Literate parser internals (public API in `literate.py`)
+- `pylib/interp.py` - Interpretation (data-contract) plugin layer
+- `pylib/store/` - Persistence backends and shared relational core
 - `test/resource/` - Test data files in Onya format
+- `doc/design-persistence-architecture.md` - Store architecture, schema, skeleton hash, PGQ
 - `README.md` - Main documentation
 - `SPEC.md` - Format specification
 
@@ -150,7 +208,7 @@ Before creating a release:
 
 - [ ] Update version in `pylib/__about__.py`
 - [ ] Update CHANGELOG.md
-- [ ] Run tests locally: `pytest test/ -v`
+- [ ] Run tests locally: `pytest test/ -v -m "not integration"` (and, ideally, the PostgreSQL integration tests against a Docker instance — see above)
 - [ ] Run linting: `ruff check .`
 - [ ] Commit and push all changes
 <!-- 
@@ -178,7 +236,7 @@ python -c "import onya; print(onya.__version__)"
 # Test basic functionality
 python -c "
 from onya.graph import graph
-from onya.serial.literate_lex import LiterateParser
+from onya.serial.literate import LiterateParser
 
 onya_text = '''
 # @docheader
@@ -210,8 +268,13 @@ The repository includes two workflows:
 
 Runs automatically on every push and pull request. It:
 - Tests on Python 3.12 and 3.13
+- Installs test dependencies (`pytest-asyncio`, `hypothesis`) alongside `ruff`/`pytest`
 - Runs ruff linting
-- Runs pytest test suite
+- Runs the pytest suite with `-m "not integration"` (no live database required)
+
+Live PostgreSQL integration tests do not run in CI (no `ONYA_TEST_PG_DSN`); run them
+locally against a Docker instance as described under *Persistence backends & integration
+tests*.
 
 ### 2. Publish Workflow (`.github/workflows/publish.yml`)
 
