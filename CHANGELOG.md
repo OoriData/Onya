@@ -2,9 +2,22 @@
 
 Notable changes to Onya are recorded here. Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-<!-- 
 ## [Unreleased]
- -->
+
+### Added
+
+- **`onya.store` — pluggable persistence for Onya graphs.** A store is *correct* exactly when a round trip through it is indistinguishable from an in-memory graph union; storage is a peripheral (`onya.store` imports the core, never the reverse — enforced by a layering test). `connect(url)` dispatches on URL scheme through the `onya.store.backends` entry-point group; an unknown scheme raises `ValueError` naming the known schemes.
+  - **`GraphStore`** base protocol (`put`/`get`/`drop`/`names`, async context manager) plus optional `runtime_checkable` capability protocols **`AssertionStore`** (`match`/`subgraph`/`add`/`remove`) and **`GraphQueryStore`** (`graph_table`), discovered by `isinstance`.
+  - **Filesystem backend** (`file:`, default; the testing fake): one Onya Literate file per named graph under a root dir, atomic writes (temp + `os.replace`), a `.lock` sidecar for light concurrency. `put(merge=True)` is literally *parse existing, union in memory, re-serialize*, so it is the executable spec the SQL backends are tested against.
+  - **SQLite backend** (`sqlite:`, stdlib, no added dependency): one serialized writer connection via `asyncio.to_thread`, WAL, foreign keys on. Satisfies `GraphStore` + `AssertionStore`.
+  - **PostgreSQL backend** (`postgresql://`, extras-gated `onya[postgres]` → asyncpg imported lazily): connection pool, schema migration on connect, and — automatically on PostgreSQL ≥ 19 — SQL/PGQ property graph definitions (`onya_base`, `onya_reified`) so the store also satisfies `GraphQueryStore`; a canned `reachable()` recursive-CTE helper for transitive traversal.
+  - **Merge is the write semantics**: `put(merge=True)` unions with the stored graph under SPEC merge Rules 1–3 plus the interp amendment (including the ratified NULL-adopts ruling). The shared relational core (`onya.store._relational`) holds the dialect-parameterized DDL, **skeleton hash v1** (versioned in `onya_meta`; an unrecognized version refuses to open), and the write-path merge algorithm.
+  - `onya.store.sync` — a minimal blocking facade (per-call `asyncio.run`, context-manager lifecycle) for scripts and REPL use.
+- **Model-level graph union** — `graph.union(other)` folds another graph in and normalizes per the SPEC identity rules (the operation every backend's `put(merge=True)` is defined against). `graph.validate_id_space()` surfaces a node-id vs assertion-`@id` collision as `AssertionIdConflict`.
+
+### Fixed
+
+- **Onya Literate serializer now round-trips awkward string values.** `write()` escapes `"`/`\` in quoted values and emits multi-line text as triple-quoted text references, so values with newlines, embedded quotes, or backslashes survive `write → read` byte-for-byte. Triple-quoted text-reference values now store their *inner* content (the `"""` delimiters were previously kept in the value, which was both surprising and un-round-trippable), and a quoted docheader property value is stored as a plain `str` (matching body assertions) rather than a `LITERAL`.
 
 ## [0.4.0] - 20260709: Graph merge. Data contract layers. Asserdion IDs. Empty node blocks. Multi-typed nodes.
 

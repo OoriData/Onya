@@ -36,7 +36,18 @@ dependencies = [
 [project.scripts]
 onya = 'onya.cli.onya:main'
 
+# Store backend registry. Object references use the *installed* (`onya.store.*`) names,
+# not `pylib.*` — the pylib->onya wheel remap applies to entry points too. Verify with a
+# wheel build, not just an install, since the remap only happens during wheel building.
+[project.entry-points."onya.store.backends"]
+file = 'onya.store.filesystem:FileStore'
+sqlite = 'onya.store.sqlite:SqliteStore'
+postgresql = 'onya.store.postgres:PostgresStore'
+
 [project.optional-dependencies]
+# PostgreSQL backend (onya.store.postgres). asyncpg is imported lazily, so the base install
+# stays dependency-free; only `pip install "onya[postgres]"` pulls it in.
+postgres = ['asyncpg>=0.30']
 # Extra requirements for project contributors & other developers
 dev = [
     "build",
@@ -61,6 +72,11 @@ Issues = 'https://github.com/OoriData/Onya/issues'
 [tool.pytest.ini_options]
 testpaths = ["test"]
 norecursedirs = ["scratch", "demo", ".git", ".venv", "dist", "build", ".hypothesis"]
+# Store backends are async; auto mode lets `async def test_*` run without per-test markers.
+asyncio_mode = "auto"
+markers = [
+    "integration: hits a live service (e.g. PostgreSQL); excluded from the default fast run",
+]
 
 [tool.hatch.version]
 path = 'pylib/__about__.py'

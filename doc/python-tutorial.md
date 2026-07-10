@@ -303,6 +303,115 @@ interp.set_value(chuks, 'https://schema.org/height', Decimal('1.85'),
 # same as: chuks.add_property('https://schema.org/height', '1.85', interp=ONYA_INTERP('number'))
 ```
 
+# Persistence: the store layer
+
+`onya.store` durably keeps named graphs. The protocol is `async`, and the same
+code shape works across every backend — you change only the URL you pass to
+`connect()`. The golden rule: **merge is the write semantics.** `put(merge=True)`
+(the default) into a store that already holds the named graph is a graph union
+under the SPEC merge rules — observationally identical to loading both and
+calling `graph.union()`.
+
+Start with the filesystem backend. It writes one Onya Literate file per graph, so
+you can open the result in any editor — and it is the reference implementation the
+SQL backends are checked against:
+
+```python
+import asyncio
+from onya.store import connect
+from onya.serial.literate import read
+
+r = read(open('test/resource/schemaorg/thingsfallapart.onya'))
+graph, name = r.graph, r.doc_iri            # name is the graph's @document IRI
+
+async def demo(url):
+    async with await connect(url) as store:
+        await store.put(name, graph)        # persist (merge=True by default)
+        loaded = await store.get(name)      # KeyError if absent
+        print('graphs held:', [str(n) async for n in store.names()])
+        return loaded
+
+asyncio.run(demo('file:/tmp/onya-graphs'))
+```
+
+Move to SQLite by changing nothing but the URL — stdlib, zero added
+dependencies, and it adds the `AssertionStore` capability (fine-grained access
+without materializing the whole graph):
+
+```python
+from onya.store import AssertionStore
+
+async def sqlite_demo():
+    async with await connect('sqlite:/tmp/onya.db') as store:
+        await store.put(name, graph)
+        assert isinstance(store, AssertionStore)
+        # stream matching assertions, graph.match() tuple shape
+        async for origin, rel, target, annotations in store.match(
+                name, 'http://example.org/classics/CAchebe'):
+            print(origin, rel, target)
+        # load just a neighborhood, out to N hops
+        neighborhood = await store.subgraph(name, {'http://example.org/classics/TFA'}, hops=1)
+
+asyncio.run(sqlite_demo())
+```
+
+Move to PostgreSQL the same way. It is extras-gated — `pip install
+"onya[postgres]"` — and asyncpg is imported only when you use a `postgresql://`
+URL (otherwise you get a clear `ImportError`). On PostgreSQL ≥ 19 the store also
+satisfies `GraphQueryStore`, exposing SQL/PGQ property-graph queries as an escape
+hatch:
+
+```python
+from onya.store import GraphQueryStore
+
+async def pg_demo():
+    async with await connect('postgresql://user:pass@localhost/onya') as store:
+        await store.put(name, graph)
+        if isinstance(store, GraphQueryStore):
+            rows = await store.graph_table('''
+                SELECT * FROM GRAPH_TABLE (onya_base
+                    MATCH (a IS resource)-[e IS asserted]->(b IS resource)
+                    COLUMNS (a.id AS src, b.id AS dst))
+            ''')
+```
+
+Merge semantics in action — two overlapping extractions collapse into one:
+
+```python
+async def merge_demo():
+    async with await connect('sqlite:/tmp/onya.db') as store:
+        await store.put('http://e.o/g', read('''
+# @docheader
+* @document: http://e.o/g
+* @nodebase: http://e.o/
+* @schema: https://schema.org/
+
+# Chuks [Person]
+* knows -> Ify
+  * since: 2018
+''').graph)
+        await store.put('http://e.o/g', read('''
+# @docheader
+* @document: http://e.o/g
+* @nodebase: http://e.o/
+* @schema: https://schema.org/
+
+# Chuks [Person]
+* knows -> Ify
+  * strength: close
+''').graph)                                  # merges: one `knows` edge, both nested props
+        g = await store.get('http://e.o/g')
+        knows = list(g['http://e.o/Chuks'].traverse('https://schema.org/knows'))
+        assert len(knows) == 1               # Rule 2: equal skeletons merged
+
+asyncio.run(merge_demo())
+```
+
+For scripts and the REPL, `from onya.store.sync import connect` gives a blocking
+facade with the same methods (`with connect(url) as store: store.put(...)`). The
+architecture, canonical schema, skeleton hash, and PGQ layer are documented in
+[design-persistence-architecture.md](design-persistence-architecture.md).
+
 # Visualization / export
 
 Onya includes simple serializers to help you visualize graphs:

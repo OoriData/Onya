@@ -187,6 +187,46 @@ for edge in chuks.traverse('https://schema.org/knows'):
 write(g)
 ```
 
+## Persistence
+
+`onya.store` keeps graphs across sessions and processes. It is a peripheral, not
+an organ: the core model never imports it, and a store is *correct* exactly when
+a round trip through it is indistinguishable from an in-memory graph union —
+`put(merge=True)` unions with any stored graph under the SPEC merge rules. Three
+backends ship, all behind one async protocol and selected by URL scheme:
+
+```python
+import asyncio
+from onya.store import connect
+from onya.serial.literate import read
+
+r = read(open('test/resource/schemaorg/thingsfallapart.onya'))
+g, name = r.graph, r.doc_iri
+
+async def main():
+    # Filesystem — one Onya Literate file per graph; the default, and the testing fake.
+    async with await connect('file:/tmp/onya-graphs') as store:
+        await store.put(name, g)                 # merge=True by default
+        again = await store.get(name)            # -> onya.graph.graph
+        print([str(n) async for n in store.names()])
+
+    # SQLite — stdlib, zero added dependencies; also an AssertionStore.
+    async with await connect('sqlite:/tmp/onya.db') as store:
+        await store.put(name, g)
+        async for origin, rel, target, ann in store.match(name, 'http://example.org/classics/CAchebe'):
+            print(origin, rel, target)
+
+    # PostgreSQL — pip install "onya[postgres]"; SQL/PGQ property graphs on PG >= 19.
+    async with await connect('postgresql://user:pass@localhost/onya') as store:
+        await store.put(name, g)
+
+asyncio.run(main())
+```
+
+A blocking facade (`from onya.store.sync import connect`) mirrors the API with
+`with`/plain calls for scripts and REPL use. Design and schema details are in
+[doc/design-persistence-architecture.md](doc/design-persistence-architecture.md).
+
 ## Visualize / export
 
 The CLI converts Onya Literate (`.onya`) files to diagram formats:
