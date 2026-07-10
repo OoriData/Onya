@@ -194,3 +194,60 @@ def test_union_id_space_collision_raises():
 
     with pytest.raises(AssertionIdConflict):
         g.union(other)
+
+
+# --- Regression: edges targeting identified assertions across a union ---
+# Root cause fixed in edge._skeleton: identified-assertion targets key by @id,
+# not object identity. Two failure modes from the one cause, both covered.
+
+def _graph_with_identified_target(identify_edge=False):
+    g = graph()
+    m = g.node('http://e.o/M')
+    n = g.node('http://e.o/N')
+    p = m.add_property('http://e.o/note', 'the same note')
+    g.register_assertion_id('http://e.o/X', p)
+    e = n.add_edge('http://e.o/refersTo', p)
+    if identify_edge:
+        g.register_assertion_id('http://e.o/Y', e)
+    return g
+
+
+def test_union_dedups_anonymous_edges_targeting_shared_identified_assertion():
+    '''Rule 2: same-skeleton anonymous edges pointing at @id X merge across union.'''
+    ga = _graph_with_identified_target()
+    gb = _graph_with_identified_target()
+    ga.union(gb)
+    edges = list(ga['http://e.o/N'].getedge('http://e.o/refersTo'))
+    assert len(edges) == 1
+    assert edges[0].target is ga.assertion_ids['http://e.o/X']
+
+
+def test_union_accepts_matching_identified_edge_targeting_identified_assertion():
+    '''Rule 1: structurally identical @id'd edges targeting @id X must NOT
+    raise a skeleton-mismatch merge error across union.'''
+    ga = _graph_with_identified_target(identify_edge=True)
+    gb = _graph_with_identified_target(identify_edge=True)
+    ga.union(gb)  # must not raise GraphMergeError
+    edges = list(ga['http://e.o/N'].getedge('http://e.o/refersTo'))
+    assert len(edges) == 1
+    assert edges[0].id == 'http://e.o/Y'
+
+
+def test_union_conformance_model_vs_sqlite_identified_target(tmp_path):
+    '''The divergence that surfaced the bug: filesystem (model union) and
+    sqlite (relational skeleton hash) must agree on this scenario.'''
+    import asyncio
+    from onya.store import connect
+
+    async def roundtrip(url):
+        async with await connect(url) as store:
+            await store.put('http://e.o/g', _graph_with_identified_target(), merge=True)
+            await store.put('http://e.o/g', _graph_with_identified_target(), merge=True)
+            g = await store.get('http://e.o/g')
+            return len(list(g['http://e.o/N'].getedge('http://e.o/refersTo')))
+
+    counts = {
+        'file': asyncio.run(roundtrip(f'file:{tmp_path}/graphs')),
+        'sqlite': asyncio.run(roundtrip(f'sqlite:{tmp_path}/probe.db')),
+    }
+    assert counts == {'file': 1, 'sqlite': 1}

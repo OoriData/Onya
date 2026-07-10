@@ -199,7 +199,15 @@ class edge(assertion):
         '''
         tgt = self.target
         if isinstance(tgt, assertion):
-            target_key = ('assertion', id(tgt))
+            # An identified assertion target is addressed by its explicit `@id` — the very
+            # point of the id is that two edges naming it, from any source, point at the
+            # same occurrence. Keying by object identity here would make skeletons compare
+            # unequal across graphs before `union()` rebinds targets (breaking Rule 2 dedup
+            # of the referring edges, and raising spurious Rule 1 errors when the referring
+            # edge is itself identified) — and would diverge from the relational write path,
+            # which keys targets by ident. Object identity remains only as the fallback for
+            # a purely in-memory anonymous-assertion target, which Literate cannot express.
+            target_key = ('assertion', tgt.id if tgt.id is not None else id(tgt))
         else:
             target_key = ('node', tgt.id if tgt is not None else None)
         return ('edge', self.label, target_key)
@@ -462,6 +470,11 @@ class graph(MutableMapping):
         Raises `GraphMergeError` on a Rule 1 violation (same `@id`, mismatched skeleton or
         conflicting non-absent interp) and `AssertionIdConflict` on a node-id vs
         assertion-id collision.
+
+        Consumes `other`: its node objects are adopted and its assertions are re-parented
+        onto this graph, so `other` is left hollowed out and must not be used afterwards.
+        Pass a throwaway (e.g. a freshly parsed copy) when the argument must survive; the
+        store backends do exactly this so a caller's graph is never mutated.
         '''
         for nid, onode in other.nodes.items():
             keeper = self.nodes.get(nid)

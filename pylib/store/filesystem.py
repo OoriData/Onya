@@ -111,10 +111,16 @@ class FileStore:
         literate_write(g, out, document=str(name))
         return out.getvalue()
 
-    @staticmethod
-    def _from_literate(text: str) -> graph:
+    # Internal parses read this backend's *own* serialization, where a bare block for a
+    # target-only node is an expected, documented artifact (write() emits one) — not an
+    # authoring slip. Silence the empty-block warning so get()/put() don't emit spurious
+    # noise for a graph that legitimately references undescribed nodes.
+    _reader = LiterateParser(warn_empty_blocks=False)
+
+    @classmethod
+    def _from_literate(cls, text: str) -> graph:
         g = graph()
-        LiterateParser().parse(text, g)
+        cls._reader.parse(text, g)
         return g
 
     # --- locking (blocking; called inside to_thread) --------------------------------
@@ -161,7 +167,7 @@ class FileStore:
                 existing = self._existing_path(name)
                 if existing is not None:
                     with open(existing, encoding='utf-8') as f:
-                        LiterateParser().parse(f.read(), stored)
+                        self._reader.parse(f.read(), stored)
                 incoming = self._from_literate(self._to_literate(g, name))
                 stored.union(incoming)
                 text = self._to_literate(stored, name)
