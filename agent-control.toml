@@ -11,6 +11,7 @@ agents = 'AGENTS.md'
 config = 'agent-control.toml'
 
 [managed]
-version = '0.2.3'
+version = '0.3.0'
 # Skills installed in this repo (updated by oori-seed-repo)
-skills = ['python']
+kinds = ['python', 'onya-graph']
+skills = ['python', 'onya-graph', 'testing']
