@@ -194,6 +194,8 @@ cat file.onya | onya convert - --mermaid   # stdin
 
 Useful display flags: `--rankdir LR`, `--noshow_properties`, `--noshow_types`, `--noshow_edge_labels`, `--noshow_edge_annotations` (negate any boolean with the `no` prefix). See `demo/mermaid_basic/` and `demo/graphviz_basic/`.
 
+For graph **analytics** (not diagrams), `onya.serial.nx` (extras-gated: `pip install "onya[nx]"`) projects a graph into a `networkx.MultiDiGraph` via `to_networkx`, and `write_back` records analytics results (centrality, communities, …) back as typed, merge-safe assertions. See `demo/nx_analytics/`.
+
 ## Merging graphs & identity
 
 Onya has a precise notion of when two assertions are "the same", which matters whenever graphs combine — parsing several documents into one graph, unioning two graphs, or persisting into a store that already holds a graph. Parsing **never merges on its own**: overlapping assertions accumulate as distinct occurrences until a consumer explicitly calls `graph.merge()` (or `graph.union(other)`). The rules that then apply:

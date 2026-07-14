@@ -48,6 +48,9 @@ postgresql = 'onya.store.postgres:PostgresStore'
 # PostgreSQL backend (onya.store.postgres). asyncpg is imported lazily, so the base install
 # stays dependency-free; only `pip install "onya[postgres]"` pulls it in.
 postgres = ['asyncpg>=0.30']
+# networkx projection + analytics writeback (onya.serial.nx). networkx is imported lazily, so
+# the base install stays dependency-free; only `pip install "onya[nx]"` pulls it in.
+nx = ['networkx>=3.0']
 # Extra requirements for project contributors & other developers
 dev = [
     "build",
@@ -59,6 +62,7 @@ dev = [
     "pytest-mock",
     "pytest-asyncio",
     "hypothesis",  # property-based tests for the interp `number` round-trip law (test-only)
+    "networkx>=3.0",  # exercises onya.serial.nx tests in CI (extras-gated in production)
 ]
 
 demo = [

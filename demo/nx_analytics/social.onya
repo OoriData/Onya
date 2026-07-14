@@ -1,0 +1,40 @@
+<!-- -*- mode: markdown -*- -->
+<!-- Onya Literate: a small social graph for the networkx analytics demo. -->
+<!-- Two triangles (Alice/Bob/Carol and Dave/Eve/Frank) bridged by Carol -> Dave. -->
+
+# @docheader
+
+* @document: https://oori.dev/onya/demo/social
+* @nodebase: https://oori.dev/onya/demo/social/
+* @schema: https://schema.org/
+
+# Alice [Person]
+
+* name: Alice
+* knows -> Bob
+* knows -> Carol
+
+# Bob [Person]
+
+* name: Bob
+* knows -> Carol
+
+# Carol [Person]
+
+* name: Carol
+* knows -> Dave
+
+# Dave [Person]
+
+* name: Dave
+* knows -> Eve
+* knows -> Frank
+
+# Eve [Person]
+
+* name: Eve
+* knows -> Frank
+
+# Frank [Person]
+
+* name: Frank
