@@ -256,6 +256,48 @@ interpretation layer never consult document context, and two documents with
 different `@interpretations` defaults merge with no rule for reconciling headers
 (there are no headers to reconcile).
 
+## Selecting assertions
+
+Beyond navigating from a node to its assertions, Onya defines one uniform
+**single-pattern selection** primitive: given constraints on an assertion's
+components, yield the assertions that match, with any unconstrained component
+acting as a wildcard. This is the naive-query floor — the lineage runs back
+through Versa to 4RDF's `complete()` — and everything richer (paths, joins,
+transitive reachability) is a layer deliberately built **above** it, not part of
+the core. (The Python library's PostgreSQL backend, for example, exposes SQL/PGQ
+and a `reachable()` helper for transitive traversal.)
+
+An assertion has more component positions than an RDF triple, and selection may
+constrain any of them:
+
+- **origin** — the containing node or assertion.
+- **label** — the property/edge label IRI.
+- the **object**, which Onya splits *structurally* rather than by runtime type:
+  a property's string **value**, or an edge's **target** (a node id, or an
+  identified assertion's `@id`). Because a single assertion is either a property
+  or an edge, constraining the value selects only properties and constraining the
+  target selects only edges; constraining both at once is contradictory.
+- **id** — an assertion's explicit identifier (see
+  [Assertion Identifiers](#assertion-identifiers)). Selecting by id is the
+  "address this exact assertion" mode; since identifiers are unique within the
+  graph it resolves to at most one assertion.
+
+Selection reflects the graph **as it is** — like the interpretation layer and
+graph union, it does nothing ambiently. On an un-merged graph, distinct
+occurrences of one skeleton are returned as the distinct assertions they are;
+apply graph union (`merge()`) first for a normalized view.
+
+By default selection ranges over a node's first-level assertions; it MAY be
+asked to descend into nested/reified assertions as well, in which case a matched
+assertion's origin is its parent assertion (addressable when that parent carries
+an `@id`).
+
+In the Python library this primitive is `graph.select(origin=None, label=None,
+*, value=None, target=None, id=None, deep=False)`, yielding the live assertion
+objects — so a consumer can read a result's `id`, `interp`, or nested
+assertions, or remove it in place. `graph.match()` is a convenience projection of
+the same selection to flat `(origin, label, target, annotations)` tuples.
+
 # Example: assertions in practice
 
 The pieces above — anonymous assertions that can themselves carry assertions, made addressable only when a modeler chooses — cover a surprising range of modeling needs with no extra machinery. A small scenario shows how they fit together.

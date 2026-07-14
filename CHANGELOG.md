@@ -2,8 +2,15 @@
 
 Notable changes to Onya are recorded here. Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+<!-- 
 ## [Unreleased]
+ -->
 
+## [0.4.1] - 20260714: Wildcard selector query method. networkx analysis [comming].
+
+### Added
+
+- **`graph.select()` — the uniform single-pattern selector** (closes the "round out `match()`" gap, lineage back to 4RDF's `complete()`). Yields the actual `assertion` objects whose components match every supplied constraint, `None` wildcarding each: `origin` (node/assertion, by id or object identity), `label`, `value` (restricts to properties — the property face of the object slot), `target` (restricts to edges, matching a target node id or an identified assertion's `@id` — the edge face), `id` (select by assertion `@id`), and `deep=` to descend into nested/reified assertions. `value=` and `target=` are Onya's structural split of RDF's single object position, so passing both is a `ValueError`. Returning live objects (drawn from a per-container snapshot) means a caller can read `id`/`interp`/nested assertions off a result or `remove_property`/`remove_edge` it mid-iteration — the 4RDF remove-iterate idiom. `graph.match()` is now the tuple-projection view over `select()`: its `origin`/`label` arguments became optional wildcards (a widening, not a break), and its `(origin, relation, target, annotations)` shape is unchanged.
 
 ## [0.4.0] - 20260709: Graph merge. Data contract layers. Asserdion IDs. Empty node blocks. Multi-typed nodes. Persistence store.
 

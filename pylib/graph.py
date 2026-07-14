@@ -505,42 +505,132 @@ class graph(MutableMapping):
             if n.types & types_set:
                 yield n
 
-    def match(self, origin: I | str) -> Iterator[tuple[I | str, I | str, str | I, dict]]:
+    def select(self, origin: I | str | node | assertion | None = None,
+               label: I | str | None = None, *,
+               value: str | None = None,
+               target: I | str | node | assertion | None = None,
+               id: I | str | None = None,
+               deep: bool = False) -> Iterator[assertion]:
         '''
-        Match all assertions (properties and edges) for a given origin node.
-        
-        Returns an iterator of tuples: (origin, relation, target, annotations)
-        - origin: the node ID (same as input)
+        The uniform single-pattern selector: yield the actual assertion objects whose
+        components match every supplied constraint, with `None` as a wildcard on each — the
+        naive-query floor (cf. 4RDF's `complete()`), returning live objects rather than a
+        lossy projection so a caller can read `id`/`interp`/nested assertions off a result,
+        or `remove_property`/`remove_edge` it in place.
+
+        Component constraints (all wildcard by default):
+
+        - `origin`: the containing node (or assertion, for nested results). A bare id (`str`
+          or `I`) matches by id; a `node`/`assertion` object matches by identity.
+        - `label`: the property/edge label IRI.
+        - `value`: a property's string value. Supplying it restricts results to **properties**.
+        - `target`: an edge's target. A bare id matches the target node id (or an identified
+          assertion's `@id`); an object matches by identity. Supplying it restricts results
+          to **edges**. `value` and `target` are the two faces of the object slot — Onya's
+          structural split of RDF's single object position — so passing both is a `ValueError`.
+        - `id`: an assertion's explicit `@id` (SPEC: Assertion Identifiers). This is the
+          "select by property/edge id" mode; for a single known id, `assertion_ids[id]` is
+          the direct lookup.
+        - `deep`: when False (default) only a node's first-level assertions are searched;
+          when True the search descends into nested/reified assertions as well.
+
+        Results are drawn from a materialized snapshot per container, so removing a yielded
+        assertion from its origin mid-iteration is safe.
+        '''
+        if value is not None and target is not None:
+            raise ValueError('select() takes at most one of value= (properties) or target= (edges)')
+
+        want_props = target is None  # a target= constraint can only be satisfied by an edge
+        want_edges = value is None   # a value= constraint can only be satisfied by a property
+
+        def origin_ok(a_origin) -> bool:
+            if origin is None:
+                return True
+            if isinstance(origin, str):  # I is a str subclass -> compare by id
+                return getattr(a_origin, 'id', None) == origin
+            return a_origin is origin  # a node/assertion object -> identity
+
+        def target_ok(tgt) -> bool:
+            if isinstance(target, str):
+                return getattr(tgt, 'id', None) == target
+            return tgt is target
+
+        def keep(a) -> bool:
+            if isinstance(a, edge):
+                if not want_edges:
+                    return False
+                if target is not None and not target_ok(a.target):
+                    return False
+            else:  # property_
+                if not want_props:
+                    return False
+                if value is not None and a.value != value:
+                    return False
+            if not origin_ok(a.origin):
+                return False
+            if label is not None and a.label != label:
+                return False
+            if id is not None and a.id != id:  # noqa: A002 - `id` names the @id component
+                return False
+            return True
+
+        def walk(container):
+            # Iterate snapshots so a caller may remove a yielded assertion mid-iteration.
+            for p in list(container.properties):
+                yield p
+                if deep:
+                    yield from walk(p)
+            for e in list(container.edges):
+                yield e
+                if deep:
+                    yield from walk(e)
+
+        # Pick the walk roots. The common case — `origin` is an existing node id — is O(1)
+        # and preserves match()'s historical performance; anything else walks every node and
+        # lets `origin_ok` filter.
+        if isinstance(origin, str):
+            node_root = self.nodes.get(origin)
+            if node_root is not None:
+                roots: list = [node_root]
+            elif origin in self.assertion_ids:  # an identified-assertion origin, nested somewhere
+                roots = list(self.nodes.values())
+            else:  # a bare id matching no node and no assertion -> nothing to select
+                roots = []
+        elif origin is not None and self.nodes.get(getattr(origin, 'id', None)) is origin:
+            roots = [origin]  # a node object passed directly
+        else:
+            roots = list(self.nodes.values())  # origin is None, or an assertion object
+
+        for n in roots:
+            for a in walk(n):
+                if keep(a):
+                    yield a
+
+    def match(self, origin: I | str | None = None,
+              label: I | str | None = None,
+              ) -> Iterator[tuple[I | str, I | str, str | I, dict]]:
+        '''
+        The tuple-projection view over `select()`: yield `(origin, relation, target,
+        annotations)` for each first-level assertion matching the (wildcard-able) `origin`
+        and `label`. Kept for callers that want the flat shape; `select()` is the richer
+        primitive (object results, value/target/id constraints, `deep`).
+
+        - origin: the containing node's id
         - relation: the property/edge label (IRI)
         - target: for properties, the string value; for edges, the target ID
-        - annotations: dict mapping property labels to values from assertion properties
+        - annotations: dict mapping the assertion's own property labels to values (last wins)
 
         An edge target ID may name either a node or an *identified assertion* (an edge whose
         RHS was another assertion's `@id`; see SPEC: Assertion Identifiers). To tell them
         apart, resolve the target: `self.assertion_ids.get(target)` yields the assertion (or
         None), and every assertion carries the implicit `onya:Assertion` type — so
         `ONYA_ASSERTION in obj.types` (or `isinstance(obj, assertion)`) is the type check that
-        interprets the result. A future projection/traversal layer will formalize this.
+        interprets the result.
         '''
-        if origin not in self.nodes:
-            return
-        
-        node_obj = self.nodes[origin]
-        
-        # Helper to convert assertion properties to a dict
-        def props_to_dict(assertion_obj):
-            '''Convert a set of properties to a dict (last value wins for duplicates)'''
-            result = {}
-            for prop in assertion_obj.properties:
-                result[prop.label] = prop.value
-            return result
-        
-        # Yield all properties
-        for prop in node_obj.properties:
-            annotations = props_to_dict(prop)
-            yield (origin, prop.label, prop.value, annotations)
-        
-        # Yield all edges
-        for edge_obj in node_obj.edges:
-            annotations = props_to_dict(edge_obj)
-            yield (origin, edge_obj.label, edge_obj.target.id, annotations)
+        for a in self.select(origin=origin, label=label):
+            annotations = {p.label: p.value for p in a.properties}  # last value wins for duplicates
+            if isinstance(a, edge):
+                target = a.target.id if a.target is not None else None
+            else:
+                target = a.value
+            yield (a.origin.id, a.label, target, annotations)
