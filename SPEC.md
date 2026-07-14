@@ -379,7 +379,18 @@ The document header specifies:
 - `@language`: Default language for string values
 - `@iri`: Optional block declaring extra vocabulary namespace bases (see below)
 - `@interpretations`: Optional block declaring default interpretations per property label (see [Interpretations](#interpretations-data-contract-layers))
-- Other assertions are attached to the document node
+- Any other bullet is an ordinary assertion on the document node (see below)
+
+**The `@docheader` block is the document node's block.** Aside from the built-in directives
+above (`@document`, `@nodebase`, `@schema`, `@typebase`, `@language`, and the `@iri` /
+`@interpretations` configuration stanzas), every bullet in `@docheader` is an ordinary
+assertion on the document node, with exactly the expressiveness of a bullet in any node block:
+a property or an edge, carrying `@id`, `@as`, and nested/reified assertions to any depth, and
+subject to `@interpretations` defaults. The only thing that stays directive-driven is the
+document node's **identity and type**: its id comes from `@document` and it carries the implicit
+`onya:Document` type, so it has no `# NodeID [Type]` header of its own. On serialization these
+assertions are written back as `@docheader` bullets (the document node is never emitted as a
+separate `#` block), so a rich document node round-trips in place.
 
 **Important**: The `@nodebase` directive is used exclusively for expanding node IDs (e.g., `Chuks` → `http://example.org/people/Chuks`). The `@schema` directive is used for expanding both property labels (e.g., `name` → `https://schema.org/name`) and types (e.g., `[Person]` → `https://schema.org/Person`). It should be extremely unusual for an Onya file not to have a `@schema` directive.
 
@@ -599,7 +610,7 @@ Graphs can be written back to Onya Literate with `write()`. Supply the same base
 
 An assertion's `@id` and `@as` are emitted as nested directive lines at every depth. `@as` is currently always emitted inline on each property (no generated `@interpretations` factoring), with interpretation IRIs rendered back to reserved bare names or declared abbreviations where they apply. The writer never consults an interpretation registry: serialization is a model operation, and its output must not vary with installed plugins.
 
-Document-level properties stored on the document node are emitted as top-level docheader bullets. The document node itself is not written as a `#` block.
+Document-node assertions are emitted as top-level `@docheader` bullets through the same path as body-node assertions — `@id`, `@as`, nested assertions, and edges all round-trip — so a rich document node survives `write → read` in place. The document node itself is never written as a separate `#` block; its id and implicit `onya:Document` type remain directive-driven (`@document`).
 
 ## Optional assertion provenance (`@source`)
 

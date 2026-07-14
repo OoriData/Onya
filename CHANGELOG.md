@@ -2,9 +2,11 @@
 
 Notable changes to Onya are recorded here. Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-<!-- 
 ## [Unreleased]
- -->
+
+### Fixed
+
+- **The document node is now first-class in Onya Literate.** Its `@docheader` bullets carry the same expressiveness as any node block — `@as` interpretations, `@id`, nested/reified assertions, and edges — on both parse and serialize, and `@interpretations` defaults apply to them. Previously the docheader was parsed and written as a restricted *flat* `label: value` form, so an interpretation, an `@id`, a nested assertion, or an edge on the document node was silently dropped or misparsed (e.g. `* about -> Thing` became a string property, creating no edge or target node) and lost on `write → read`. Parse and serialize now route document-node assertions through the same machinery as body nodes (`_build_assertions` / `_write_assertions`); only the document node's identity and implicit `onya:Document` type stay directive-driven (`@document`), so it still has no `# NodeID [Type]` header and is never emitted as a separate `#` block. SPEC § Document Header documents this. (#26)
 
 ## [0.4.1] - 20260714: Wildcard selector query method. networkx projection + analytics write-back.
 

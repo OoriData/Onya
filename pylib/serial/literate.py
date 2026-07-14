@@ -181,10 +181,12 @@ def write(
             for k, v in extra.items():
                 out.write(f'    * {k}: {v}\n')
         if document_s and document_s in model.nodes:
-            doc_node = model.nodes[document_s]
-            for prop in sorted(doc_node.properties, key=lambda p: str(p.label)):
-                key = _format_label(prop.label, all_prefixes, bracket_curie=bracket_curie)
-                _write_prop_line(out, '', key, prop.value, nodebase, all_prefixes, textrefs)
+            # The document node is a first-class node: emit its assertions with the same full
+            # path as body nodes (@id / @as / nesting / edges), just inside @docheader rather
+            # than a `#` block (see SPEC § Document Header). The directives above are document
+            # fields, not stored assertions, so there is no double-emission.
+            _write_assertions(model.nodes[document_s], out, '', nodebase, all_prefixes,
+                              bracket_curie, textrefs)
         out.write('\n')
 
     for nid in sorted(model.nodes.keys(), key=str):

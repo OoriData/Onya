@@ -647,29 +647,16 @@ def _create_assertion(parent, pi, assertion_label, doc, parser: LiterateParser |
     return created
 
 
-def process_nodeblock(nodeblock, graph_obj, doc, parser: LiterateParser | None = None):
-    headermarks, nid, ntype, props = nodeblock
+def _build_assertions(node, props, graph_obj, doc, parser: LiterateParser | None = None) -> bool:
+    '''
+    Build assertions (properties, edges, their `@id` / `@as` directives, arbitrary nesting, and
+    `@interpretations` desugaring) onto `node` from a flat, indent-encoded list of parsed bullets.
 
-    if nid == '@docheader':
-        process_docheader(props, graph_obj, doc, parser)
-        return
-
-    nid = _resolve_node_id(nid, doc, parser)
-
-    # Get or create the node
-    if nid not in graph_obj:
-        n = graph_obj.node(nid)
-    else:
-        n = graph_obj[nid]
-
-    # Add types if specified. A node may carry a *set* of types, written
-    # whitespace-separated inside the header brackets (e.g. `[Organization lv:Client]`).
-    if ntype:
-        type_base = parser._type_base(doc) if parser else doc.typebase
-        for type_ref in TYPE_REF_PAT.findall(ntype):
-            type_iri = expand_iri(type_ref, type_base, doc=doc)
-            n.types.add(type_iri)
-
+    Shared by ordinary node blocks and the document node (`@docheader`), so the document node is
+    a first-class node at the Literate boundary: its non-directive bullets carry the same
+    expressiveness as any other node's (see SPEC § Document Header). Returns True if any assertion
+    was created (used for the empty-block warning on ordinary nodes).
+    '''
     # Nesting is tracked with a stack of (indent, assertion) frames. Each assertion's origin is
     # the nearest enclosing frame with strictly smaller indent (the node itself when none). This
     # supports arbitrary nesting depth for properties, edges, and `@id` alike.
@@ -691,7 +678,7 @@ def process_nodeblock(nodeblock, graph_obj, doc, parser: LiterateParser | None =
         # Unwind frames at this indent or deeper: they are siblings/children, not the parent.
         while stack and stack[-1][0] >= pi.indent:
             stack.pop()
-        parent = stack[-1][1] if stack else n
+        parent = stack[-1][1] if stack else node
 
         # `@id` is a directive, not an assertion: it names its enclosing assertion (the current
         # parent) rather than creating a property on it. At the node's own level (no enclosing
@@ -757,6 +744,34 @@ def process_nodeblock(nodeblock, graph_obj, doc, parser: LiterateParser | None =
                     created.interp = default
             stack.append((pi.indent, created))
 
+    return saw_assertion
+
+
+def process_nodeblock(nodeblock, graph_obj, doc, parser: LiterateParser | None = None):
+    headermarks, nid, ntype, props = nodeblock
+
+    if nid == '@docheader':
+        process_docheader(props, graph_obj, doc, parser)
+        return
+
+    nid = _resolve_node_id(nid, doc, parser)
+
+    # Get or create the node
+    if nid not in graph_obj:
+        n = graph_obj.node(nid)
+    else:
+        n = graph_obj[nid]
+
+    # Add types if specified. A node may carry a *set* of types, written
+    # whitespace-separated inside the header brackets (e.g. `[Organization lv:Client]`).
+    if ntype:
+        type_base = parser._type_base(doc) if parser else doc.typebase
+        for type_ref in TYPE_REF_PAT.findall(ntype):
+            type_iri = expand_iri(type_ref, type_base, doc=doc)
+            n.types.add(type_iri)
+
+    saw_assertion = _build_assertions(n, props, graph_obj, doc, parser)
+
     # No assertion and no type: the block ensures the node id exists but otherwise makes no change
     # to the model — usually an authoring slip or a round-trip artifact (write() emits a bare block
     # for a target-only node).
@@ -769,86 +784,97 @@ def process_nodeblock(nodeblock, graph_obj, doc, parser: LiterateParser | None =
 
 
 def process_docheader(props, graph_obj, doc, parser: LiterateParser | None = None):
+    # The `@docheader` block IS the document node's block. Two kinds of bullet live here:
+    # built-in *directives* (`@document`, `@nodebase`, `@schema`, `@typebase`, `@language`, and
+    # the `@iri:` / `@interpretations:` config stanzas), which set document fields and create no
+    # assertion; and ordinary *assertions* on the document node, which get the same full treatment
+    # as any node block (properties, edges, `@id`/`@as`, arbitrary nesting) via _build_assertions.
+    # Only the document id/type stay directive-driven (`@document` + implicit onya:Document); see
+    # SPEC § Document Header.
     outer_indent = -1
-    current_outer_prop = None
-    pending_doc_props = []
+    directive_owner = None  # None | '@iri' | '@interpretations' | 'ASSERTION'
+    assertion_props = []    # non-directive bullets (with their nested descendants) for the doc node
     for prop in props:
-        # Skip comments
-        if isinstance(prop, str):
+        if isinstance(prop, str):  # a comment: no graph meaning
+            continue
+        if isinstance(prop, tuple) and prop[0] == 'text_ref_def':
+            assertion_props.append(prop)  # registered by the shared builder
             continue
 
-        # @iri section is where key IRI prefixes can be set
-        # First property encountered determines outer indent
+        # First bullet fixes the outer indent; bullets at it are directives/assertions, deeper
+        # ones are the nested content of the current outer bullet.
         if outer_indent == -1:
             outer_indent = prop.indent
         if prop.indent == outer_indent:
-            current_outer_prop = prop
-            #Setting an IRI for this very document being parsed
-            if prop.key == '@document':
+            key = prop.key
+            if key == '@document':
                 doc.iri = prop.value.verbatim if prop.value else None
-            elif prop.key == '@language':
+                directive_owner = None
+            elif key == '@language':
                 doc.lang = prop.value.verbatim if prop.value else None
-            elif prop.key == '@nodebase' or prop.key == '@base':
+                directive_owner = None
+            elif key == '@nodebase' or key == '@base':
                 # @base is retained as a legacy alias, but @nodebase is preferred.
                 doc.nodebase = prop.value.verbatim if prop.value else None
-            elif prop.key == '@schema':
+                directive_owner = None
+            elif key == '@schema':
                 doc.schemabase = prop.value.verbatim if prop.value else None
-            elif prop.key == '@typebase':
-                # @typebase for less common cases where types need different base than properties (@schema)
+                directive_owner = None
+            elif key == '@typebase':
+                # @typebase for less common cases where types need a different base than @schema
                 doc.typebase = prop.value.verbatim if prop.value else None
-            elif prop.key == '@iri':
-                # Prefix block only; nested lines supply mappings (not a document assertion)
-                pass
-            elif prop.key == '@interpretations':
+                directive_owner = None
+            elif key == '@iri':
+                # Prefix block only; nested lines supply mappings (not a document assertion).
+                directive_owner = '@iri'
+            elif key == '@interpretations':
                 # Interpretation defaults block; nested lines supply label -> interp mappings.
                 # Collected raw and resolved after the whole header is parsed (so @schema and
                 # @iri prefixes are known regardless of stanza order), then desugared onto each
                 # matching assertion's `interp` — the stanza itself is not part of the graph.
                 if doc.interp_defaults_raw is None:
                     doc.interp_defaults_raw = []
-            #If we have a document node to which to attach them, just attach all other properties
+                directive_owner = '@interpretations'
             else:
-                pending_doc_props.append(prop)
+                # A genuine assertion on the document node; hand it (and its descendants) to the
+                # shared builder below.
+                assertion_props.append(prop)
+                directive_owner = 'ASSERTION'
         else:
-            # Handle nested properties (attributes)
-            if current_outer_prop and current_outer_prop.key == '@iri':
+            # Nested line: belongs to the current outer bullet.
+            if directive_owner == '@iri':
                 k, uri = prop.key, prop.value.verbatim if prop.value else None
                 if k == '@nodebase' or k == '@base':
-                    # @base is retained as a legacy alias, but @nodebase is preferred.
                     doc.nodebase = uri
                 elif k == '@schema':
                     doc.schemabase = uri
                     _sync_schema_prefix(doc)
                 elif k == '@typebase':
-                    # @typebase for less common cases where types need different base than properties (@schema)
                     doc.typebase = uri
                 else:
                     _register_iri_prefix(doc, k, uri)
-            elif current_outer_prop and current_outer_prop.key == '@interpretations':
+            elif directive_owner == '@interpretations':
                 # Defer resolution: labels resolve against @schema, which may be declared
                 # after this stanza. Keep raw (label, interp-name) pairs for now.
                 if prop.value is not None:
                     if doc.interp_defaults_raw is None:
                         doc.interp_defaults_raw = []
                     doc.interp_defaults_raw.append((prop.key, prop.value.verbatim))
+            elif directive_owner == 'ASSERTION':
+                assertion_props.append(prop)  # a descendant of a document-node assertion
+            # else: nested under a scalar directive (e.g. under @document) -> ignored
 
     _sync_schema_prefix(doc)
     _check_namespace_bases(doc, strict=bool(parser and parser.strict_namespace_bases))
     _resolve_interp_defaults(doc)
 
-    # Attach all non-reserved docheader assertions to the document node (if any)
+    # Build the document node's assertions with the same machinery as any node block, so `@as`,
+    # `@id`, nested/reified assertions, and edges all round-trip.
     if doc.iri:
         if doc.iri not in graph_obj:
             doc_node = graph_obj.node(doc.iri)
         else:
             doc_node = graph_obj[doc.iri]
-        # Add onya:Document type to document nodes
-        doc_node.types.add(ONYA_DOCUMENT)
-        for prop in pending_doc_props:
-            if prop.value is None:
-                continue
-            fullprop = expand_iri(prop.key, doc.schemabase, doc=doc)
-            # Core model property values are strings; str-ify so a quoted docheader value
-            # (parsed as LITERAL) matches the plain-str form body assertions already store.
-            doc_node.add_property(fullprop, str(prop.value.verbatim))
+        doc_node.types.add(ONYA_DOCUMENT)  # implicit type for document nodes
+        _build_assertions(doc_node, assertion_props, graph_obj, doc, parser)
     return
