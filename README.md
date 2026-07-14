@@ -144,6 +144,10 @@ cd Onya
 pip install -U .
 ```
 
+The base install is dependency-light. Optional extras pull in peripherals only when you need
+them: `pip install "onya[nx]"` for the networkx projection (analytics) and
+`pip install "onya[postgres]"` for the PostgreSQL store backend.
+
 Parse a small graph in Onya Literate format, then work with it, including adding assertions on an edge:
 
 ```python
@@ -240,6 +244,27 @@ View Mermaid output instantly at [mermaid.live](https://mermaid.live/), producin
 
 [![Onya graph of Things Fall Apart, rendered via Mermaid](test/resource/schemaorg/thingsfallapart.png)](https://github.com/OoriData/Onya/blob/main/test/resource/schemaorg/thingsfallapart.png)
 
+### networkx projection + analytics round trip
+
+For graph analytics, `onya.serial.nx` (extras-gated: `pip install "onya[nx]"`) projects a graph
+into a `networkx.MultiDiGraph`, and `write_back` records results — centrality, community, any
+networkx output — back into the Onya graph as typed, merge-safe assertions. The projection is
+lossy by design (first-level structure) and reflects the graph as-is; call `g.merge()` first
+for a normalized view.
+
+```python
+import networkx
+from onya.serial import nx
+from onya.terms import ONYA_INTERP
+
+mg = nx.to_networkx(g)                                          # -> networkx.MultiDiGraph
+scores = networkx.betweenness_centrality(mg)
+nx.write_back(g, 'https://example.org/betweenness', scores, interp=ONYA_INTERP('number'))
+# scores are now first-class Onya assertions: queryable via g.select, merge-safe on store.put
+```
+
+See [`demo/nx_analytics/`](demo/nx_analytics/) for a runnable end-to-end example.
+
 For the full API walkthrough — modifying and removing properties, querying by
 type, data contracts and validation, explicit graph merge, the serializer
 modules and their options — see
@@ -273,5 +298,5 @@ The specification is under CC BY 4.0 to encourage broad adoption and derivative 
 
 # Related Work
 
-- [networkx](https://github.com/networkx/networkx): Network Analysis in Python
+- [networkx](https://github.com/networkx/networkx): Network Analysis in Python — Onya bridges to it directly via `onya.serial.nx` (projection + analytics write-back)
 - [Apache AGE](https://github.com/apache/incubator-age): PostgreSQL Extension for graphs. ANSI SQL & openCypher over the same DB.
