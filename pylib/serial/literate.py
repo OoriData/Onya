@@ -16,6 +16,7 @@ from onya.util import compact_iri, namespace_for_curie, shorten_node_id
 from onya.graph import AssertionIdConflict
 from onya.terms import ONYA_INTERP, RESERVED_INTERP_NAMES
 from onya.serial._literate_parse import (
+    EdgeArrowError,
     InterpretationParseError,
     LiterateParser,
     NamespaceBaseError,
@@ -32,6 +33,7 @@ __all__ = [
     'SchemaPrefixConflict',
     'NamespaceBaseError',
     'InterpretationParseError',
+    'EdgeArrowError',
     'AssertionIdConflict',
 ]
 
@@ -214,7 +216,7 @@ def write(
 
 
 def read(fp, g=None, *, document_source_assertions: bool = False, encoding: str = 'utf-8',
-         merge: bool = False):
+         merge: bool = False, lenient_arrows: bool = False):
     '''
     Read Onya Literate format from a file-like object (or text string) into a graph.
 
@@ -224,6 +226,8 @@ def read(fp, g=None, *, document_source_assertions: bool = False, encoding: str 
     encoding -- character encoding hint passed through to the parser
     merge -- convenience: when True, call ``graph.merge()`` once after reading. Defaults to
         False (parsing accumulates distinct occurrences; merge stays on-demand).
+    lenient_arrows -- if True, accept a stray rightward arrow (e.g. ``➡``, ``=>``) used as an
+        edge connector, warn, and continue. Default False raises ``EdgeArrowError``.
 
     Returns: ``ParseResult(doc_iri, graph, nodes_added)``
     '''
@@ -231,5 +235,6 @@ def read(fp, g=None, *, document_source_assertions: bool = False, encoding: str 
     parser = LiterateParser(
         document_source_assertions=document_source_assertions,
         encoding=encoding,
+        lenient_arrows=lenient_arrows,
     )
     return parser.parse(text, g, encoding=encoding, merge=merge)

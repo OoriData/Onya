@@ -28,7 +28,7 @@ from onya.util import join_namespace, namespace_for_curie
 from pyparsing import (
     ParserElement, Literal, html_comment, Optional, Word, alphas, alphanums,
     Combine, MatchFirst, QuotedString, Regex, ZeroOrMore, White, Suppress,
-    Group, DelimitedList, Forward, OneOrMore, rest_of_line
+    Group, DelimitedList, Forward, OneOrMore, rest_of_line, ParseBaseException
 )  # pip install pyparsing
 ParserElement.set_default_whitespace_chars(' \t')
 
@@ -87,6 +87,16 @@ class InterpretationParseError(ValueError):
     property, or a repeated label within an `@interpretations` stanza. An *unknown*
     interpretation name is never an error — the IRI is recorded and travels with the data
     (see SPEC: @as).
+    '''
+
+
+class EdgeArrowError(ValueError):
+    '''
+    Raised (in the default strict mode) when a list item uses a rightward arrow that is
+    *not* a valid Onya edge connector — e.g. ``➡`` (U+27A1) or an ASCII ``=>`` where ``->``
+    or ``→`` (U+2192) was meant. The message names the offending character and shows the
+    corrected line for easy cut & paste. `LiterateParser(lenient_arrows=True)` accepts the
+    stray arrow, warns, and parses on. See `BAD_EDGE_ARROWS`.
     '''
 
 
@@ -242,7 +252,8 @@ class LiterateParser:
     def __init__(self, *, document_source_assertions: bool = False, encoding: str = 'utf-8',
                  strict_namespace_bases: bool = False,
                  warn_implicit_doc_ids: bool = False,
-                 warn_empty_blocks: bool = True):
+                 warn_empty_blocks: bool = True,
+                 lenient_arrows: bool = False):
         '''
         document_source_assertions -- if set, add @source sub-properties on created assertions,
             including nested assertions but excluding document header declarations
@@ -259,12 +270,18 @@ class LiterateParser:
             nor any assertions: such a block contributes nothing to the model beyond
             ensuring its node id exists. On by default since an empty block is usually an
             authoring or round-trip artifact; pass False to silence.
+        lenient_arrows -- controls handling of a stray rightward arrow used where an edge
+            connector was meant (e.g. `* knows ➡ B`, or ASCII `=>` / `-->`). Default False:
+            such a line raises `EdgeArrowError`, naming the character and showing the
+            corrected line. If set, the stray arrow is accepted as an edge, a warning is
+            emitted, and parsing continues. Valid edge arrows remain only `->` and `→`.
         '''
         self.document_source_assertions = document_source_assertions
         self.encoding = encoding
         self.strict_namespace_bases = strict_namespace_bases
         self.warn_implicit_doc_ids = warn_implicit_doc_ids
         self.warn_empty_blocks = warn_empty_blocks
+        self.lenient_arrows = lenient_arrows
 
     def parse(self, lit_text, graph_obj=None, *, encoding: str | None = None,
               merge: bool = False) -> ParseResult:
@@ -294,7 +311,7 @@ class LiterateParser:
         doc.text_refs = {}  # Initialize the text references dictionary
         doc.pending_edges = []  # Edge targets are resolved after all @id declarations are seen
 
-        parsed = node_seq.parse_string(lit_text, parse_all=True)
+        parsed = self._parse_string(lit_text)
 
         # First pass: collect all text reference definitions
         for item in parsed:
@@ -332,6 +349,46 @@ class LiterateParser:
         nodes_added = nodes_after - nodes_before
 
         return ParseResult(doc.iri, graph_obj, nodes_added)
+
+    def _parse_string(self, lit_text):
+        '''
+        Run the grammar, converting a stray-edge-arrow failure into either a friendly
+        `EdgeArrowError` (default) or a warn-and-continue reparse (`lenient_arrows`).
+
+        A wrong rightward arrow (`➡`, `=>`, ...) always makes pyparsing fail, and it reports
+        the offending list item as the failing line (`exc.line`) — so we only look for a bad
+        arrow *there*, gated on an actual failure. That means arrows sitting harmlessly inside
+        a property value never trigger this (those lines parse fine), and any failure whose
+        line holds no known bad arrow re-raises unchanged.
+        '''
+        text = lit_text
+        # Bound the lenient reparse loop: each pass fixes one line, so line-count+1 is ample.
+        for _ in range(text.count('\n') + 2):
+            try:
+                return node_seq.parse_string(text, parse_all=True)
+            except ParseBaseException as exc:
+                match = _BAD_ARROW_RE.search(exc.line or '')
+                if match is None:
+                    raise  # not an arrow slip — leave the original error intact
+                arrow = match.group(0)
+                corrected = _BAD_ARROW_RE.sub('->', exc.line)
+                if not self.lenient_arrows:
+                    raise EdgeArrowError(
+                        f'line {exc.lineno}: {_describe_bad_arrow(arrow)} is not a valid Onya '
+                        f"edge arrow. Use '->' or '→' (U+2192) instead. Corrected line:\n"
+                        f'    {corrected.strip()}'
+                    ) from exc
+                # Lenient: warn, rewrite every bad arrow on the failing line, and reparse.
+                warnings.warn(
+                    f'line {exc.lineno}: {_describe_bad_arrow(arrow)} used as an edge arrow; '
+                    "treating it as '->'. Prefer '->' or '→' (U+2192).",
+                    stacklevel=3,
+                )
+                lines = text.split('\n')
+                lines[exc.lineno - 1] = _BAD_ARROW_RE.sub('->', lines[exc.lineno - 1])
+                text = '\n'.join(lines)
+        # Reached only if rewrites never converge; surface the real grammar error.
+        return node_seq.parse_string(text, parse_all=True)
 
     def _node_base(self, doc: doc_info) -> str | None:
         '''
@@ -411,6 +468,34 @@ def iriref_parse_action(toks):
 
 RIGHT_ARROW     = Literal('->') | Literal('→')  # U+2192
 DOUBLE_COLON    = Literal('::')  # For text references
+
+# Rightward arrows commonly typed by mistake in place of the edge connector. The only valid
+# edge arrows are ASCII `->` and `→` (U+2192); anything here is a near-miss we can name back
+# to the author. Keyed by the literal token → (human name, codepoint label or None for ASCII).
+BAD_EDGE_ARROWS = {
+    '➡': ('Black Rightwards Arrow', 'U+27A1'),
+    '⟶': ('Long Rightwards Arrow', 'U+27F6'),
+    '↦': ('Rightwards Arrow from Bar', 'U+21A6'),
+    '⇨': ('Rightwards White Arrow', 'U+21E8'),
+    '➔': ('Heavy Wide-Headed Rightwards Arrow', 'U+2794'),
+    '➜': ('Heavy Round-Tipped Rightwards Arrow', 'U+279C'),
+    '➝': ('Heavy Rightwards Arrow', 'U+279D'),
+    '⇒': ('Rightwards Double Arrow', 'U+21D2'),
+    '⟹': ('Long Rightwards Double Arrow', 'U+27F9'),
+    '⇢': ('Rightwards Dashed Arrow', 'U+21E2'),
+    '⭢': ('Rightwards Arrow', 'U+2B62'),
+    '=>': ('ASCII fat arrow', None),
+    '-->': ('ASCII long arrow', None),
+}
+# Longest tokens first so `-->` wins over any `->`-like prefix scan (matters for the sub()).
+_BAD_ARROW_RE = re.compile('|'.join(re.escape(a) for a in sorted(BAD_EDGE_ARROWS, key=len, reverse=True)))
+
+
+def _describe_bad_arrow(arrow: str) -> str:
+    '''Render an offending arrow as ``'➡' (U+27A1 Black Rightwards Arrow)`` for a message.'''
+    name, codepoint = BAD_EDGE_ARROWS[arrow]
+    inner = f'{codepoint} {name}' if codepoint else name
+    return f'{arrow!r} ({inner})'
 
 COMMENT         = html_comment  # Using HTML-style comments for cleaner markdown compatibility
 OPCOMMENT       = Optional(COMMENT)

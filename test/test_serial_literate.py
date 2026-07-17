@@ -19,7 +19,7 @@ from onya.graph import graph
 #from onya.serial.literate import *
 from io import StringIO
 
-from onya.serial.literate import LiterateParser, NamespaceBaseError, SchemaPrefixConflict, read, write
+from onya.serial.literate import EdgeArrowError, LiterateParser, NamespaceBaseError, SchemaPrefixConflict, read, write
 from onya.serial._literate_parse import doc_info, expand_iri
 from onya.util import compact_iri, join_namespace # , namespace_for_curie
 from onya import LITERAL, ONYA_BASEIRI
@@ -447,6 +447,109 @@ def test_unicode_arrow_edge():
     edges = list(a.traverse('https://schema.org/knows'))
     assert len(edges) == 1
     assert edges[0].target.id == 'http://example.org/B'
+
+
+_BAD_ARROW_DOC = '''# @docheader
+* @document: http://example.org/d
+* @nodebase: http://example.org/
+* @schema: https://schema.org/
+
+# A [Person]
+* name: Alice
+* knows {arrow} B
+
+# B [Person]
+* name: Bob
+'''
+
+
+@pytest.mark.parametrize('arrow, codepoint', [
+    ('➡', 'U+27A1'),   # ➡ Black Rightwards Arrow
+    ('⟶', 'U+27F6'),   # ⟶ Long Rightwards Arrow
+    ('↦', 'U+21A6'),   # ↦ Rightwards Arrow from Bar
+    ('⇨', 'U+21E8'),   # ⇨ Rightwards White Arrow
+    ('⇒', 'U+21D2'),   # ⇒ Rightwards Double Arrow
+    ('=>', None),           # ASCII fat arrow
+    ('-->', None),          # ASCII long arrow
+])
+def test_bad_edge_arrow_strict_raises(arrow, codepoint):
+    '''Default (strict) mode names the stray arrow and shows the corrected line.'''
+    text = _BAD_ARROW_DOC.format(arrow=arrow)
+    with pytest.raises(EdgeArrowError) as exc:
+        read(text, graph())
+    msg = str(exc.value)
+    assert arrow in msg                    # names the offending character
+    assert '* knows -> B' in msg           # ready-to-paste fix
+    if codepoint:
+        assert codepoint in msg
+
+
+def test_bad_edge_arrow_lenient_accepts_and_warns():
+    '''lenient_arrows=True treats a stray arrow as an edge, warns, and parses on.'''
+    text = _BAD_ARROW_DOC.format(arrow='➡')
+    g = graph()
+    with pytest.warns(UserWarning, match='U\\+27A1'):
+        read(text, g, lenient_arrows=True)
+    a = g['http://example.org/A']
+    edges = list(a.traverse('https://schema.org/knows'))
+    assert len(edges) == 1
+    assert edges[0].target.id == 'http://example.org/B'
+
+
+def test_bad_edge_arrow_lenient_multiple_lines():
+    '''Several stray arrows on different lines are each repaired.'''
+    text = '''# @docheader
+* @document: http://example.org/d
+* @nodebase: http://example.org/
+* @schema: https://schema.org/
+
+# A [Person]
+* knows ➡ B
+* likes => C
+
+# B [Person]
+* name: Bob
+
+# C [Person]
+* name: Carol
+'''
+    g = graph()
+    with warnings.catch_warnings():
+        warnings.simplefilter('ignore')
+        read(text, g, lenient_arrows=True)
+    a = g['http://example.org/A']
+    assert len(list(a.traverse('https://schema.org/knows'))) == 1
+    assert len(list(a.traverse('https://schema.org/likes'))) == 1
+
+
+def test_arrow_inside_property_value_not_flagged():
+    '''A rightward arrow living inside a property value parses fine and never triggers.'''
+    text = '''# @docheader
+* @document: http://example.org/d
+* @nodebase: http://example.org/
+* @schema: https://schema.org/
+
+# A [Thing]
+* note: use ➡ for emphasis, A ➡ B in prose
+'''
+    g = graph()
+    read(text, g)  # strict mode, no error
+    a = g['http://example.org/A']
+    note = next(p for p in a.properties if p.label == 'https://schema.org/note')
+    assert '➡' in str(note.value)
+
+
+def test_non_arrow_parse_error_reraised_unchanged():
+    '''A parse failure whose line holds no known bad arrow re-raises the original error.'''
+    from pyparsing import ParseBaseException
+    text = '''# @docheader
+* @document: http://example.org/d
+
+# A [Thing]
+* this line is broken !!! %%%
+'''
+    with pytest.raises(ParseBaseException):
+        read(text, graph())
 
 
 def test_read_shim_roundtrip():

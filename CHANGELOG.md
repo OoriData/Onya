@@ -1,14 +1,18 @@
 # Changelog
-
+<!--
 Notable changes to Onya are recorded here. Format based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/). Project follows [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
+
+For interim changes not yet earmarked for a particular release, can use this header at the top:
+## [Unreleased]
+-->
 
 ## [Unreleased]
 
-### Fixed
+### Added
 
-- **The document node is now first-class in Onya Literate.** Its `@docheader` bullets carry the same expressiveness as any node block — `@as` interpretations, `@id`, nested/reified assertions, and edges — on both parse and serialize, and `@interpretations` defaults apply to them. Previously the docheader was parsed and written as a restricted *flat* `label: value` form, so an interpretation, an `@id`, a nested assertion, or an edge on the document node was silently dropped or misparsed (e.g. `* about -> Thing` became a string property, creating no edge or target node) and lost on `write → read`. Parse and serialize now route document-node assertions through the same machinery as body nodes (`_build_assertions` / `_write_assertions`); only the document node's identity and implicit `onya:Document` type stay directive-driven (`@document`), so it still has no `# NodeID [Type]` header and is never emitted as a separate `#` block. SPEC § Document Header documents this. (#26)
+- **Stray edge-arrow diagnostics.** The only valid edge connectors are ASCII `->` and `→` (U+2192); a near-miss (`➡` U+27A1, `⟶` U+27F6, `↦` U+21A6, `⇨` U+21E8, `⇒` U+21D2, ASCII `=>` / `-->`, and other common rightward arrows) previously produced an opaque `pyparsing` "Expected end of text" failure that named neither the character nor the line. The parser now recognizes these on the failing list item and, by default, raises **`EdgeArrowError`** (importable from `onya.serial.literate`) naming the offending character + codepoint and showing the corrected line for cut & paste. `LiterateParser(lenient_arrows=True)` / `read(..., lenient_arrows=True)` instead accepts the stray arrow as an edge, emits a `UserWarning`, and parses on. The check is gated on an actual parse failure, so an arrow sitting inside a property value never triggers it, and any non-arrow failure re-raises unchanged. The `onya convert` CLI gains `--lenient_arrows` and, in strict mode, prints just the friendly message (no traceback) and exits non-zero.
 
-## [0.4.1] - 20260714: Wildcard selector query method. networkx projection + analytics write-back.
+## [0.4.1] - 20260716: Wildcard selector query method. networkx projection + analytics write-back.
 
 ### Added
 
@@ -16,6 +20,10 @@ Notable changes to Onya are recorded here. Format based on [Keep a Changelog](ht
 - **`onya.serial.nx` — networkx projection + analytics write-back**, extras-gated (`pip install "onya[nx]"`; networkx imported lazily, so the base install stays dependency-free). An analytics peripheral in the same architectural sense as `onya.store`: it imports the core, never the reverse (enforced by the layering guards).
   - **`to_networkx(g, *, apply_interps=False, registry=None)`** projects into a `networkx.MultiDiGraph` (always; `networkx.DiGraph(to_networkx(g))` collapses parallel edges). **Lossy by design (v1, first-level structure):** node → nx node keyed by `str(node.id)` with `types` (tuple of str IRIs) and each property as a **list-valued** attr keyed by `str(label)` (multi-valued properties stay honest lists); edge → nx edge with an **auto-assigned key** (parallel same-skeleton edges stay distinct — the projection reflects the graph as-is; call `g.merge()` first for a normalized view), `label` attr, and first-level edge properties as list attrs. Edges whose target is an identified assertion are skipped (one aggregated warning); nested assertions below the first level are dropped. `apply_interps=True` passes values through `onya.interp.value_of(..., strict=False)` so e.g. `@as: number` arrives as `int`/`Decimal`; unknown interpretations fall back to the raw string.
   - **`write_back(g, label, values, *, interp=None, registry=None, replace=True) -> int`** records results (a node-id → Python object mapping, e.g. `networkx.betweenness_centrality` output) back as properties, returning the count written. `interp` (e.g. `ONYA_INTERP('number')`) renders via `onya.interp.set_value` so the value carries its contract; `interp=None` writes `str(py_obj)`. `replace=True` (default) makes re-running analytics idempotent; `replace=False` accumulates; unknown node ids are skipped. The round trip makes analytics first-class Onya data — queryable via `graph.select`, merge-safe through `store.put(name, g, merge=True)`. See `demo/nx_analytics/`.
+
+### Fixed
+
+- **The document node is now first-class in Onya Literate.** Its `@docheader` bullets carry the same expressiveness as any node block — `@as` interpretations, `@id`, nested/reified assertions, and edges — on both parse and serialize, and `@interpretations` defaults apply to them. Previously the docheader was parsed and written as a restricted *flat* `label: value` form, so an interpretation, an `@id`, a nested assertion, or an edge on the document node was silently dropped or misparsed (e.g. `* about -> Thing` became a string property, creating no edge or target node) and lost on `write → read`. Parse and serialize now route document-node assertions through the same machinery as body nodes (`_build_assertions` / `_write_assertions`); only the document node's identity and implicit `onya:Document` type stay directive-driven (`@document`), so it still has no `# NodeID [Type]` header and is never emitted as a separate `#` block. SPEC § Document Header documents this. (#26)
 
 ## [0.4.0] - 20260709: Graph merge. Data contract layers. Asserdion IDs. Empty node blocks. Multi-typed nodes. Persistence store.
 

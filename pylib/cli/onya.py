@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import TextIO
 
 from onya.__about__ import __version__
-from onya.serial.literate import LiterateParser
+from onya.serial.literate import LiterateParser, EdgeArrowError
 
 
 def _looks_like_glob(filespec: str) -> bool:
@@ -87,7 +87,8 @@ def convert(filespec: str,
             show_edge_labels: bool = True,
             show_edge_annotations: bool = True,
             document_source_assertions: bool = False,
-            encoding: str = 'utf-8'):
+            encoding: str = 'utf-8',
+            lenient_arrows: bool = False):
     '''
     Convert Onya Literate input to another format.
 
@@ -99,6 +100,8 @@ def convert(filespec: str,
         nodebase/schema/rankdir/show_*: Passed to the target serializer.
         document_source_assertions: If set, parser adds @source provenance annotations.
         encoding: Text encoding used to read input files (ignored for stdin).
+        lenient_arrows: If set, accept a stray edge arrow (e.g. `➡`, `=>`), warn, and
+            continue instead of erroring with EdgeArrowError.
 
     Examples:
         onya convert test/resource/schemaorg/thingsfallapart.onya --mermaid
@@ -109,14 +112,24 @@ def convert(filespec: str,
     fmt = _infer_format(mermaid=mermaid, dot=dot, out=out)
     paths = _expand_filespec(filespec)
 
-    parser = LiterateParser(document_source_assertions=document_source_assertions, encoding=encoding)
+    parser = LiterateParser(document_source_assertions=document_source_assertions, encoding=encoding,
+                            lenient_arrows=lenient_arrows)
 
     graph_obj = None
     doc_iris: list[str] = []
 
+    def _parse(text: str, source: str):
+        # A stray-edge-arrow error carries a ready-to-paste fix; show just that (not a
+        # traceback) and exit non-zero. `--lenient_arrows` turns this into a warning instead.
+        try:
+            return parser.parse(text, graph_obj=graph_obj, encoding=encoding)
+        except EdgeArrowError as exc:
+            sys.stderr.write(f'{source}: {exc}\n')
+            raise SystemExit(2)
+
     if filespec == '-':
         lit_text = sys.stdin.read()
-        result = parser.parse(lit_text, graph_obj=graph_obj, encoding=encoding)
+        result = _parse(lit_text, '<stdin>')
         graph_obj = result.graph
         if result.doc_iri:
             doc_iris.append(result.doc_iri)
@@ -128,7 +141,7 @@ def convert(filespec: str,
             if not p.exists():
                 raise FileNotFoundError(str(p))
             lit_text = p.read_text(encoding=encoding)
-            result = parser.parse(lit_text, graph_obj=graph_obj, encoding=encoding)
+            result = _parse(lit_text, str(p))
             graph_obj = result.graph
             if result.doc_iri:
                 doc_iris.append(result.doc_iri)
