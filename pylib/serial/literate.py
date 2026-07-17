@@ -18,7 +18,9 @@ from onya.terms import ONYA_INTERP, RESERVED_INTERP_NAMES
 from onya.serial._literate_parse import (
     EdgeArrowError,
     InterpretationParseError,
+    LiterateParseError,
     LiterateParser,
+    LiterateSyntaxError,
     NamespaceBaseError,
     ParseResult,
     SchemaPrefixConflict,
@@ -33,7 +35,9 @@ __all__ = [
     'SchemaPrefixConflict',
     'NamespaceBaseError',
     'InterpretationParseError',
+    'LiterateParseError',
     'EdgeArrowError',
+    'LiterateSyntaxError',
     'AssertionIdConflict',
 ]
 

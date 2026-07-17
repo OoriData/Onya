@@ -19,7 +19,9 @@ from onya.graph import graph
 #from onya.serial.literate import *
 from io import StringIO
 
-from onya.serial.literate import EdgeArrowError, LiterateParser, NamespaceBaseError, SchemaPrefixConflict, read, write
+from onya.serial.literate import (
+    EdgeArrowError, LiterateParser, LiterateSyntaxError, NamespaceBaseError, SchemaPrefixConflict, read, write,
+)
 from onya.serial._literate_parse import doc_info, expand_iri
 from onya.util import compact_iri, join_namespace # , namespace_for_curie
 from onya import LITERAL, ONYA_BASEIRI
@@ -539,8 +541,8 @@ def test_arrow_inside_property_value_not_flagged():
     assert '➡' in str(note.value)
 
 
-def test_non_arrow_parse_error_reraised_unchanged():
-    '''A parse failure whose line holds no known bad arrow re-raises the original error.'''
+def test_malformed_assertion_gets_friendly_error():
+    '''A non-arrow failure is translated into an actionable LiterateSyntaxError, not a raw dump.'''
     from pyparsing import ParseBaseException
     text = '''# @docheader
 * @document: http://example.org/d
@@ -548,8 +550,46 @@ def test_non_arrow_parse_error_reraised_unchanged():
 # A [Thing]
 * this line is broken !!! %%%
 '''
-    with pytest.raises(ParseBaseException):
+    with pytest.raises(LiterateSyntaxError) as exc:
         read(text, graph())
+    assert exc.value.category == 'assertion'
+    assert exc.value.lineno == 5
+    assert '* this line is broken' in str(exc.value)
+    # It stays a ValueError / carries the original pyparsing error as its cause.
+    assert isinstance(exc.value, ValueError)
+    assert isinstance(exc.value.__cause__, ParseBaseException)
+
+
+_SYNTAX_HDR = ('# @docheader\n* @document: https://example.org/books/x\n'
+               '* @nodebase: https://example.org/books/x/\n* @schema: https://schema.org/\n\n')
+
+
+@pytest.mark.parametrize('text, category, needles', [
+    # Node id containing a space — the single most common LLM slip. Suggests a clean token.
+    (_SYNTAX_HDR + '# Capt. Doran [Person]\n* name: Capt. Doran\n',
+     'node-id-space', ['Capt. Doran', 'CaptDoran', 'single token']),
+    # Unclosed [Type] bracket.
+    (_SYNTAX_HDR + '# A [Person\n* name: A\n',
+     'type-bracket', ['closing `]`', '# A [Person']),
+    # Assertion outside / before a node block.
+    (_SYNTAX_HDR + '* orphan: value\n\n# A [Person]\n* name: A\n',
+     'assertion', ['* orphan: value', 'NodeID']),
+    # Markdown code fence wrapping the graph.
+    ('```markdown\n' + _SYNTAX_HDR + '# A [Person]\n* name: A\n```\n',
+     'code-fence', ['code fence', 'do not wrap']),
+    # Preamble / explanatory prose before the docheader.
+    ('Sure! Here you go:\n\n' + _SYNTAX_HDR + '# A [Person]\n* name: A\n',
+     'unexpected', ['Sure! Here you go', '@docheader', 'preamble']),
+])
+def test_syntax_diagnostics(text, category, needles):
+    '''Common malformed inputs each yield a categorized, actionable message (no grammar dump).'''
+    with pytest.raises(LiterateSyntaxError) as exc:
+        read(text, graph())
+    assert exc.value.category == category
+    msg = str(exc.value)
+    for needle in needles:
+        assert needle in msg, f'missing {needle!r} in: {msg}'
+    assert 'Expected {' not in msg  # never the raw pyparsing grammar dump
 
 
 def test_read_shim_roundtrip():

@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import TextIO
 
 from onya.__about__ import __version__
-from onya.serial.literate import LiterateParser, EdgeArrowError
+from onya.serial.literate import LiterateParser, LiterateParseError
 
 
 def _looks_like_glob(filespec: str) -> bool:
@@ -119,11 +119,12 @@ def convert(filespec: str,
     doc_iris: list[str] = []
 
     def _parse(text: str, source: str):
-        # A stray-edge-arrow error carries a ready-to-paste fix; show just that (not a
-        # traceback) and exit non-zero. `--lenient_arrows` turns this into a warning instead.
+        # A friendly parse diagnostic (stray arrow, bad node id, unclosed [Type], preamble
+        # prose, ...) carries an actionable message; show just that (not a traceback) and exit
+        # non-zero. `--lenient_arrows` downgrades the arrow case to a warning instead.
         try:
             return parser.parse(text, graph_obj=graph_obj, encoding=encoding)
-        except EdgeArrowError as exc:
+        except LiterateParseError as exc:
             sys.stderr.write(f'{source}: {exc}\n')
             raise SystemExit(2)
 

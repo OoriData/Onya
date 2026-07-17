@@ -90,7 +90,17 @@ class InterpretationParseError(ValueError):
     '''
 
 
-class EdgeArrowError(ValueError):
+class LiterateParseError(ValueError):
+    '''
+    Base for *friendly* Onya Literate parse diagnostics: a structural failure translated into
+    an actionable message (which construct is at fault, and how to fix it) instead of
+    pyparsing's raw ``Expected end of text`` / grammar dump. Subclasses `ValueError`, so
+    existing ``except ValueError`` handlers keep working. See `EdgeArrowError` and
+    `LiterateSyntaxError`.
+    '''
+
+
+class EdgeArrowError(LiterateParseError):
     '''
     Raised (in the default strict mode) when a list item uses a rightward arrow that is
     *not* a valid Onya edge connector — e.g. ``➡`` (U+27A1) or an ASCII ``=>`` where ``->``
@@ -98,6 +108,22 @@ class EdgeArrowError(ValueError):
     corrected line for easy cut & paste. `LiterateParser(lenient_arrows=True)` accepts the
     stray arrow, warns, and parses on. See `BAD_EDGE_ARROWS`.
     '''
+
+
+class LiterateSyntaxError(LiterateParseError):
+    '''
+    A structural parse failure rendered as an actionable message. It names the construct at
+    fault — node header, node identifier, `[Type]` bracket, assertion, code fence, preamble
+    prose — and, where it can, suggests the fix (e.g. `Capt. Doran` → `CaptDoran`). Falls
+    back to a generic-but-clean message that still says what the parser expected, never the
+    raw grammar dump. Like `EdgeArrowError` it is gated on an *actual* parse failure, so it
+    never fires on valid input. Carries `lineno`, `line`, and a `category` slug for callers.
+    '''
+    def __init__(self, message, *, lineno=None, line=None, category=None):
+        super().__init__(message)
+        self.lineno = lineno
+        self.line = line
+        self.category = category
 
 
 # Sentinel for the reserved bare name `none`: it names no interpretation. Its only role is
@@ -359,7 +385,7 @@ class LiterateParser:
         the offending list item as the failing line (`exc.line`) — so we only look for a bad
         arrow *there*, gated on an actual failure. That means arrows sitting harmlessly inside
         a property value never trigger this (those lines parse fine), and any failure whose
-        line holds no known bad arrow re-raises unchanged.
+        line holds no known bad arrow is handed to `_diagnose_syntax` for a friendly message.
         '''
         text = lit_text
         # Bound the lenient reparse loop: each pass fixes one line, so line-count+1 is ample.
@@ -369,7 +395,8 @@ class LiterateParser:
             except ParseBaseException as exc:
                 match = _BAD_ARROW_RE.search(exc.line or '')
                 if match is None:
-                    raise  # not an arrow slip — leave the original error intact
+                    # Not an arrow slip — translate the raw failure into an actionable message.
+                    raise _diagnose_syntax(exc) from exc
                 arrow = match.group(0)
                 corrected = _BAD_ARROW_RE.sub('->', exc.line)
                 if not self.lenient_arrows:
@@ -387,8 +414,11 @@ class LiterateParser:
                 lines = text.split('\n')
                 lines[exc.lineno - 1] = _BAD_ARROW_RE.sub('->', lines[exc.lineno - 1])
                 text = '\n'.join(lines)
-        # Reached only if rewrites never converge; surface the real grammar error.
-        return node_seq.parse_string(text, parse_all=True)
+        # Reached only if lenient rewrites never converge; surface a friendly diagnostic.
+        try:
+            return node_seq.parse_string(text, parse_all=True)
+        except ParseBaseException as exc:
+            raise _diagnose_syntax(exc) from exc
 
     def _node_base(self, doc: doc_info) -> str | None:
         '''
@@ -496,6 +526,68 @@ def _describe_bad_arrow(arrow: str) -> str:
     name, codepoint = BAD_EDGE_ARROWS[arrow]
     inner = f'{codepoint} {name}' if codepoint else name
     return f'{arrow!r} ({inner})'
+
+
+def _diagnose_syntax(exc) -> LiterateSyntaxError:
+    '''
+    Translate a pyparsing failure into a `LiterateSyntaxError` with an actionable message.
+
+    Keyed on the failing line (`exc.line`, which pyparsing reports as the first *unconsumed*
+    line — reliably the actual offending line for the malformations LLMs produce). Recognizes
+    the common slips (a spaced node id, an unclosed `[Type]`, a stray/malformed assertion, a
+    Markdown code fence, preamble prose) and always returns a clean message — falling back to
+    a generic one that still names what the parser expected, never the raw grammar dump. The
+    original exception is chained via ``raise ... from exc`` at the call site.
+    '''
+    lineno = getattr(exc, 'lineno', None)
+    raw = getattr(exc, 'line', '') or ''
+    stripped = raw.strip()
+    where = f'line {lineno}' if lineno else 'input'
+
+    def err(msg, category):
+        return LiterateSyntaxError(msg, lineno=lineno, line=raw, category=category)
+
+    if not stripped:
+        return err(f'{where}: unexpected end of input, or a blank where an Onya Literate block '
+                   'was expected. A file must begin with a `# @docheader` block.', 'empty')
+
+    # Markdown code fence wrapping the graph (a frequent LLM output artifact)
+    if stripped.startswith('```') or stripped.startswith('~~~'):
+        return err(f'{where}: found a Markdown code fence ({stripped[:8]!r}). Onya Literate *is* '
+                   'Markdown — do not wrap it in a code fence; remove the opening and closing '
+                   'fence lines.', 'code-fence')
+
+    # Node header line: `# NodeID [Type ...]`
+    if stripped.startswith('#'):
+        rest = stripped.lstrip('#').strip()
+        if '[' in rest and ']' not in rest:
+            id_guess = rest.split('[', 1)[0].strip() or 'NodeID'
+            return err(f'{where}: node header is missing the closing `]` on its type list: '
+                       f'`{stripped}`. Types go in brackets, e.g. `# {id_guess} [Person]`.',
+                       'type-bracket')
+        id_part = rest.split('[', 1)[0].strip()
+        if id_part and any(c.isspace() for c in id_part):
+            # Build a clean single-token suggestion: drop spaces and punctuation (incl. the
+            # stylistically-odd `.`), keeping the slug chars `_`/`-`. `Capt. Doran` -> `CaptDoran`.
+            suggestion = re.sub(r'[^A-Za-z0-9_-]', '', id_part) or 'NodeID'
+            return err(f'{where}: a node identifier must be a single token with no spaces; got '
+                       f'`{id_part}`. Use e.g. `{suggestion}` as the id (it resolves against '
+                       '@nodebase) and put the human-readable name in a `* name:` property.',
+                       'node-id-space')
+        # Header shape not obviously wrong — fall through to the generic message below.
+
+    # Assertion line: property / edge / text reference
+    elif stripped.startswith('*'):
+        return err(f'{where}: could not parse the assertion `{stripped}`. An assertion must be '
+                   '`* label: value`, `* label -> Target`, or `* label:: textref`, and must sit '
+                   'under a `# NodeID [Type]` header. Check for a missing `:` or `->`, or a stray '
+                   'character in the label.', 'assertion')
+
+    # Anything else at block position: preamble prose, junk, etc.
+    return err(f'{where}: unexpected content: `{stripped[:60]}`. Expected a node header '
+               '(`# NodeID [Type]`), an assertion (`* label: value`), a text reference '
+               '(`:name = \"\"\"…\"\"\"`), or the `# @docheader` block. A file must begin with '
+               '`# @docheader` — remove any preamble or explanatory prose.', 'unexpected')
 
 COMMENT         = html_comment  # Using HTML-style comments for cleaner markdown compatibility
 OPCOMMENT       = Optional(COMMENT)

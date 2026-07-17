@@ -6,6 +6,12 @@ For interim changes not yet earmarked for a particular release, can use this hea
 ## [Unreleased]
 -->
 
+## [0.4.2] - Friendly Onya Literate syntax diagnostics.
+
+### Added
+
+- **Actionable parse diagnostics for common malformed Onya Literate** — extends the stray-arrow work (0.4.1) beyond edges. A structural failure now raises **`LiterateSyntaxError`** (importable from `onya.serial.literate`) with a message that names the construct at fault and, where possible, suggests the fix, instead of pyparsing's opaque `Expected end of text` / multi-hundred-char grammar dump. This matters because the message is often fed straight back to an LLM as repair feedback. Recognized cases: a node identifier containing spaces (`# Capt. Doran [Person]` → *"a node identifier must be a single token with no spaces; got `Capt. Doran`. Use e.g. `CaptDoran`…"*), an unclosed `[Type]` bracket (`# A [Person`), a stray/malformed assertion outside a node block, and a Markdown code fence or preamble prose wrapping the graph (both frequent LLM output artifacts). Any unclassified failure still gets a clean generic message naming what was expected — never the raw grammar dump. Like the arrow check it is gated on an actual parse failure (no false positives on valid input) and carries `lineno` / `line` / `category`. New base class **`LiterateParseError(ValueError)`** now parents both `LiterateSyntaxError` and `EdgeArrowError`; the `onya convert` CLI catches the base, so all friendly diagnostics print without a traceback and exit non-zero.
+
 ## [0.4.1] - 20260716: Wildcard selector query method. networkx projection + analytics write-back. Stray edge-arrow diagnostics.
 
 ### Added
