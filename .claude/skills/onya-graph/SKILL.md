@@ -172,14 +172,16 @@ Or in Python for a structural check / node count:
 
 ```python
 from onya.graph import graph
-from onya.serial.literate import LiterateParser
+from onya.serial.literate import read
 
 g = graph()
-result = LiterateParser().parse(open('file.onya').read(), g)
+result = read(open('file.onya').read(), g)   # accepts a str or a file-like; returns a ParseResult
 print(result.doc_iri, len(g), 'nodes')
 ```
 
-Watch for: dangling edge targets (an edge to an id with no block), `SchemaPrefixConflict`, `NamespaceBaseError` / a separator-less-base `DeprecationWarning`, `AssertionIdConflict` (a duplicate `@id`, or an `@id` colliding with a node id), `InterpretationParseError` (two `@as` on one property, or a repeated label in an `@interpretations` stanza), `EdgeArrowError` (a stray edge arrow — only `->` and `→` U+2192 are valid; `➡`/`⇒`/`=>`/`-->` etc. are flagged with the corrected line; parse with `lenient_arrows=True` / `onya convert --lenient_arrows` to accept-and-warn instead), missing `@document`, and bare values that should have been quoted. An unknown `@as` interpretation name is **not** an error. Fix and re-parse.
+`read` and `write` are the top-level entry points (`read` is `LiterateParser().parse()` with defaults; both return a `ParseResult`). Reach for `LiterateParser(...)` directly only when you need a behavior flag — e.g. `lenient_arrows=True`, `warn_implicit_doc_ids=True`, `strict_namespace_bases=True`, `warn_empty_blocks=False`.
+
+Watch for: dangling edge targets (an edge to an id with no block), `SchemaPrefixConflict`, `NamespaceBaseError` / a separator-less-base `DeprecationWarning`, `AssertionIdConflict` (a duplicate `@id`, or an `@id` colliding with a node id), `InterpretationParseError` (two `@as` on one property, or a repeated label in an `@interpretations` stanza), `EdgeArrowError` (a stray edge arrow — only `->` and `→` U+2192 are valid; `➡`/`⇒`/`=>`/`-->` etc. are flagged with the corrected line; parse with `lenient_arrows=True` / `onya convert --lenient_arrows` to accept-and-warn instead), `LiterateSyntaxError` (other structural slips, each with an actionable message: a spaced node id like `# Capt. Doran` → use `CaptDoran`, an unclosed `[Type]` bracket, an assertion outside a node block, or a Markdown code fence / preamble prose wrapping the graph), missing `@document`, and bare values that should have been quoted. An unknown `@as` interpretation name is **not** an error. Fix and re-parse.
 
 ## Visualize / export
 
@@ -193,6 +195,15 @@ cat file.onya | onya convert - --mermaid   # stdin
 ```
 
 Useful display flags: `--rankdir LR`, `--noshow_properties`, `--noshow_types`, `--noshow_edge_labels`, `--noshow_edge_annotations` (negate any boolean with the `no` prefix). See `demo/mermaid_basic/` and `demo/graphviz_basic/`.
+
+For graph **analytics** (not diagrams), `onya.serial.nx` (extras-gated: `pip install "onya[nx]"`) projects a graph into a `networkx.MultiDiGraph` via `to_networkx`, and `write_back` records analytics results (centrality, communities, …) back as typed, merge-safe assertions. See `demo/nx_analytics/`.
+
+## Serialize a graph back to authoring form (`write`)
+
+`read` and `write` are inverses — `read(write(g))` equals `g` — which is what makes the "materialize a graph → serialize → commit to git → re-seed" workflow safe. Two things to know when *exporting* a graph (as opposed to authoring by hand):
+
+- **Faithful under any namespace choice, but bases must be separator-terminated.** `write` only compacts an IRI to a bare/CURIE name when it genuinely lives under a declared base; everything else is emitted as an explicit `<full-iri>`. The one precondition is that `@schema`/`@nodebase` end in `/`, `#`, or `?` — bare names join by concatenation, so a separator-less base would mash on reparse (`…/vocab` + `title` → `…/vocabtitle`). `write` enforces this: it normalizes a separator-less base (appending `/`) and warns, or raises `NamespaceBaseError` under `write(..., strict_namespace_bases=True)`. So: **always pass separator-terminated bases.**
+- **A graph does not remember its authoring convention** (it holds only full IRIs). `write(g, document=…)` with no other hints round-trips *correctly* but verbosely — every name becomes `<https://schema.org/name>`. To reproduce the compact authored form (bare `name`, `lv:score`), pass the namespaces back: `read` hands them to you on `ParseResult` (`r.schema`, `r.nodebase`, `r.typebase`, `r.prefixes`), so `write(g, document=r.doc_iri, schema=r.schema, nodebase=r.nodebase, prefixes=r.prefixes)` re-emits in the original style. Don't try to guess the convention — thread the real one. (The `onya.store` filesystem backend does this automatically: `put(merge=True)` preserves a seeded file's convention across round trips.)
 
 ## Merging graphs & identity
 

@@ -72,12 +72,38 @@ test_client = httpx.AsyncClient(
 
 For richer request/response scripting, use [`pytest-httpx`](https://github.com/Colin-b/pytest_httpx). Real HTTP calls to a live endpoint stay behind `@pytest.mark.integration`.
 
+## Native extensions (optional accelerators)
+
+When a module has both a compiled accelerator and a pure-Python fallback:
+
+- **Behaviour tests are unit tests** — parametrise over the import so the pure *and*
+  compiled paths face the identical assertions. A divergence between them is a bug, and the
+  pure path must run even where no toolchain exists.
+- **Test the fallback itself** — force the C import to fail and assert the pure version
+  answers identically and logs the degradation (no silent `except ImportError: pass`).
+- **Building/importing the wheel across the platform × Python matrix is integration** —
+  it needs real toolchains (`cibuildwheel`). Mark/segregate it; keep it out of the fast run.
+
+See the `python-c` skill for the packaging and C-API side of this.
+
+## Regression tests must have teeth
+A test added with a bug fix must **fail without the fix**. A test that passes against
+*both* the buggy and the fixed code proves nothing — it's false coverage. Confirm it
+actually catches the regression: run it against the unpatched code (`git stash` the fix),
+or construct the input so the old behaviour provably diverges. Real example: a "handles
+odd paths" test using a path with *spaces* passed against both old and new code because
+the underlying library tolerated spaces — only a path with the genuinely-mishandled
+character (`?`) exercised the fix. Pick the input that breaks the old code, not merely a
+plausible-looking one.
+
 ## Checklist
 - Default run is unit-only, offline, and deterministic.
 - Every test that hits unowned code or a live service is `@pytest.mark.integration` and excluded by default.
 - No mocking of third-party internals — own the boundary, ship a real in-memory alternative.
 - HTTP code accepts an injected `AsyncClient`; tests use `MockTransport` / `pytest-httpx`.
 - No hidden dependence on wall-clock, randomness, or external state; control these via fixtures/injection.
+- Optional native accelerators are tested against their pure-Python fallback (same assertions), and the matrix build is integration-only.
+- Regression tests fail without the fix — verified, not assumed.
 
 ## References
 - `snippets/python.md` / `snippets/webapp.md` — preferred test tooling (`pytest`, `pytest-asyncio`, `pytest-httpx`, `pytest-mock`).

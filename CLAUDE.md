@@ -12,7 +12,11 @@
 ## Project type: python
 
 <!-- BEGIN MANAGED:python-core -->
-For Python library/backend work, load `.claude/skills/python/SKILL.md` — covers conventions, packaging, testing, and tooling.
+**Load `.claude/skills/python/SKILL.md` before editing or testing any Python code** — first, every time; don't reconstruct the dev loop from memory. It covers conventions, packaging, testing, and tooling.
+
+Packaging tripwire: the interpreter runs the *installed* package, not your working tree, and library code is installed **non-editably** — so source edits are invisible until you reinstall. After changing package source, reinstall before running tests or the CLI, or you will test stale code. The skill has the exact command (use `--reinstall-package`, not `-U`) and the `uv`/hatchling specifics.
+
+For Python projects that depend on [Onya](https://github.com/OoriData/Onya) and author knowledge graphs as Onya Literate (`.onya`) files, load `.claude/skills/onya-graph/SKILL.md` — docheader, node/edge/property syntax, CURIEs, nested/reified assertions, and validation by parsing.
 
 <!-- END MANAGED:python-core -->
 

@@ -172,12 +172,14 @@ Or in Python for a structural check / node count:
 
 ```python
 from onya.graph import graph
-from onya.serial.literate import LiterateParser
+from onya.serial.literate import read
 
 g = graph()
-result = LiterateParser().parse(open('file.onya').read(), g)
+result = read(open('file.onya').read(), g)   # accepts a str or a file-like; returns a ParseResult
 print(result.doc_iri, len(g), 'nodes')
 ```
+
+`read` and `write` are the top-level entry points (`read` is `LiterateParser().parse()` with defaults; both return a `ParseResult`). Reach for `LiterateParser(...)` directly only when you need a behavior flag — e.g. `lenient_arrows=True`, `warn_implicit_doc_ids=True`, `strict_namespace_bases=True`, `warn_empty_blocks=False`.
 
 Watch for: dangling edge targets (an edge to an id with no block), `SchemaPrefixConflict`, `NamespaceBaseError` / a separator-less-base `DeprecationWarning`, `AssertionIdConflict` (a duplicate `@id`, or an `@id` colliding with a node id), `InterpretationParseError` (two `@as` on one property, or a repeated label in an `@interpretations` stanza), `EdgeArrowError` (a stray edge arrow — only `->` and `→` U+2192 are valid; `➡`/`⇒`/`=>`/`-->` etc. are flagged with the corrected line; parse with `lenient_arrows=True` / `onya convert --lenient_arrows` to accept-and-warn instead), `LiterateSyntaxError` (other structural slips, each with an actionable message: a spaced node id like `# Capt. Doran` → use `CaptDoran`, an unclosed `[Type]` bracket, an assertion outside a node block, or a Markdown code fence / preamble prose wrapping the graph), missing `@document`, and bare values that should have been quoted. An unknown `@as` interpretation name is **not** an error. Fix and re-parse.
 
