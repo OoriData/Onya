@@ -196,6 +196,13 @@ Useful display flags: `--rankdir LR`, `--noshow_properties`, `--noshow_types`, `
 
 For graph **analytics** (not diagrams), `onya.serial.nx` (extras-gated: `pip install "onya[nx]"`) projects a graph into a `networkx.MultiDiGraph` via `to_networkx`, and `write_back` records analytics results (centrality, communities, …) back as typed, merge-safe assertions. See `demo/nx_analytics/`.
 
+## Serialize a graph back to authoring form (`write`)
+
+`read` and `write` are inverses — `read(write(g))` equals `g` — which is what makes the "materialize a graph → serialize → commit to git → re-seed" workflow safe. Two things to know when *exporting* a graph (as opposed to authoring by hand):
+
+- **Faithful under any namespace choice, but bases must be separator-terminated.** `write` only compacts an IRI to a bare/CURIE name when it genuinely lives under a declared base; everything else is emitted as an explicit `<full-iri>`. The one precondition is that `@schema`/`@nodebase` end in `/`, `#`, or `?` — bare names join by concatenation, so a separator-less base would mash on reparse (`…/vocab` + `title` → `…/vocabtitle`). `write` enforces this: it normalizes a separator-less base (appending `/`) and warns, or raises `NamespaceBaseError` under `write(..., strict_namespace_bases=True)`. So: **always pass separator-terminated bases.**
+- **A graph does not remember its authoring convention** (it holds only full IRIs). `write(g, document=…)` with no other hints round-trips *correctly* but verbosely — every name becomes `<https://schema.org/name>`. To reproduce the compact authored form (bare `name`, `lv:score`), pass the namespaces back: `read` hands them to you on `ParseResult` (`r.schema`, `r.nodebase`, `r.typebase`, `r.prefixes`), so `write(g, document=r.doc_iri, schema=r.schema, nodebase=r.nodebase, prefixes=r.prefixes)` re-emits in the original style. Don't try to guess the convention — thread the real one. (The `onya.store` filesystem backend does this automatically: `put(merge=True)` preserves a seeded file's convention across round trips.)
+
 ## Merging graphs & identity
 
 Onya has a precise notion of when two assertions are "the same", which matters whenever graphs combine — parsing several documents into one graph, unioning two graphs, or persisting into a store that already holds a graph. Parsing **never merges on its own**: overlapping assertions accumulate as distinct occurrences until a consumer explicitly calls `graph.merge()` (or `graph.union(other)`). The rules that then apply:
