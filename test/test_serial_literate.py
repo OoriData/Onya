@@ -928,7 +928,8 @@ def test_parse_result_exposes_docheader_namespaces():
 
 def test_write_separator_less_schema_warns_normalizes_and_roundtrips():
     '''A separator-less @schema is normalized (append `/`) with a warning, and round-trips.'''
-    g = graph(); read(_RT_SRC, g)
+    g = graph()
+    read(_RT_SRC, g)
     base = _ns_triples(g)
     buf = StringIO()
     with pytest.warns(UserWarning, match='does not end in a separator'):
@@ -936,48 +937,56 @@ def test_write_separator_less_schema_warns_normalizes_and_roundtrips():
               schema='https://example.org/vocab')  # dropped trailing slash
     text = buf.getvalue()
     assert '* @schema: https://example.org/vocab/' in text  # normalized on emit
-    g2 = graph(); read(text, g2)
+    g2 = graph()
+    read(text, g2)
     assert _ns_triples(g2) == base                           # no mashed IRIs
 
 
 def test_write_separator_less_nodebase_warns_and_roundtrips():
     '''Same guarantee for a separator-less @nodebase (node ids join by concatenation too).'''
-    g = graph(); read(_RT_SRC, g)
+    g = graph()
+    read(_RT_SRC, g)
     base = _ns_triples(g)
     buf = StringIO()
     with pytest.warns(UserWarning, match='@nodebase'):
         write(g, buf, document='https://example.org/kb/doc', nodebase='https://example.org/kb',
               schema='https://example.org/vocab/')
-    g2 = graph(); read(buf.getvalue(), g2)
+    g2 = graph()
+    read(buf.getvalue(), g2)
     assert _ns_triples(g2) == base
 
 
 def test_write_strict_namespace_bases_raises():
     '''strict_namespace_bases=True raises instead of normalizing (parity with the parser).'''
-    g = graph(); read(_RT_SRC, g)
+    g = graph()
+    read(_RT_SRC, g)
     with pytest.raises(NamespaceBaseError):
         write(g, StringIO(), schema='https://example.org/vocab', strict_namespace_bases=True)
 
 
 def test_write_faithful_under_mismatched_namespaces():
     '''Any separator-correct namespace choice round-trips: unmatched IRIs fall back to explicit.'''
-    g = graph(); read(_RT_SRC, g)
+    g = graph()
+    read(_RT_SRC, g)
     base = _ns_triples(g)
     buf = StringIO()
     # Deliberately "wrong" @schema (the lv base) and no lv prefix — still faithful.
     write(g, buf, document='https://example.org/kb/doc', nodebase='https://example.org/kb/',
           schema='https://example.org/lv/')
-    g2 = graph(); read(buf.getvalue(), g2)
+    g2 = graph()
+    read(buf.getvalue(), g2)
     assert _ns_triples(g2) == base
 
 
 def test_write_explicit_form_roundtrips_without_hints():
     '''With only @document, everything serializes explicit `<full-iri>` and round-trips.'''
-    g = graph(); read(_RT_SRC, g)
+    g = graph()
+    read(_RT_SRC, g)
     base = _ns_triples(g)
     buf = StringIO()
     write(g, buf, document='https://example.org/kb/doc')
     text = buf.getvalue()
     assert '<https://example.org/vocab/title>' in text     # explicit, not bare
-    g2 = graph(); read(text, g2)
+    g2 = graph()
+    read(text, g2)
     assert _ns_triples(g2) == base

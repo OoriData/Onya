@@ -59,7 +59,8 @@ async def test_put_merge_preserves_authored_convention(tmp_path):
     seed_path.write_text(SEED)  # simulate a git-checked-out authored seed
 
     store = FileStore(root)
-    add_g = graph(); read(ADD, add_g)
+    add_g = graph()
+    read(ADD, add_g)
     await store.put(NAME, add_g, merge=True)
 
     text = seed_path.read_text()
@@ -70,7 +71,8 @@ async def test_put_merge_preserves_authored_convention(tmp_path):
     assert '<https://example.org/vocab/title>' not in text  # not fallen back to explicit
 
     # Faithful union with no mashed IRIs.
-    got = graph(); _reader.parse(text, got)
+    got = graph()
+    _reader.parse(text, got)
     tr = _triples(got)
     assert ('P', 'https://example.org/kb/Widget', 'https://example.org/vocab/title', 'Sprocket') in tr
     assert ('P', 'https://example.org/kb/Widget', 'https://example.org/vocab/color', 'red') in tr
@@ -83,11 +85,13 @@ async def test_new_graph_without_seed_uses_explicit_form(tmp_path):
     root = tmp_path / 'graphs'
     root.mkdir()
     store = FileStore(root)
-    g = graph(); read(SEED, g)
+    g = graph()
+    read(SEED, g)
     await store.put(NAME, g, merge=True)
 
     text = (root / f'{_slug(NAME)}.onya').read_text()
     assert '@schema' not in text                            # no convention to preserve
     assert '<https://example.org/vocab/title>' in text      # explicit, still faithful
-    got = graph(); _reader.parse(text, got)
+    got = graph()
+    _reader.parse(text, got)
     assert _triples(got) == _triples(g)
