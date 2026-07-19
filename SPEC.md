@@ -607,10 +607,18 @@ Graphs can be written back to Onya Literate with `write()`. Supply the same base
 - `prefixes` — extra vocabularies under `@iri` (the `schema` prefix is implied by `schema=` and is not repeated under `@iri`)
 - `bracket_curie` — if true, non-schema labels use `<prefix:local>`; default is `prefix:local` (e.g. `acme:contactPoint`)
 - `bracket_types` — if true, types use bracketed CURIE form in headers
+- `strict_namespace_bases` — if true, raise `NamespaceBaseError` on a separator-less `schema`/`nodebase` instead of normalizing + warning (see Round-trip guarantee below)
 
 An assertion's `@id` and `@as` are emitted as nested directive lines at every depth. `@as` is currently always emitted inline on each property (no generated `@interpretations` factoring), with interpretation IRIs rendered back to reserved bare names or declared abbreviations where they apply. The writer never consults an interpretation registry: serialization is a model operation, and its output must not vary with installed plugins.
 
 Document-node assertions are emitted as top-level `@docheader` bullets through the same path as body-node assertions — `@id`, `@as`, nested assertions, and edges all round-trip — so a rich document node survives `write → read` in place. The document node itself is never written as a separate `#` block; its id and implicit `onya:Document` type remain directive-driven (`@document`).
+
+### Round-trip guarantee
+
+`read` and `write` are inverses: `read(write(g))` yields a graph equal to `g` (nodes, types, properties, edges, nested assertions, `@id`s, and interpretations). This holds for **any** namespace arguments to `write`, because bare-name compaction is applied only to IRIs that genuinely live under a declared base, and every other IRI falls back to explicit `<full-iri>` form. Two consequences:
+
+- **The precondition is separator-terminated bases.** Bare node ids, labels, and types join `@nodebase`/`@schema`/`@typebase` by pure concatenation (see [Vocabulary prefixes](#vocabulary-prefixes-iri)), so a base must end in `/`, `#`, or `?`; otherwise reparse mints mashed IRIs (`…/vocab` + `title` → `…/vocabtitle`). `write` guarantees this on output: a separator-less `schema`/`nodebase` is normalized (append `/`) with a warning — parity with the parser's read-side check — or raises `NamespaceBaseError` under `write(..., strict_namespace_bases=True)`.
+- **Faithfulness does not require the *original* convention; readability does.** With no namespace hints, `write` emits everything in explicit `<full-iri>` form — correct, but verbose. Recovering the compact authoring convention (bare schema names, CURIE prefixes) requires the docheader namespaces the graph no longer remembers; `read` returns them on `ParseResult` (`schema`, `nodebase`, `typebase`, `prefixes`) precisely so a consumer can re-serialize with `write(..., schema=r.schema, nodebase=r.nodebase, prefixes=r.prefixes)`. A store that re-serializes on write (e.g. `put(merge=True)`) preserves an authored file's convention this way, keeping the on-disk form stable and diff-friendly across round trips.
 
 ## Optional assertion provenance (`@source`)
 

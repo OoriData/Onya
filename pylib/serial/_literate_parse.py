@@ -218,6 +218,33 @@ def _check_namespace_bases(doc: doc_info, *, strict: bool) -> None:
         )
 
 
+def ensure_namespace_separator(name: str, base: str | None, *, strict: bool) -> str | None:
+    '''
+    Return `base` guaranteed to end in a bare-name separator (`/`, `#`, or `?`), for *emitting*
+    a `@nodebase`/`@schema`/`@typebase` directive that round-trips.
+
+    Bare node ids, labels, and types join their base by pure concatenation, so a separator-less
+    base would mint mashed IRIs on reparse (`…/vocab` + `title` -> `…/vocabtitle`). This is the
+    write-side counterpart of `_check_namespace_bases`: a base lacking a separator is normalized
+    by appending `/` and — unless `strict` — a `UserWarning` is emitted; `strict=True` raises
+    `NamespaceBaseError`. A falsy or already-terminated base is returned unchanged.
+    '''
+    if not base or base.endswith(_NAMESPACE_BASE_TERMINATORS):
+        return base
+    msg = (
+        f'{name} base {base!r} does not end in a separator (`/`, `#`, or `?`); bare names join '
+        f'by concatenation, so emitting it as-is would mint mashed IRIs such as '
+        f'{base + "Local"!r}.'
+    )
+    if strict:
+        raise NamespaceBaseError(msg)
+    warnings.warn(
+        msg + f' Normalizing to {base + "/"!r} so the output round-trips.',
+        UserWarning, stacklevel=3,
+    )
+    return base + '/'
+
+
 def _register_iri_prefix(doc: doc_info, prefix: str, uri: str | None) -> None:
     if uri is None:
         return
@@ -262,10 +289,21 @@ class value_info:
 class ParseResult:
     '''
     Result of parsing an Onya Literate document.
+
+    The namespace fields (`schema`, `nodebase`, `typebase`, `prefixes`) surface the docheader
+    convention the document declared, so a consumer can re-serialize with the *same* compact
+    form via `write(..., schema=r.schema, nodebase=r.nodebase, prefixes=r.prefixes)` — the
+    honest alternative to guessing a convention from a graph, which holds only full IRIs.
+    `prefixes` is the `@iri` map excluding the auto-registered `schema` entry (matching
+    `write`'s `prefixes` parameter). Each is `None`/empty when the document did not declare it.
     '''
     doc_iri: str | None
     graph: object
     nodes_added: set
+    schema: str | None = None
+    nodebase: str | None = None
+    typebase: str | None = None
+    prefixes: dict | None = None
 
 
 class LiterateParser:
@@ -374,7 +412,13 @@ class LiterateParser:
         nodes_after = set(getattr(graph_obj, 'nodes', {}).keys()) if hasattr(graph_obj, 'nodes') else set(graph_obj)
         nodes_added = nodes_after - nodes_before
 
-        return ParseResult(doc.iri, graph_obj, nodes_added)
+        # Surface the docheader namespace convention so consumers can re-serialize compactly.
+        # `doc.iris` includes the auto-registered `schema` entry; exclude it (schema travels
+        # separately, matching write()'s `prefixes` parameter).
+        prefixes = {k: v for k, v in (doc.iris or {}).items() if k != 'schema'}
+        return ParseResult(doc.iri, graph_obj, nodes_added,
+                           schema=doc.schemabase, nodebase=doc.nodebase,
+                           typebase=doc.typebase, prefixes=prefixes)
 
     def _parse_string(self, lit_text):
         '''

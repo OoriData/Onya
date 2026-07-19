@@ -106,9 +106,12 @@ class FileStore:
     # --- Onya Literate (de)serialization --------------------------------------------
 
     @staticmethod
-    def _to_literate(g: graph, name: str) -> str:
+    def _to_literate(g: graph, name: str, *, schema=None, nodebase=None, prefixes=None) -> str:
         out = io.StringIO()
-        literate_write(g, out, document=str(name))
+        # Namespaces default to None -> a fully-explicit `<full-iri>` form, which round-trips
+        # unconditionally. When an authored/seeded file already declares a convention, put()
+        # threads it back through here so re-serialization stays compact and diff-clean.
+        literate_write(g, out, document=str(name), schema=schema, nodebase=nodebase, prefixes=prefixes)
         return out.getvalue()
 
     # Internal parses read this backend's *own* serialization, where a bare block for a
@@ -122,6 +125,19 @@ class FileStore:
         g = graph()
         cls._reader.parse(text, g)
         return g
+
+    def _existing_convention(self, name: str):
+        '''
+        Namespace convention (schema, nodebase, prefixes) declared by an existing stored file,
+        or ``(None, None, None)`` if there is none — so a wholesale replace preserves an
+        authored file's compact form instead of reverting it to explicit IRIs.
+        '''
+        existing = self._existing_path(name)
+        if existing is None:
+            return None, None, None
+        with open(existing, encoding='utf-8') as f:
+            r = self._reader.parse(f.read(), graph())
+        return r.schema, r.nodebase, r.prefixes
 
     # --- locking (blocking; called inside to_thread) --------------------------------
 
@@ -165,15 +181,20 @@ class FileStore:
                 # one-document repeated-`@id` guard.
                 stored = graph()
                 existing = self._existing_path(name)
+                schema = nodebase = prefixes = None
                 if existing is not None:
                     with open(existing, encoding='utf-8') as f:
-                        self._reader.parse(f.read(), stored)
+                        r = self._reader.parse(f.read(), stored)
+                    # Preserve the stored file's authoring convention across the round trip
+                    # (keeps git diffs reviewable); a graph itself carries no convention.
+                    schema, nodebase, prefixes = r.schema, r.nodebase, r.prefixes
                 incoming = self._from_literate(self._to_literate(g, name))
                 stored.union(incoming)
-                text = self._to_literate(stored, name)
+                text = self._to_literate(stored, name, schema=schema, nodebase=nodebase, prefixes=prefixes)
             else:
                 g.validate_id_space()  # wholesale replace, but never persist an id-space collision
-                text = self._to_literate(g, name)
+                schema, nodebase, prefixes = self._existing_convention(name)
+                text = self._to_literate(g, name, schema=schema, nodebase=nodebase, prefixes=prefixes)
             self._atomic_write(self._write_path(name), text)
         finally:
             self._release_lock(lock)
