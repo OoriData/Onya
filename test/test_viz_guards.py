@@ -19,6 +19,8 @@ import subprocess
 import sys
 import textwrap
 
+import pytest
+
 
 def _run(code: str, *args: str) -> subprocess.CompletedProcess:
     return subprocess.run([sys.executable, '-c', textwrap.dedent(code), *args],
@@ -76,16 +78,31 @@ def test_lazy_networkx_and_instructive_import_error():
     assert 'IMPORTERROR_OK' in r.stdout
 
 
-def test_legacy_serial_nx_alias_warns_and_reexports():
-    '''`onya.serial.nx` still works (functionally identical to `onya.viz.nx`) but warns.'''
+def test_legacy_serial_nx_alias_warns():
+    '''`onya.serial.nx` still imports (lazy, so this needs no networkx) but warns.'''
+    code = '''
+        import warnings
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter('always')
+            import onya.serial.nx  # noqa: F401
+        assert any(issubclass(w.category, DeprecationWarning) for w in caught), caught
+        assert any('onya.viz.nx' in str(w.message) for w in caught), caught
+        print('OK')
+    '''
+    r = _run(code)
+    assert r.returncode == 0, r.stderr
+    assert 'OK' in r.stdout
+
+
+def test_legacy_serial_nx_alias_functionally_equivalent():
+    '''With networkx actually available, the alias behaves identically to `onya.viz.nx`.'''
+    pytest.importorskip('networkx')
     code = '''
         import warnings
         from onya.graph import graph
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter('always')
+        with warnings.catch_warnings():
+            warnings.simplefilter('ignore', DeprecationWarning)
             from onya.serial import nx as legacy_nx
-        assert any(issubclass(w.category, DeprecationWarning) for w in caught), caught
-        assert any('onya.viz.nx' in str(w.message) for w in caught), caught
         assert legacy_nx.to_networkx(graph()).number_of_nodes() == 0
         print('OK')
     '''
