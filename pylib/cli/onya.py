@@ -161,9 +161,9 @@ def convert(filespec: str,
         show_edge_annotations=show_edge_annotations,
     )
     if fmt == 'dot':
-        from onya.serial import graphviz as emitter
+        from onya.viz import graphviz as emitter
     else:
-        from onya.serial import mermaid as emitter
+        from onya.viz import mermaid as emitter
 
     fp = _open_output(out)
     try:

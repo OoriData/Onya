@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
-# test_serial_mermaid.py
+# test_viz_mermaid.py
 '''
-Test Onya Mermaid serializer
+Test Onya Mermaid projection (onya.viz.mermaid)
 
-pytest test/test_serial_mermaid.py
-pytest -s test/test_serial_mermaid.py  # With console output
+pytest test/test_viz_mermaid.py
+pytest -s test/test_viz_mermaid.py  # With console output
 '''
 
 from io import StringIO
 
 from onya.graph import graph
-from onya.serial import mermaid
+from onya.viz import mermaid
 
 
 def test_basic_mermaid_output():

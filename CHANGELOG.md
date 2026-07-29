@@ -6,6 +6,12 @@ For interim changes not yet earmarked for a particular release, can use this hea
 ## [Unreleased]
 -->
 
+## [Unreleased]
+
+### Changed
+
+- **`onya.viz` is the new home for Mermaid, Graphviz DOT, and networkx projections** — these are expression-layer views for rendering and analysis, not serializations of Onya itself, so they no longer belong under `onya.serial`. `onya.serial.{mermaid,graphviz,nx}` remain importable as deprecated aliases (re-exporting `onya.viz.{mermaid,graphviz,nx}` with a `DeprecationWarning`) and will be removed in a future release; update imports to `from onya.viz import mermaid` / `graphviz` / `nx`. Layering is unchanged: `onya.viz.*` imports the core (`onya.graph`, `onya.interp`, `onya.util`), never `onya.store`, enforced by `test/test_viz_guards.py`. (#33)
+
 ## [0.4.2] - Friendly Onya Literate syntax diagnostics. Faithful serialization round-trips.
 
 ### Fixed

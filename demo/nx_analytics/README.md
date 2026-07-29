@@ -1,6 +1,6 @@
 **Onya networkx Analytics Demo**
 
-This directory shows the `onya.serial.nx` round trip: **project** an Onya graph into
+This directory shows the `onya.viz.nx` round trip: **project** an Onya graph into
 [networkx](https://networkx.org/), **compute** graph analytics with networkx's own API, and
 **write the results back** into the Onya graph as typed, merge-safe assertions.
 
@@ -34,7 +34,7 @@ matplotlib is **not** a dependency of Onya — the script degrades gracefully wi
 ```python
 import networkx
 from onya.graph import graph
-from onya.serial import nx
+from onya.viz import nx
 from onya.serial.literate import read
 from onya.terms import ONYA_INTERP
 
@@ -49,6 +49,6 @@ Notes:
 
 - The projection is **lossy by design** (v1): first-level structure only. Edges to identified
   assertions are skipped (with a warning); nested assertions below the first level are dropped.
-  See the `onya.serial.nx` module docstring for the full loss policy.
+  See the `onya.viz.nx` module docstring for the full loss policy.
 - The projection reflects the graph **as it is**. Parallel same-skeleton edges stay distinct;
   call `g.merge()` first if you want a normalized projection.
