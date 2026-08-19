@@ -33,7 +33,7 @@ flowchart LR
 
 ```python
 from onya.graph import graph
-from onya.serial import mermaid
+from onya.viz import mermaid
 
 g = graph()
 alice = g.node('http://example.org/Alice', 'http://schema.org/Person')
@@ -60,4 +60,4 @@ with open('output.mmd', 'w', encoding='utf-8') as f:
 - `show_edge_labels` / `show_edge_annotations`
 - `node_shapes`: dict mapping type IRI → shape name (`box`, `round`, `circle`, `diamond`)
 
-See `pylib/serial/mermaid.py` for details.
+See `pylib/viz/mermaid.py` for details.

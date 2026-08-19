@@ -24,7 +24,7 @@ from pathlib import Path
 import networkx
 
 from onya.graph import graph
-from onya.serial import nx
+from onya.viz import nx
 from onya.serial.literate import LiterateParser, write
 from onya.terms import ONYA_INTERP
 from onya.interp import value_of

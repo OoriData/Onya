@@ -17,7 +17,7 @@ This will generate several .dot files that can be rendered with:
 from pathlib import Path
 
 from onya.graph import graph
-from onya.serial import graphviz
+from onya.viz import graphviz
 from onya.serial.literate import LiterateParser
 
 

@@ -19,7 +19,7 @@ Mermaid reference: https://mermaid.js.org/intro/syntax-reference.html
 from pathlib import Path
 
 from onya.graph import graph
-from onya.serial import mermaid
+from onya.viz import mermaid
 from onya.serial.literate import LiterateParser
 
 

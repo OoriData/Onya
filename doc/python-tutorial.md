@@ -414,8 +414,12 @@ architecture, canonical schema, skeleton hash, and PGQ layer are documented in
 
 # Visualization / export
 
-Onya includes simple serializers to help you visualize graphs:
+`onya.viz` projects a graph into other tools' formats for visualization and analysis
+(not a serialization of Onya itself — that's `onya.serial`):
 
-- **Graphviz (DOT)**: `from onya.serial import graphviz` → `graphviz.write(g, out=f)` (see `demo/graphviz_basic/`)
-- **Mermaid (flowchart)**: `from onya.serial import mermaid` → `mermaid.write(g, out=f)` (see `demo/mermaid_basic/`; quick viewing via [Mermaid Live Editor](https://mermaid.live/))
+- **Graphviz (DOT)**: `from onya.viz import graphviz` → `graphviz.write(g, out=f)` (see `demo/graphviz_basic/`)
+- **Mermaid (flowchart)**: `from onya.viz import mermaid` → `mermaid.write(g, out=f)` (see `demo/mermaid_basic/`; quick viewing via [Mermaid Live Editor](https://mermaid.live/))
+- **networkx** (analytics, not just diagrams): `from onya.viz import nx` — see `demo/nx_analytics/`
+
+(`onya.serial.{graphviz,mermaid,nx}` still import as deprecated aliases.)
 

@@ -123,7 +123,7 @@ circo -Tsvg demo/demo_minimal.dot -o demo/demo_minimal_circo.svg
 
 ```python
 from onya.graph import graph
-from onya.serial import graphviz
+from onya.viz import graphviz
 
 # Create and populate graph
 g = graph()
@@ -156,7 +156,7 @@ The `graphviz.write()` function accepts many options:
 - **node_attrs** - Default node attributes
 - **edge_attrs** - Default edge attributes
 
-See `pylib/serial/graphviz.py` for complete documentation.
+See `pylib/viz/graphviz.py` for complete documentation.
 
 # Related interest
 

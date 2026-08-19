@@ -1,16 +1,16 @@
 # -*- coding: utf-8 -*-
-# test_serial_graphviz.py
+# test_viz_graphviz.py
 '''
-Test Onya Graphviz serializer
+Test Onya Graphviz projection (onya.viz.graphviz)
 
-pytest test/test_serial_graphviz.py
-pytest -s test/test_serial_graphviz.py  # With console output
+pytest test/test_viz_graphviz.py
+pytest -s test/test_viz_graphviz.py  # With console output
 '''
 
 from io import StringIO
 
 from onya.graph import graph
-from onya.serial import graphviz
+from onya.viz import graphviz
 
 
 def test_basic_graphviz_output():

@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
-# test_serial_nx.py
+# test_viz_nx.py
 '''
-Tests for onya.serial.nx — the networkx projection (to_networkx) and analytics
+Tests for onya.viz.nx — the networkx projection (to_networkx) and analytics
 write-back (write_back). Extras-gated: skipped cleanly when networkx is absent.
 
-    pytest -s test/test_serial_nx.py
+    pytest -s test/test_viz_nx.py
 '''
 
 from io import StringIO
@@ -16,7 +16,7 @@ networkx = pytest.importorskip('networkx')  # noqa: E402 - skip the whole module
 from amara.iri import I  # noqa: E402
 
 from onya.graph import graph  # noqa: E402
-from onya.serial import nx  # noqa: E402
+from onya.viz import nx  # noqa: E402
 from onya.serial.literate import LiterateParser, write  # noqa: E402
 from onya.terms import ONYA_INTERP  # noqa: E402
 from onya.interp import value_of  # noqa: E402

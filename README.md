@@ -246,7 +246,7 @@ View Mermaid output instantly at [mermaid.live](https://mermaid.live/), producin
 
 ### networkx projection + analytics round trip
 
-For graph analytics, `onya.serial.nx` (extras-gated: `pip install "onya[nx]"`) projects a graph
+For graph analytics, `onya.viz.nx` (extras-gated: `pip install "onya[nx]"`) projects a graph
 into a `networkx.MultiDiGraph`, and `write_back` records results — centrality, community, any
 networkx output — back into the Onya graph as typed, merge-safe assertions. The projection is
 lossy by design (first-level structure) and reflects the graph as-is; call `g.merge()` first
@@ -254,7 +254,7 @@ for a normalized view.
 
 ```python
 import networkx
-from onya.serial import nx
+from onya.viz import nx
 from onya.terms import ONYA_INTERP
 
 mg = nx.to_networkx(g)                                          # -> networkx.MultiDiGraph
@@ -298,5 +298,5 @@ The specification is under CC BY 4.0 to encourage broad adoption and derivative 
 
 # Related Work
 
-- [networkx](https://github.com/networkx/networkx): Network Analysis in Python — Onya bridges to it directly via `onya.serial.nx` (projection + analytics write-back)
+- [networkx](https://github.com/networkx/networkx): Network Analysis in Python — Onya bridges to it directly via `onya.viz.nx` (projection + analytics write-back)
 - [Apache AGE](https://github.com/apache/incubator-age): PostgreSQL Extension for graphs. ANSI SQL & openCypher over the same DB.
