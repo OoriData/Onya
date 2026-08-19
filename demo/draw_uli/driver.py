@@ -14,6 +14,11 @@ a deliberate opinion, not an oversight: a rendered graph is a picture of the *en
 relationships an author described*, and the document node is bookkeeping about where that
 description came from, not part of the subject matter. Pass `include_document=True` to draw it
 anyway.
+
+Title, subtitle, and the signature/colophon line are, by default, pulled from the graph's own
+`@docheader` rather than hard-coded by a caller — see `_docheader_text` — so a `.onya` file is
+self-describing enough to render without any Python beside `draw(g, design)`. `title=`/`subtitle=`/
+`signature=` still override when passed explicitly; `signature=False` suppresses it outright.
 '''
 import importlib
 import warnings
@@ -25,10 +30,16 @@ import numpy as np
 SCHEMA = 'https://schema.org/'
 NAME = SCHEMA + 'name'
 DESCRIPTION = SCHEMA + 'description'
+HEADLINE = SCHEMA + 'headline'
+ALTERNATIVE_HEADLINE = SCHEMA + 'alternativeHeadline'
+COMMENT = SCHEMA + 'comment'
+KEYWORDS = SCHEMA + 'keywords'
+SIGNATURE_KEYWORD = 'decoration'   # marks a schema:comment as the render's colophon, not editorial
 
 # Built-in designs, resolved by name without a real plugin/entry-point mechanism — this is a
 # demo, not the library surface that would earn one. Module names are siblings of this file.
-_BUILTIN_DESIGNS = {'uli_night': 'uli_night', 'aquatic': 'aquatic'}
+# Public (not `_`-prefixed): the CLI (`onya_draw.py`) lists available designs from this too.
+BUILTIN_DESIGNS = {'uli_night': 'uli_night', 'aquatic': 'aquatic', 'flatirons': 'flatirons'}
 
 
 def _networkx():
@@ -53,9 +64,9 @@ def _resolve_design(design):
     '''Accept either a Design instance or the name of a built-in demo design.'''
     if isinstance(design, str):
         try:
-            modname = _BUILTIN_DESIGNS[design]
+            modname = BUILTIN_DESIGNS[design]
         except KeyError:
-            raise ValueError(f'Unknown design {design!r}; available: {sorted(_BUILTIN_DESIGNS)}') from None
+            raise ValueError(f'Unknown design {design!r}; available: {sorted(BUILTIN_DESIGNS)}') from None
         return importlib.import_module(modname).DESIGN
     return design
 
@@ -116,7 +127,7 @@ class Context:
     bounds: tuple[float, float]      # (width, height) in data units
     palette: dict[str, str]
     font: str
-    signature: bool
+    signature: str | None    # resolved colophon text to draw, or None/'' to draw none
 
     # -- geometry helpers designs are encouraged to reuse ------------------------------------
     def chevron(self, points, *, color, lw=2.0, size=0.24, spread=0.13, alpha=0.9, zorder=2):
@@ -182,11 +193,14 @@ class Context:
 
 @runtime_checkable
 class Design(Protocol):
-    '''A pluggable visual language. Every hook is optional except node and edge.'''
+    '''A pluggable visual language. Every hook is optional except node and edge. `signature` is
+    this design's own fallback colophon text, used only when the graph doesn't supply its own
+    (see `_docheader_text`) and the caller didn't pass `signature=` to `draw()`.'''
     name: str
     palette: dict[str, str]
     background_color: str
     font: str
+    signature: str
 
     def node(self, ctx: Context, nv: NodeView) -> None: ...
     def edge(self, ctx: Context, ev: EdgeView) -> None: ...
@@ -221,14 +235,41 @@ def _size_values(mg, size_by):
     return out, size_by
 
 
+def _docheader_text(g):
+    '''Pull title/subtitle/signature text straight from the graph's `@docheader`, so a `.onya`
+    file is self-describing enough to render with no Python beside `draw(g, design)`:
+      - title <- schema:headline
+      - subtitle <- schema:alternativeHeadline
+      - signature <- a schema:comment, but ONLY one tagged `keywords: decoration` nested under
+        it — an ordinary editorial comment on the graph is never mistaken for a render's colophon.
+    Any of the three may come back None if the docheader doesn't say. The document node itself
+    is found by its implicit `onya:Document` type (see `onya.terms.ONYA_DOCUMENT`), not by IRI —
+    callers here never need to know the `@document` value.
+    '''
+    from onya.terms import ONYA_DOCUMENT
+    doc = next(g.typematch(ONYA_DOCUMENT), None)
+    if doc is None:
+        return None, None, None
+    title = next((p.value for p in doc.getprop(HEADLINE)), None)
+    subtitle = next((p.value for p in doc.getprop(ALTERNATIVE_HEADLINE)), None)
+    signature = next((c.value for c in doc.getprop(COMMENT)
+                      if any(kw.value == SIGNATURE_KEYWORD for kw in c.getprop(KEYWORDS))), None)
+    return title, subtitle, signature
+
+
 def draw(g, design, *, seed=None, pos=None, size_by=None, figsize=(16, 10), prefixes=None,
-         include_document=False, title=None, subtitle=None, label_top_k=None, signature=True):
+         include_document=False, title=None, subtitle=None, label_top_k=None, signature=None):
     '''Render an Onya graph through a Design. Returns a matplotlib Figure.
 
     `design`: a Design instance, or the name of a built-in demo design ('uli_night', 'aquatic').
     `size_by`: None (default) sizes nodes by degree; otherwise a property IRI, read through
     `onya.interp.value_of` (non-numeric/missing values degrade to 0.0, never raise).
     `include_document`: see module docstring — defaults to False, a deliberate opinion.
+    `title`/`subtitle`: default (None) to the graph's own `schema:headline`/`alternativeHeadline`
+    (see `_docheader_text`); pass a string (including '') to override what the graph says.
+    `signature`: default (None) prefers the graph's own decorative `schema:comment`, falling back
+    to the design's own `signature` tagline when the graph doesn't have one; pass a string to
+    override either, or False to suppress the line entirely.
     Raises ValueError if the graph has nothing to draw (no non-document nodes).
     '''
     networkx = _networkx()
@@ -236,6 +277,14 @@ def draw(g, design, *, seed=None, pos=None, size_by=None, figsize=(16, 10), pref
     design = _resolve_design(design)
     from onya.viz import nx as onx
     from onya.terms import ONYA_DOCUMENT
+
+    doc_title, doc_subtitle, doc_signature = _docheader_text(g)
+    title = doc_title if title is None else title
+    subtitle = doc_subtitle if subtitle is None else subtitle
+    if signature is False:
+        signature = None
+    elif signature is None:
+        signature = doc_signature if doc_signature is not None else getattr(design, 'signature', None)
 
     mg = onx.to_networkx(g, apply_interps=size_by is not None)
     if not include_document:

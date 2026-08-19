@@ -18,6 +18,7 @@ class Aquatic:
     name = 'aquatic'
     background_color = '#04212f'
     font = 'DejaVu Sans'
+    signature = 'ọ́nyà mmiri — a web in water'
     palette = {
         'deep': '#04212f',
         'shallow': '#0d5a6b',
@@ -137,7 +138,7 @@ class Aquatic:
             ax.text(0.57, H - 1.18, subtitle, color=p['caustic'], fontsize=12.5, style='italic',
                     fontfamily=ctx.font, va='top', zorder=6)
         if ctx.signature:
-            ax.text(W - 0.4, 0.42, 'ọ́nyà mmiri — a web in water', color=p['foam'], alpha=0.75,
+            ax.text(W - 0.4, 0.42, ctx.signature, color=p['foam'], alpha=0.75,
                     fontsize=12, style='italic', ha='right', fontfamily=ctx.font, zorder=6)
 
 

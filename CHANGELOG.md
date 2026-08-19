@@ -11,10 +11,15 @@ For interim changes not yet earmarked for a particular release, can use this hea
 ### Added
 
 - Pretty/themable rendering demo: `demo/draw_uli/`
+- **`demo/draw_uli`: a third built-in Design, `flatirons`** — Boulder, Colorado & Front Range graphic cues (alpenglow sky, Flatiron-slab Place motif, trailside-cairn Person motif, CU buff/black trailhead-signpost motif for everything else, dashed-trail edges with painted blazes). Ships with a second reference graph, `boulder.onya.md` (a civic hub-and-spoke map, including a metaproperty demo: the `mayor` edge carries `termStart`/`termEnd` as nested assertions), and a `demo_boulder()` step in `render_demo.py`. (#33)
+- **`demo/draw_uli`: title/subtitle/signature are now sourced from the graph's own `@docheader`** instead of hard-coded by the calling script — `schema:headline` -> title, `schema:alternativeHeadline` -> subtitle, and a `schema:comment` tagged `keywords: decoration` -> the signature/colophon line (an ordinary editorial comment on the graph is never mistaken for one). See `driver._docheader_text`; both reference graphs now carry this in their docheaders.
+- **`demo/draw_uli/onya_draw.py`** — a general-purpose CLI to render *any* `.onya`/`.onya.md` file through a built-in Design, with `--title`/`--subtitle`/`--signature`/`--no-signature` overrides and display prefixes auto-derived from the file's own parsed docheader convention (no manual bookkeeping).
+- **`demo/draw_uli/control.py`** — an optional small TOML sidecar (`--control` on the CLI) for presentation-only rendering hints that have no natural home in a graph itself, chiefly hand-tuned node position anchors (`[pos]`, keyed by the bare node ids from the `.onya` file). `render_demo.py`'s hand-tuned family-tree anchors now live in `things_fall_apart.control.toml` rather than a hard-coded dict.
 
 ### Changed
 
 - **`onya.viz` is the new home for Mermaid, Graphviz DOT, and networkx projections** — these are expression-layer views for rendering and analysis, not serializations of Onya itself, so they no longer belong under `onya.serial`. `onya.serial.{mermaid,graphviz,nx}` remain importable as deprecated aliases (re-exporting `onya.viz.{mermaid,graphviz,nx}` with a `DeprecationWarning`) and will be removed in a future release; update imports to `from onya.viz import mermaid` / `graphviz` / `nx`. Layering is unchanged: `onya.viz.*` imports the core (`onya.graph`, `onya.interp`, `onya.util`), never `onya.store`, enforced by `test/test_viz_guards.py`. (#33)
+- **`demo/draw_uli/driver.draw()`'s `signature` parameter changed meaning**: `None` (new default) auto-resolves to the graph's decorative comment, falling back to the Design's own `signature` tagline; `False` suppresses the line; a string overrides it outright. (Previously a bare `bool` toggling the Design's hard-coded tagline.) Demo-only, no supported-API impact.
 
 ## [0.4.2] — Friendly Onya Literate syntax diagnostics. Faithful serialization round-trips.
 

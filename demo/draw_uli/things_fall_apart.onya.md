@@ -6,6 +6,10 @@
 * @document: https://example.org/books/things-fall-apart
 * @nodebase: https://example.org/books/things-fall-apart/
 * @schema: https://schema.org/
+* headline: Things Fall Apart
+* alternativeHeadline: a woven family, parsed & projected with Onya
+* comment: ọ́nyà úchè: a web of knowledge
+  * keywords: decoration
 
 # Okonkwo [Person]
 

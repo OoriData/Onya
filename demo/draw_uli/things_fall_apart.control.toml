@@ -1,0 +1,11 @@
+# Presentation-only hints for rendering things_fall_apart.onya.md -- see control.py. Hand-tuned
+# node anchors have no natural home in the graph itself (they're a layout preference, not a fact
+# about the family), so they live here instead of hard-coded in render_demo.py.
+seed = 2026
+
+[pos]
+Okonkwo = [0.10, 0.05]
+Unoka = [-0.85, 0.72]
+Nwoye = [-0.55, -0.70]
+Ezinma = [0.42, -0.78]
+Umuofia = [0.95, 0.42]

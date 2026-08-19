@@ -2,7 +2,7 @@ Onya Model Specification
 
 # Overview
 
-Onya is a knowledge graph framework with a simple, recursive model for representing structured information. The core model is intentionally minimal—just nodes, edges, and properties, identifiable by IRIs. Everything beyond that minimum—value typing, ordering, schema constraints—is deliberately left to layers above the core, the most developed of which is the value-level data contract layer (see [Interpretations](#interpretations-data-contract-layers)).
+Onya is a knowledge graph framework with a simple, recursive model for representing structured information. The core model is intentionally minimal—just nodes, edges, and properties, identifiable by IRIs. Everything beyond that minimum—value typing, ordering, schema constraints—is deliberately left to layers above the core, the most developed of which is the value-level data contract layer; you might think of that as data typing. See [Interpretations](#interpretations-data-contract-layers).
 
 # Core Concepts
 
@@ -22,13 +22,13 @@ Nodes use **sets** (not sequences) for assertions because pervasive ordering is 
 
 ## Assertions
 
-Edges and properties are collectively called **assertions**. Like a node, an assertion is an instance that can carry its own nested assertions; unlike a node, it is **anonymous by default**, carrying no externally addressable name. Each assertion is distinguished by the combination of:
+Collective term for edges and properties. Like a node, an assertion is an instance that can carry its own nested assertions; unlike a node, it is **anonymous by default**, carrying no externally addressable name. Each assertion is distinguished by the combination of:
 - its origin (a node or another assertion)
 - its label (an IRI)
 - its target node (edge) or string value (property)
 - an internal marker that differentiates it from otherwise-identical assertions
 
-An assertion MAY be given an explicit identifier, making it addressable — see [Assertion Identifiers](#assertion-identifiers). A property MAY additionally carry an interpretation, a recorded contract about how its string value is meant to be read — see [Interpretations](#interpretations-data-contract-layers).
+An assertion MAY be given an explicit identifier, making it addressable. See [Assertion Identifiers](#assertion-identifiers). A property MAY additionally carry an interpretation, a recorded contract about how its string value is meant to be read. See [Interpretations](#interpretations-data-contract-layers).
 
 ### Edge
 
