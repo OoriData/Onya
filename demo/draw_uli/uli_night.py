@@ -19,6 +19,7 @@ class UliNight:
     name = 'uli_night'
     background_color = '#151d36'
     font = 'DejaVu Serif'
+    signature = 'ọ́nyà úchè — a web of knowledge'
     palette = {
         'ground': '#151d36',
         'glow': '#243055',
@@ -139,7 +140,7 @@ class UliNight:
             ax.text(0.57, H - 1.18, subtitle, color=p['ochre'], fontsize=12.5, style='italic',
                     fontfamily=ctx.font, va='top', zorder=5)
         if ctx.signature:
-            ax.text(W - 0.4, 0.42, 'ọ́nyà úchè — a web of knowledge', color=p['chalk'], alpha=0.7,
+            ax.text(W - 0.4, 0.42, ctx.signature, color=p['chalk'], alpha=0.7,
                     fontsize=12, style='italic', ha='right', fontfamily=ctx.font, zorder=5)
 
 
