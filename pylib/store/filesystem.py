@@ -68,7 +68,12 @@ def _url_to_root(url: str) -> Path:
 
 
 class FileStore:
-    '''A directory of Onya Literate files, one per named graph. Satisfies ``GraphStore``.'''
+    '''
+    A directory of Onya Literate files, one per named graph. Satisfies ``GraphStore``.
+    Does not satisfy ``AssertionStore`` or ``OverlayReadStore`` -- no pushdown is possible
+    (a file must be parsed whole anyway). For a union across named graphs on this backend,
+    compose ``get()`` + ``graph.union()`` (see ``OverlayReadStore``'s docstring).
+    '''
 
     def __init__(self, root: Path):
         self.root = Path(root)

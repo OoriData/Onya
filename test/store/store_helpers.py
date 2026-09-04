@@ -38,6 +38,21 @@ def reference(*docs: str) -> graph:
     return g
 
 
+async def put_each(store, *docs: str) -> list:
+    '''
+    Put each doc under its OWN name (its own ``@document``) — the ``OverlayReadStore``
+    conformance suite's setup: one named graph per doc, so ``store.union(names)`` has
+    something genuine to combine (as opposed to ``reference()``, which unions in memory).
+    Returns the names in the same order as ``docs``, for passing straight to ``union()``.
+    '''
+    names = []
+    for d in docs:
+        r = LiterateParser().parse(d)
+        await store.put(r.doc_iri, r.graph, merge=False)
+        names.append(r.doc_iri)
+    return names
+
+
 def _pv(v):
     return str(v) if isinstance(v, LITERAL) else v
 

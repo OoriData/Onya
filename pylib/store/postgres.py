@@ -27,6 +27,7 @@ from __future__ import annotations
 from amara.iri import I
 
 from onya.graph import GraphMergeError, graph
+from onya.store import _relational as rel
 from onya.store._relational import (
     POSTGRES, SCHEMA_VERSION, SKELETON_HASH_VERSION, classify_anonymous, ddl_statements,
     iter_records, skeleton_hash,
@@ -112,7 +113,7 @@ class PostgresStore:
     # --- AssertionStore -------------------------------------------------------------
 
     async def match(self, name: I | str, origin: I | str | None = None,
-                    label: I | str | None = None):
+                    label: I | str | None = None, where=None):
         async with self._pool.acquire() as conn:
             gpk = await _graph_pk(conn, str(name))
             if gpk is None:
@@ -140,9 +141,34 @@ class PostgresStore:
                     "SELECT label, value FROM onya_assertion WHERE origin_assertion = $1 AND kind = 'P'",
                     r['assertion_pk'])
                 annotations = {I(a['label']): a['value'] for a in ann_rows}
-                results.append((I(r['origin_id']), I(r['label']), target, annotations))
+                if rel.matches_where(annotations, where):
+                    results.append((I(r['origin_id']), I(r['label']), target, annotations))
         for row in results:
             yield row
+
+    # --- OverlayReadStore -------------------------------------------------------------
+
+    async def union(self, names) -> graph:
+        async with self._pool.acquire() as conn:
+            gpks = await _resolve_graph_pks(conn, [str(n) for n in names])
+            return await _build_union(conn, gpks)
+
+    async def match_across(self, names, origin: I | str | None = None,
+                           label: I | str | None = None, where=None):
+        async with self._pool.acquire() as conn:
+            gpks = await _resolve_graph_pks(conn, [str(n) for n in names])
+            g = await _build_union(conn, gpks)
+        o = I(origin) if origin is not None else None
+        lbl = I(label) if label is not None else None
+        for row in g.match(o, lbl):
+            if rel.matches_where(row[3], where):
+                yield row
+
+    async def subgraph_across(self, names, roots: set[I | str], hops: int = 1) -> graph:
+        async with self._pool.acquire() as conn:
+            gpks = await _resolve_graph_pks(conn, [str(n) for n in names])
+            g = await _build_union(conn, gpks)
+        return rel.extract_subgraph(g, {str(r) for r in roots}, int(hops))
 
     async def subgraph(self, name: I | str, roots: set[I | str], hops: int = 1) -> graph:
         async with self._pool.acquire() as conn:
@@ -470,6 +496,48 @@ async def _build_graph(conn, gpk: int, node_idents: set[int] | None = None) -> g
         else:
             edge_obj.target = g.node(I(tid))
     return g
+
+
+# --- OverlayReadStore: bulk row fetch + shared reduction (onya.store._relational) ---
+
+async def _resolve_graph_pks(conn, names: list[str]) -> list[int]:
+    if not names:
+        raise ValueError('union()/match_across()/subgraph_across() need at least one name')
+    gpks = []
+    for name in names:
+        gpk = await _graph_pk(conn, name)
+        if gpk is None:
+            raise KeyError(name)
+        gpks.append(gpk)
+    return gpks
+
+
+async def _build_union(conn, gpks: list[int]) -> graph:
+    ident_rows = await conn.fetch(
+        'SELECT ident_pk, id FROM onya_ident WHERE graph_pk = ANY($1::bigint[])', gpks)
+    idents = [(r['ident_pk'], r['id']) for r in ident_rows]
+
+    node_rows = await conn.fetch(
+        'SELECT n.node_pk, n.ident_pk FROM onya_node n'
+        ' JOIN onya_ident i ON i.ident_pk = n.ident_pk WHERE i.graph_pk = ANY($1::bigint[])', gpks)
+    nodes = [(r['node_pk'], r['ident_pk']) for r in node_rows]
+
+    type_rows = await conn.fetch(
+        'SELECT nt.node_pk, nt.type_iri FROM onya_node_type nt'
+        ' JOIN onya_node n ON n.node_pk = nt.node_pk'
+        ' JOIN onya_ident i ON i.ident_pk = n.ident_pk WHERE i.graph_pk = ANY($1::bigint[])', gpks)
+    node_types = [(r['node_pk'], r['type_iri']) for r in type_rows]
+
+    arows = await conn.fetch(
+        'SELECT assertion_pk, kind, origin_node, origin_assertion, label, target_ident,'
+        ' value, ident_pk, interp FROM onya_assertion WHERE graph_pk = ANY($1::bigint[])'
+        ' ORDER BY assertion_pk', gpks)
+    assertions = [
+        (r['assertion_pk'], r['kind'], r['origin_node'], r['origin_assertion'], r['label'],
+         r['target_ident'], r['value'], r['ident_pk'], r['interp'])
+        for r in arows
+    ]
+    return rel.build_union(idents, nodes, node_types, assertions)
 
 
 # --- canned transitive-reachability helper ------------------------------------------

@@ -6,7 +6,7 @@ For interim changes not yet earmarked for a particular release, can use this hea
 ## [Unreleased]
 -->
 
-## [0.5.0] — `onya.viz` module. Pretty/themable rendering demo: `demo/draw_uli/`
+## [0.5.0] — Read-time union / overlay across named graphs. Reserved provenance/confidence vocabulary + accessors. `onya.viz` module. Pretty/themable rendering demo: `demo/draw_uli/`.
 
 ### Added
 
@@ -18,6 +18,8 @@ For interim changes not yet earmarked for a particular release, can use this hea
 - **Reserved provenance vocabulary `@method`/`@confidence`** (SPEC § Optional assertion provenance), for pipelines where multiple methods (a deterministic parser, a local NER/RE pass, an LLM cross-reference step, ...) corroborate the same facts in one shared graph. `@method` is an edge to a node identifying the method; `@confidence` is a property nested *under* that edge (not beside it — nesting is load-bearing for merge: it keeps each corroborating method's confidence self-contained so union never conflates one method's confidence with another's). Unlike the parser-generated `@source`, these are caller-authored — ordinary reserved-vocabulary assertions, no parser changes needed. Merge keeps every corroborating pair by default; there is no built-in "collapse to highest confidence" policy. (#36)
 - **`onya.provenance`** — read accessors for the above, mirroring `onya.interp.value_of()`'s on-demand stance: `list_provenance(assertion) -> list[ProvenanceEntry]` (every corroborating `@method` entry, each with its own `@confidence`) and `highest_confidence(assertion) -> ProvenanceEntry | None` (a read-time, opt-in "pick the best" view — never mutates the graph or discards corroborating evidence). (#36)
 - **`demo/multi_extractor_provenance/`** — a toy multi-layer pipeline (deterministic + mock NER + mock LLM cross-reference passes, no real external services) populating one shared graph and tagging assertions with `@method`/`@confidence`, with a report printing the same fact reached by two methods at different confidence levels side by side. (#36)
+- **`onya.store.OverlayReadStore`** — read-time union/scoped access across multiple named graphs, without disturbing per-graph storage: `union(names)` (fully materialized merged view, reproducing SPEC merge Rules 1-3 exactly as an in-memory `graph.union()` would — not a bare row concatenation), `match_across(names, ...)`, `subgraph_across(names, roots, hops)`. SQLite and PostgreSQL implement it via genuine `WHERE graph_pk IN (...)` pushdown (a small constant number of round trips, not `len(names)`); the filesystem backend does not implement it (no pushdown is possible there — same reason it doesn't implement `AssertionStore`), and documents the `get()` + `graph.union()` fallback. `union()` raises `GraphMergeError` on a genuine cross-graph Rule 1 conflict, `KeyError` for an absent name, `ValueError` for an empty name list. `overlay()` (ordered-precedence shadowing, as an alternative to raising) is deliberately deferred — see doc/design-persistence-architecture.md § Deferred / open questions. (#32)
+- **Nested-property predicate filtering (`where=`)** on both `AssertionStore.match` and the new `match_across` — a single comparison against one named nested property (e.g. `where=(CONFIDENCE_REL, '>', 0.8)`), not a general filter language. Additive/backward-compatible on `match` (default `None` = unconstrained). (#32)
 
 ### Changed
 
