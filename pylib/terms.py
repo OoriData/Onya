@@ -12,6 +12,8 @@ from amara.iri import I
 ONYA = I('http://purl.org/onya/vocab/')
 ONYA_TYPE_REL = ONYA('type')
 ONYA_SOURCE_REL = ONYA('source')  # @source provenance sub-property
+ONYA_METHOD_REL = ONYA('method')  # @method provenance sub-edge (points to a node identifying the method)
+ONYA_CONFIDENCE_REL = ONYA('confidence')  # @confidence provenance sub-property, nested under @method
 ONYA_DOCUMENT = ONYA('Document')  # Type for document nodes created from @document directive
 ONYA_ASSERTION = ONYA('Assertion')  # Implicit type carried by every assertion (edge/property)
 
