@@ -620,13 +620,27 @@ Document-node assertions are emitted as top-level `@docheader` bullets through t
 - **The precondition is separator-terminated bases.** Bare node ids, labels, and types join `@nodebase`/`@schema`/`@typebase` by pure concatenation (see [Vocabulary prefixes](#vocabulary-prefixes-iri)), so a base must end in `/`, `#`, or `?`; otherwise reparse mints mashed IRIs (`…/vocab` + `title` → `…/vocabtitle`). `write` guarantees this on output: a separator-less `schema`/`nodebase` is normalized (append `/`) with a warning — parity with the parser's read-side check — or raises `NamespaceBaseError` under `write(..., strict_namespace_bases=True)`.
 - **Faithfulness does not require the *original* convention; readability does.** With no namespace hints, `write` emits everything in explicit `<full-iri>` form — correct, but verbose. Recovering the compact authoring convention (bare schema names, CURIE prefixes) requires the docheader namespaces the graph no longer remembers; `read` returns them on `ParseResult` (`schema`, `nodebase`, `typebase`, `prefixes`) precisely so a consumer can re-serialize with `write(..., schema=r.schema, nodebase=r.nodebase, prefixes=r.prefixes)`. A store that re-serializes on write (e.g. `put(merge=True)`) preserves an authored file's convention this way, keeping the on-disk form stable and diff-friendly across round trips.
 
-## Optional assertion provenance (`@source`)
+## Optional assertion provenance (`@source`, `@method`, `@confidence`)
 
 Some workflows want document-level provenance without making it part of the core model. The parser can optionally tag **every created assertion** (including nested assertions but excluding document header declarations) with a sub-property:
 
 - `@source`: the `@document` IRI of the source document
 
 Parsers will generally turn this **off by default** to avoid graph bloat.
+
+A related but distinct need arises when *multiple methods* (a deterministic parser, a local Named Entity Recognition (NER) and Relation Extraction (RE) (NER/RE) pass, an LLM cross-reference step, human curation, …) write into one shared graph and corroborate the same facts. Two further reserved sub-properties record, per assertion, which method produced it and how confident that method was:
+
+- `@method`: an **edge**, nested directly under the assertion it describes. Its target is a node identifying the method (an IRI—a real, describable node, so method metadata can be attached to it elsewhere in the graph without repeating strings).
+- `@confidence`: a **property** nested *under* a specific `@method` edge—not a sibling of it. Its value is an ordinary string; a nested `@as: number` is optional and recommended for consumers that want it typed, but is not required to read it.
+
+```
+* value: "5323000000"
+    * @method → https://example.org/xbrl-tag
+        * @confidence: 1.0
+            * @as: number
+```
+
+Unlike `@source`, these are **filled in by the caller**; there is no parser flag and no directive handling. `@method`/`@confidence` are ordinary reserved-vocabulary assertions, authorable directly in Onya Literate (exactly as shown above) or via `add_edge`/`add_property`, exactly like hand-authoring `@source` would work today. See `onya.provenance` for a small read-accessor surface (`list_provenance`, `highest_confidence`) mirroring `onya.interp.value_of()`'s stance: honored on demand, never ambiently, and asserting no canonical confidence scale.
 
 ## Model Summary
 
