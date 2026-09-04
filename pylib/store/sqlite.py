@@ -124,16 +124,36 @@ class SqliteStore:
     # --- AssertionStore -------------------------------------------------------------
 
     async def match(self, name: I | str, origin: I | str | None = None,
-                    label: I | str | None = None):
+                    label: I | str | None = None, where=None):
         rows = await self._run(_match_blocking, str(name),
                                None if origin is None else str(origin),
-                               None if label is None else str(label))
+                               None if label is None else str(label), where)
         for r in rows:
             yield r
 
     async def subgraph(self, name: I | str, roots: set[I | str], hops: int = 1) -> graph:
         root_ids = {str(r) for r in roots}
         return await self._run(_subgraph_blocking, str(name), root_ids, int(hops))
+
+    # --- OverlayReadStore -------------------------------------------------------------
+
+    async def union(self, names) -> graph:
+        gpks = await self._run(_resolve_graph_pks, [str(n) for n in names])
+        return await self._run(_union_blocking, gpks)
+
+    async def match_across(self, names, origin: I | str | None = None,
+                           label: I | str | None = None, where=None):
+        gpks = await self._run(_resolve_graph_pks, [str(n) for n in names])
+        rows = await self._run(_match_across_blocking, gpks,
+                               None if origin is None else str(origin),
+                               None if label is None else str(label), where)
+        for r in rows:
+            yield r
+
+    async def subgraph_across(self, names, roots: set[I | str], hops: int = 1) -> graph:
+        gpks = await self._run(_resolve_graph_pks, [str(n) for n in names])
+        root_ids = {str(r) for r in roots}
+        return await self._run(_subgraph_across_blocking, gpks, root_ids, int(hops))
 
     async def add(self, name: I | str, origin: I | str, label: I | str, target_or_value,
                   *, kind: str, interp: I | str | None = None, id_: I | str | None = None) -> None:
@@ -261,7 +281,7 @@ def _annotations(cur, assertion_pk: int) -> dict:
     return {I(label): value for label, value in cur.fetchall()}
 
 
-def _match_blocking(conn, name: str, origin: str | None, label: str | None) -> list:
+def _match_blocking(conn, name: str, origin: str | None, label: str | None, where) -> list:
     cur = conn.cursor()
     gpk = _graph_pk(cur, name)
     if gpk is None:
@@ -289,8 +309,65 @@ def _match_blocking(conn, name: str, origin: str | None, label: str | None) -> l
             break
         for (apk, kind, lbl, value, target_id, origin_id) in batch:
             target = value if kind == 'P' else I(target_id)
-            out.append((I(origin_id), I(lbl), target, _annotations(cur, apk)))
+            annotations = _annotations(cur, apk)
+            if rel.matches_where(annotations, where):
+                out.append((I(origin_id), I(lbl), target, annotations))
     return out
+
+
+# --- OverlayReadStore (read-time union/scoped access across named graphs) -----------
+
+def _resolve_graph_pks(conn, names: list[str]) -> list[int]:
+    if not names:
+        raise ValueError('union()/match_across()/subgraph_across() need at least one name')
+    cur = conn.cursor()
+    gpks = []
+    for name in names:
+        gpk = _graph_pk(cur, name)
+        if gpk is None:
+            raise KeyError(name)
+        gpks.append(gpk)
+    return gpks
+
+
+def _fetch_union_rows(cur, gpks: list[int]):
+    placeholders = ','.join('?' * len(gpks))
+    cur.execute(f'SELECT ident_pk, id FROM onya_ident WHERE graph_pk IN ({placeholders})', gpks)
+    idents = cur.fetchall()
+    cur.execute(
+        f'SELECT n.node_pk, n.ident_pk FROM onya_node n'
+        f' JOIN onya_ident i ON i.ident_pk = n.ident_pk WHERE i.graph_pk IN ({placeholders})', gpks)
+    nodes = cur.fetchall()
+    cur.execute(
+        f'SELECT nt.node_pk, nt.type_iri FROM onya_node_type nt'
+        f' JOIN onya_node n ON n.node_pk = nt.node_pk'
+        f' JOIN onya_ident i ON i.ident_pk = n.ident_pk WHERE i.graph_pk IN ({placeholders})', gpks)
+    node_types = cur.fetchall()
+    cur.execute(
+        f'SELECT assertion_pk, kind, origin_node, origin_assertion, label, target_ident,'
+        f' value, ident_pk, interp FROM onya_assertion WHERE graph_pk IN ({placeholders})'
+        f' ORDER BY assertion_pk', gpks)
+    assertions = cur.fetchall()
+    return idents, nodes, node_types, assertions
+
+
+def _union_blocking(conn, gpks: list[int]) -> graph:
+    cur = conn.cursor()
+    return rel.build_union(*_fetch_union_rows(cur, gpks))
+
+
+def _match_across_blocking(conn, gpks: list[int], origin: str | None, label: str | None, where) -> list:
+    cur = conn.cursor()
+    g = rel.build_union(*_fetch_union_rows(cur, gpks))
+    return [row for row in g.match(I(origin) if origin is not None else None,
+                                   I(label) if label is not None else None)
+            if rel.matches_where(row[3], where)]
+
+
+def _subgraph_across_blocking(conn, gpks: list[int], root_ids: set[str], hops: int) -> graph:
+    cur = conn.cursor()
+    g = rel.build_union(*_fetch_union_rows(cur, gpks))
+    return rel.extract_subgraph(g, root_ids, hops)
 
 
 def _subgraph_blocking(conn, name: str, root_ids: set[str], hops: int) -> graph:

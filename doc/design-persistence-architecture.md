@@ -126,6 +126,110 @@ class AssertionStore(Protocol):
 File backend: not offered (it would be a lie — the file must be parsed
 whole anyway). SQLite and Postgres: offered.
 
+### Capability: `OverlayReadStore` (issue #32)
+
+Read-only combination of multiple named graphs, without disturbing
+per-graph storage — the read-time counterpart to write-time
+`put(merge=True)`, for callers who deliberately keep one named graph per
+source (clean per-source re-serialization, diffing, `drop()`) but want to
+read a combined view across a chosen subset.
+
+```python
+@runtime_checkable
+class OverlayReadStore(Protocol):
+    async def union(self, names: Sequence[I | str]) -> graph:
+        '''Fully materialized merged view of the named graphs, per SPEC
+        Rules 1-3. GraphMergeError on a genuine Rule 1 conflict; KeyError
+        if any name is absent; ValueError if names is empty.'''
+
+    def match_across(self, names, origin=None, label=None, where=None
+                     ) -> AsyncIterator[tuple]:
+        '''AssertionStore.match, scoped to the union of the named graphs.'''
+
+    async def subgraph_across(self, names, roots: set, hops: int = 1) -> graph:
+        '''AssertionStore.subgraph, scoped to the union of the named graphs.'''
+```
+
+File backend: not offered (same reason as `AssertionStore` — no pushdown
+is possible). The documented fallback for a backend lacking the
+capability is to compose the primitives that already exist:
+
+```python
+g = await store.get(names[0])
+for n in names[1:]:
+    g.union(await store.get(n))
+```
+
+SQLite and Postgres: offered, via genuine `WHERE graph_pk IN (...)`
+pushdown rather than `len(names)` separate round trips. The enabling
+fact: `skeleton_hash` (§ The skeleton hash below) is computed from
+string ids/labels/values and is **not** salted by `graph_pk` — identical
+structure in two different named graphs already hashes identically. So a
+bulk fetch across the selected `graph_pk`s (one query per table:
+`onya_ident`, `onya_node`, `onya_node_type`, `onya_assertion`) can be
+reduced into one graph by a single pass over the combined row set,
+ordered by `assertion_pk` — a global ascending sort that still preserves
+each source graph's own parent-before-child insertion order, which is
+all the reduction needs.
+
+The reduction itself (`onya.store._relational.build_union`) is pure
+Python, shared by both SQL backends exactly the way `classify_anonymous`
+already is: each backend fetches its own rows (dialect-specific
+placeholders) and hands plain tuples to one shared function. It reuses
+`classify_anonymous` **verbatim** for the anonymous-assertion case — the
+same interp-amendment decision the write path uses, just fed
+in-memory-object "primary keys" instead of database ones, since the
+function's `existing` parameter is opaque about what a "pk" actually is.
+Identified assertions (`@id`) are grouped by explicit id string across
+the selected graphs; a skeleton or interpretation mismatch between two
+graphs sharing an id raises the same `GraphMergeError` the in-memory
+`graph.union()` raises for a genuine Rule 1 conflict — deliberately no
+lenient mode in this pass (see § Merge-error handling below).
+
+`match_across`/`subgraph_across` are, in this first pass, implemented by
+materializing the union once (the bulk-fetch pushdown above — a small
+constant number of round trips, not `len(names)`) and then filtering/
+extracting in memory via the ordinary model-level `graph.match()` and a
+small BFS helper (`onya.store._relational.extract_subgraph`) that mirrors
+the single-graph `subgraph()`'s semantics (hops limit **node-to-node**
+traversal only; a node's own nested assertion tree, however deep, is
+always included in full once the node itself is in scope). This is a
+deliberate, honestly-scoped simplification relative to true row-level
+streaming pushdown for those two calls specifically — `union()` is where
+the pushdown work concentrates, since it is the fully-materializing call
+either way. A known narrower simplification in `extract_subgraph`: an
+edge target that is an *identified assertion* rather than a plain node is
+treated as a bare node when resolved from a union-graph copy (the
+ordinary node-to-node case, by far the common one, is unaffected).
+
+**Nested-property predicate filtering (`where=`).** Raised alongside this
+work: a related, narrower need is filtering *within* one graph by a
+nested property value — e.g. "edges labeled X whose nested `@confidence`
+> 0.8" — without loading the whole graph. This gap already existed in
+the shipped `AssertionStore.match` (only `origin`/`label`, no value
+predicate); since `match_across` is new surface designed in this same
+pass, the shape was fixed for both at once rather than retrofitted later
+against an incompatible signature. Both `AssertionStore.match` and
+`OverlayReadStore.match_across` gained an optional `where: tuple[label,
+op, value]` — a single comparison against one named nested property, not
+a general filter language, consistent with this store layer's stance
+that `GraphQueryStore` is the escape hatch for anything richer.
+`graph_table()` needs no API change for the same comparison on PG19 — a
+`WHERE` clause is already the caller's own SQL. (`AssertionStore.match`
+gaining this parameter is additive/backward-compatible: default `None`
+means unconstrained, matching its existing wildcard convention for
+`origin`/`label`.)
+
+**Merge-error handling.** `union()` raises the same `GraphMergeError` the
+in-memory path raises on a genuine Rule 1 conflict between two of the
+named graphs — no lenient mode in this pass. This repo's governing
+correctness law ("a backend is correct exactly when a round trip through
+it is indistinguishable from an in-memory graph union") applies verbatim
+once reads can merge; a silent/partial result would be a *worse*
+correctness property than write-time merge already has. An
+`on_conflict='raise'|'skip'` opt-in is plausible future work, not
+designed here.
+
 ### Capability: `GraphQueryStore` (PG 19)
 
 ```python
@@ -165,12 +269,12 @@ user-facing PG 17 vs 19 fork.
 
 ## Backends
 
-| Backend | Module | Extra deps | GraphStore | AssertionStore | GraphQueryStore |
-| --- | --- | --- | --- | --- | --- |
-| Literate files | `onya.store.filesystem` | none | ✓ | — | — |
-| SQLite | `onya.store.sqlite` | none (stdlib) | ✓ | ✓ | — |
-| PostgreSQL ≥ 17 | `onya.store.postgres` | `onya[postgres]` → asyncpg | ✓ | ✓ | — |
-| PostgreSQL ≥ 19 | `onya.store.postgres` | `onya[postgres]` | ✓ | ✓ | ✓ |
+| Backend | Module | Extra deps | GraphStore | AssertionStore | OverlayReadStore | GraphQueryStore |
+| --- | --- | --- | --- | --- | --- | --- |
+| Literate files | `onya.store.filesystem` | none | ✓ | — | — | — |
+| SQLite | `onya.store.sqlite` | none (stdlib) | ✓ | ✓ | ✓ | — |
+| PostgreSQL ≥ 17 | `onya.store.postgres` | `onya[postgres]` → asyncpg | ✓ | ✓ | ✓ | — |
+| PostgreSQL ≥ 19 | `onya.store.postgres` | `onya[postgres]` | ✓ | ✓ | ✓ | ✓ |
 
 ### Filesystem backend (default; the testing fake)
 
@@ -550,3 +654,20 @@ contract once, run every implementation through it.
 - **Streaming put for very large graphs** (avoiding full in-memory graph
   before write): the `AssertionStore.add` path covers it in principle;
   a bulk streaming loader is future work.
+- **`overlay()` (ordered-precedence shadowing on conflicts)**, issue #32's
+  stretch goal: an alternative to `union()` raising on a Rule 1 conflict,
+  where `overlay(names, precedence=names)` would let the graph earliest
+  in `precedence` win outright instead. Needs its own design pass: what
+  "wins" means for partial overlap (do types union while a conflicting
+  property value shadows?), whether precedence is global or overridable
+  per conflict site, and how `@source`/`@method`/`@confidence` on a
+  shadowed assertion are surfaced (dropped vs. retained-but-shadowed). It
+  would reuse the same bulk-fetch machinery `union()` uses, replacing the
+  conflict-raise branches with a tie-break — not designed or implemented
+  here.
+- **True row-level streaming pushdown for `match_across`/
+  `subgraph_across`**: this pass materializes the union once (bulk fetch,
+  not `len(names)` round trips) and then filters/extracts in memory,
+  rather than pushing the reduction itself into SQL row-by-row. Revisit
+  if profiling on a real workload shows the materialization step
+  dominates for graphs too large to build in memory per call.

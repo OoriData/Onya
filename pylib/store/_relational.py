@@ -40,7 +40,9 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 
-from onya.graph import GraphMergeError, edge
+from amara.iri import I
+
+from onya.graph import GraphMergeError, edge, graph, node
 
 SKELETON_HASH_VERSION = '1'
 SCHEMA_VERSION = '1'
@@ -408,6 +410,225 @@ def _put_identified(cur, graph_pk, rec, origin_node, origin_assertion, target_id
     apk = _insert_assertion(cur, graph_pk, rec, origin_node, origin_assertion, target_ident, aipk)
     _maybe_edge_hop(cur, apk, rec, edge_source, target_ident)
     return apk
+
+
+# --- match()/match_across() nested-property predicate --------------------------------
+
+_WHERE_OPS = {
+    '==': lambda a, b: a == b,
+    '!=': lambda a, b: a != b,
+    '<': lambda a, b: a < b,
+    '<=': lambda a, b: a <= b,
+    '>': lambda a, b: a > b,
+    '>=': lambda a, b: a >= b,
+}
+
+
+def matches_where(annotations: dict, where: tuple | None) -> bool:
+    '''
+    Does ``annotations`` (a ``{label: value}`` dict of one assertion's direct nested
+    properties, as ``match()`` already builds) satisfy ``where``? ``where=None`` always
+    matches. Compares numerically when both sides parse as a number, else as strings
+    (meaningful only for ``==``/``!=``); a missing label never matches.
+    '''
+    if where is None:
+        return True
+    label, op, want = where
+    if str(label) not in {str(k) for k in annotations}:
+        return False
+    have = next(v for k, v in annotations.items() if str(k) == str(label))
+    try:
+        have_cmp, want_cmp = float(have), float(want)
+    except (TypeError, ValueError):
+        have_cmp, want_cmp = str(have), str(want)
+    return _WHERE_OPS[op](have_cmp, want_cmp)
+
+
+# --- read-time union across multiple named graphs (OverlayReadStore) ----------------
+
+def _origin_key(origin) -> str:
+    '''
+    Stable grouping key for an origin (a node, or an already-reduced assertion) used by
+    ``build_union`` below. Mirrors ``iter_records``'s ``origin_key``, but keyed off the
+    in-memory *reduced* object rather than freshly computed each call: by the time a row's
+    children are scanned (assertion_pk order guarantees parents precede children), every
+    apk that reduced onto one parent object already maps to that same object, so grouping
+    children by it is stable regardless of which source graph_pk they came from.
+    '''
+    if isinstance(origin, node):
+        return str(origin.id)
+    if origin.id is not None:      # an identified parent assertion
+        return str(origin.id)
+    return f'anon:{id(origin)}'    # an anonymous parent assertion, keyed by reduced identity
+
+
+def build_union(idents, nodes, node_types, assertions) -> graph:
+    '''
+    Reduce pre-fetched rows from multiple graph_pks (already selected via ``WHERE graph_pk
+    IN (...)``) into one graph, reproducing SPEC merge Rules 1-3 exactly as an in-memory
+    ``graph.union()`` would -- not a bare concatenation of rows. Backend-agnostic: each SQL
+    backend fetches its own rows (dialect-specific placeholders) via the same queries its
+    existing single-graph ``_build_graph`` already uses, just scoped by ``IN (...)`` instead
+    of ``= gpk``, and passes plain tuples here so the reduction logic is written once.
+
+    Row shapes (matching each backend's existing ``_build_graph`` queries):
+    - ``idents``: ``(ident_pk, id)``
+    - ``nodes``: ``(node_pk, ident_pk)``
+    - ``node_types``: ``(node_pk, type_iri)``
+    - ``assertions``: ``(assertion_pk, kind, origin_node, origin_assertion, label,
+      target_ident, value, ident_pk, interp)``, ORDERED BY assertion_pk ascending -- global
+      order across the selected graph_pks still preserves each graph's own parent-before-
+      child insertion order, which is all this algorithm relies on.
+
+    Raises ``GraphMergeError`` exactly where in-memory ``graph.union()`` would: two of the
+    named graphs both declaring the same explicit ``@id`` with a mismatched skeleton or a
+    conflicting non-absent interpretation (Rule 1).
+
+    Node-id-vs-assertion-id collisions across the selected graphs are not (yet) re-validated
+    here -- each source graph was already validated at write time (``put`` calls
+    ``g.validate_id_space()``), and a *cross-graph* collision of that kind is left as a
+    known limitation of this first pass (see doc/design-persistence-architecture.md).
+    '''
+    g = graph()
+    id_by_ipk = {ipk: idv for ipk, idv in idents}
+
+    id_by_npk: dict[int, str] = {}
+    for npk, ipk in nodes:
+        nid = id_by_ipk[ipk]
+        id_by_npk[npk] = nid
+        if nid not in g.nodes:
+            g.node(I(nid))
+    for npk, type_iri in node_types:
+        g[I(id_by_npk[npk])].types.add(I(type_iri))
+
+    obj_by_apk: dict[int, object] = {}
+    identified_index: dict[str, tuple] = {}   # id_str -> (obj, skeleton_key)
+    anon_index: dict[tuple, dict] = {}        # (origin_key, kind, label, payload) -> {interp: obj}
+    pending_edges: list[tuple] = []
+
+    for (apk, kind, onode, oassert, label, tident, value, ident_pk_col, interp) in assertions:
+        if onode is not None:
+            origin = g[I(id_by_npk[onode])]
+        else:
+            origin = obj_by_apk.get(oassert)
+            if origin is None:   # parent dropped (NULL-adopts-nothing) -- skip its subtree
+                continue
+        payload = value if kind == 'P' else id_by_ipk[tident]
+
+        if ident_pk_col is not None:
+            id_str = id_by_ipk[ident_pk_col]
+            skeleton_key = (_origin_key(origin), kind, label, payload)
+            existing = identified_index.get(id_str)
+            if existing is None:
+                obj = origin.add_property(I(label), value) if kind == 'P' else origin.add_edge(I(label), None)
+                if kind == 'E':
+                    pending_edges.append((obj, tident))
+                if interp is not None:
+                    obj.interp = I(interp)
+                g.register_assertion_id(I(id_str), obj)
+                identified_index[id_str] = (obj, skeleton_key)
+            else:
+                obj, existing_key = existing
+                if existing_key != skeleton_key:
+                    raise GraphMergeError(
+                        f'Assertion id {id_str!r} has differing skeletons across the named graphs '
+                        f'being unioned (Rule 1: same id implies same skeleton).'
+                    )
+                if obj.interp is not None and interp is not None and str(obj.interp) != interp:
+                    raise GraphMergeError(
+                        f'Assertion id {id_str!r} carries a differing interpretation across the '
+                        f'named graphs being unioned: {obj.interp!r} vs {interp!r}.'
+                    )
+                if obj.interp is None and interp is not None:
+                    obj.interp = I(interp)
+            obj_by_apk[apk] = obj
+            continue
+
+        anon_key = (_origin_key(origin), kind, label, payload)
+        bucket = anon_index.setdefault(anon_key, {})
+        action, chosen, set_interp = classify_anonymous(
+            [(o, i) for i, o in bucket.items()], interp)
+        if action == 'drop':
+            continue
+        if action == 'merge':
+            obj = chosen
+            if set_interp is not None:   # one-sided adoption: NULL bucket takes the contract
+                del bucket[None]
+                bucket[set_interp] = obj
+                obj.interp = I(set_interp)
+        else:
+            obj = origin.add_property(I(label), value) if kind == 'P' else origin.add_edge(I(label), None)
+            if kind == 'E':
+                pending_edges.append((obj, tident))
+            if interp is not None:
+                obj.interp = I(interp)
+            bucket[interp] = obj
+        obj_by_apk[apk] = obj
+
+    for edge_obj, tident in pending_edges:
+        tid = id_by_ipk[tident]
+        if tid in g.assertion_ids:
+            edge_obj.target = g.assertion_ids[tid]
+        elif tid in g.nodes:
+            edge_obj.target = g[tid]
+        else:
+            edge_obj.target = g.node(I(tid))
+    return g
+
+
+def extract_subgraph(g: graph, root_ids: set[str], hops: int) -> graph:
+    '''
+    ``subgraph_across``'s extraction step, over an already-materialized union graph (see
+    ``build_union``): BFS by top-level (node-origin) edges only, matching the scope of the
+    single-graph ``onya_edge_hop`` companion table, then copy just that neighborhood into a
+    fresh graph -- edges leaving the neighborhood become bare (dangling) nodes, exactly as
+    the single-graph ``subgraph()`` behaves.
+
+    Simplification (documented, not shared by the single-graph ``subgraph()``): an edge
+    target that is an *identified assertion* rather than a plain node is treated as a bare
+    node keyed by its id when resolved from a union-graph copy. This is a narrow first-pass
+    scope reduction for the cross-graph case; the ordinary node-to-node case (the common
+    one) is unaffected.
+    '''
+    included: set[str] = {r for r in root_ids if r in g.nodes}
+    frontier = set(included)
+    for _ in range(max(hops, 0)):
+        if not frontier:
+            break
+        next_frontier: set[str] = set()
+        for nid in frontier:
+            for e in g[nid].edges:
+                tid = e.target.id if e.target is not None else None
+                if tid is not None and tid not in included:
+                    next_frontier.add(tid)
+        included |= next_frontier
+        frontier = next_frontier
+
+    out = graph()
+    for nid in included:
+        out.node(I(nid), types=set(g[nid].types))
+
+    def _resolve_target(tid):
+        if tid is None:
+            return None
+        return out[tid] if tid in included else (out[tid] if tid in out.nodes else out.node(I(tid)))
+
+    def _copy(src_container, dst_container):
+        for p in src_container.properties:
+            np = dst_container.add_property(p.label, p.value, interp=p.interp)
+            if p.id is not None:
+                out.register_assertion_id(p.id, np)
+            _copy(p, np)
+        for e in src_container.edges:
+            tid = e.target.id if e.target is not None else None
+            ne = dst_container.add_edge(e.label, _resolve_target(tid))
+            if e.id is not None:
+                out.register_assertion_id(e.id, ne)
+            _copy(e, ne)
+
+    for nid in included:
+        _copy(g[nid], out[nid])
+    return out
 
 
 def _put_anonymous(cur, graph_pk, rec, origin_node, origin_assertion, target_ident, edge_source):
