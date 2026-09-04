@@ -230,6 +230,99 @@ correctness property than write-time merge already has. An
 `on_conflict='raise'|'skip'` opt-in is plausible future work, not
 designed here.
 
+### `overlay()`: precedence-based conflict resolution (issue #38)
+
+`union()` never discards data — Rule 2 corroboration always keeps every
+co-existing value, and a genuine `@id` conflict raises `GraphMergeError`
+rather than picking a winner. `overlay()` is `OverlayReadStore`'s more
+opinionated sibling, for callers who want named graphs treated as ordered
+layers: for any `(origin, label)` slot where competing values genuinely
+disagree, resolve to one winner instead of keeping every value.
+
+```python
+async def overlay(
+    self, names: Sequence[I | str], *,
+    single_cardinality: Collection[I | str] | Callable[[I | str], bool] = frozenset(),
+    key: Callable[[OverlayCandidate], object] | None = None,
+    precedence: Sequence[I | str] | None = None,
+    prefer_confidence: bool = False,
+) -> tuple[graph, list[ShadowedConflict]]:
+```
+
+**The actual design crux was never conflict detection** — `union()` already
+handles the one case that's unambiguous (`@id` mismatches, which raise).
+It's **cardinality**: Onya's core model deliberately carries no
+schema/cardinality constraints (SPEC § Design Principles), so nothing in
+the graph says whether a same-label disagreement between anonymous
+assertions (e.g. two different `age` values) should shadow to one winner,
+or coexist like a genuinely multi-valued property (`email`) should. A
+design that shadows every disagreement would silently break the multi-valued
+case; a design that shadows none just reproduces `union()`.
+
+- **`single_cardinality`** is the caller's own declaration, since the model
+  can't infer it: either a plain collection of assertion label IRIs, or a
+  callable `label -> bool` for arbitrary logic (a naming convention, an
+  external schema — Onya doesn't care). Covers edges and properties alike;
+  the identical ambiguity applies to both (`primaryContact` is plausibly
+  single-valued, `knows` plainly isn't). Default (empty) shadows nothing, so
+  `overlay()` with no cardinality hints reduces exactly to `union()`'s
+  behavior — a strict opt-in widening, never a behavior change for an
+  existing caller.
+- **A genuine `@id` conflict is *always* resolved via `key`, regardless of
+  `single_cardinality`.** An explicit `@id` already declares
+  single-occurrence intent by construction — the very reason it exists — so
+  it never needs to be separately listed. This is `overlay()`'s one
+  unconditional behavioral difference from `union()`: never raises on a
+  Rule 1 conflict, always resolves it.
+- **`key`** picks the winner among a slot's competing `OverlayCandidate`s via
+  `max(candidates, key=key)` — "be like Python sorting"
+  ([docs.python.org/3/howto/sorting.html](https://docs.python.org/3/howto/sorting.html)):
+  arbitrary complexity is just a function, not a bespoke override-policy
+  object, and it dissolves what would otherwise be a hard "global order vs.
+  per-conflict-site override" API question — a caller who wants "prefer
+  `xbrl_graph` for revenue but `ner_graph` for everything else" just writes
+  a `key` that branches on `candidate.label`. `precedence` is sugar for the
+  common case (`key=lambda c: -min(precedence.index(g) for g in
+  c.graph_names)`, falling back to arrival order with no `precedence` at
+  all, via `max`'s stable tie-breaking over dict insertion order).
+  `prefer_confidence=True` swaps in a default key that prefers a
+  candidate's own resolved `@confidence` first, falling back to
+  `precedence` order only when confidence is absent or tied on both sides —
+  `onya.provenance.highest_confidence`'s rule, generalized from one
+  assertion's corroborating entries to competing whole-graph claims. It's a
+  call flag layered on top of the same `key` mechanism, not a separate
+  resolution path.
+- **Losing assertions are removed from the graph, not left in it tagged.**
+  The returned view stays clean — a naive reader never has to know to
+  filter out shadow-marked assertions — and the audit trail is the returned
+  `list[ShadowedConflict]` instead, each carrying the winner, every loser,
+  and `key_values` (the computed `key()` result per candidate, keyed by
+  `graph_names`, for debugging *why* something lost). Never silently
+  dropped, consistent with this repo's stance (#36) of not destroying
+  corroborating evidence without an explicit, separate opt-in — `overlay()`
+  is just that opt-in, made explicit in its return shape.
+
+**Implementation** (`onya.store._relational.build_overlay`, alongside
+`build_union`): fetches the same bulk `WHERE graph_pk IN (...)` rows as
+`union()`, with each assertion row additionally carrying its source graph
+name (`build_union`'s rows never need this — merging never asks who
+asserted what). Identical-value corroboration still merges via
+`classify_anonymous`, unchanged; only a coarser `(origin, label)` grouping
+*on top of* that reduction detects genuine disagreement, and only for
+groups where `is_single(label)` holds (or, for `@id` groups, unconditionally).
+A candidate's confidence is read directly off its own pre-fetched
+`@method`/`@confidence` subtree (`_row_confidence`) — the losing side of a
+conflict is never committed into the graph at all, so this can't reuse
+`onya.provenance.highest_confidence` (which operates on already-built
+graph objects) and instead mirrors its rule one layer lower, over raw rows.
+
+**Documented simplification**: within one cardinality-conflict group,
+candidate values are grouped by payload alone, not `(payload, interp)` — two
+rows sharing a payload but declaring different `@as` interpretations are
+treated as one candidate rather than two. A narrow edge case (a caller
+declaring differing interpretations for the identical string value on a
+single-cardinality label across two named graphs); not resolved here.
+
 ### Capability: `GraphQueryStore` (PG 19)
 
 ```python
@@ -654,17 +747,6 @@ contract once, run every implementation through it.
 - **Streaming put for very large graphs** (avoiding full in-memory graph
   before write): the `AssertionStore.add` path covers it in principle;
   a bulk streaming loader is future work.
-- **`overlay()` (ordered-precedence shadowing on conflicts)**, issue #32's
-  stretch goal: an alternative to `union()` raising on a Rule 1 conflict,
-  where `overlay(names, precedence=names)` would let the graph earliest
-  in `precedence` win outright instead. Needs its own design pass: what
-  "wins" means for partial overlap (do types union while a conflicting
-  property value shadows?), whether precedence is global or overridable
-  per conflict site, and how `@source`/`@method`/`@confidence` on a
-  shadowed assertion are surfaced (dropped vs. retained-but-shadowed). It
-  would reuse the same bulk-fetch machinery `union()` uses, replacing the
-  conflict-raise branches with a tie-break — not designed or implemented
-  here.
 - **True row-level streaming pushdown for `match_across`/
   `subgraph_across`**: this pass materializes the union once (bulk fetch,
   not `len(names)` round trips) and then filters/extracts in memory,

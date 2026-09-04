@@ -12,7 +12,7 @@ blocks the event loop. ``PRAGMA journal_mode=WAL`` and ``PRAGMA foreign_keys=ON`
 open. This is a solid single-process backend; for networked, multi-writer concurrency use
 PostgreSQL.
 
-Implements ``GraphStore`` and ``AssertionStore``. The schema, skeleton hashing, and
+Implements ``GraphStore``, ``AssertionStore``, and ``OverlayReadStore``. The schema, skeleton hashing, and
 write-path merge algorithm are shared with PostgreSQL in ``onya.store._relational``.
 '''
 
@@ -40,7 +40,8 @@ def _url_to_path(url: str) -> str:
 
 
 class SqliteStore:
-    '''A SQLite database holding many named graphs. Satisfies ``GraphStore`` + ``AssertionStore``.'''
+    '''A SQLite database holding many named graphs. Satisfies ``GraphStore`` + ``AssertionStore``
+    + ``OverlayReadStore``.'''
 
     dialect: Dialect = SQLITE
 
@@ -154,6 +155,17 @@ class SqliteStore:
         gpks = await self._run(_resolve_graph_pks, [str(n) for n in names])
         root_ids = {str(r) for r in roots}
         return await self._run(_subgraph_across_blocking, gpks, root_ids, int(hops))
+
+    async def overlay(self, names, *, single_cardinality=frozenset(), key=None,
+                      precedence=None, prefer_confidence: bool = False):
+        str_names = [str(n) for n in names]
+        gpks = await self._run(_resolve_graph_pks, str_names)
+        gpk_to_name = dict(zip(gpks, str_names))
+        is_single = rel.normalize_cardinality_predicate(single_cardinality)
+        resolved_key = key if key is not None else rel.make_overlay_key(
+            precedence=[str(p) for p in precedence] if precedence is not None else None,
+            prefer_confidence=prefer_confidence)
+        return await self._run(_overlay_blocking, gpk_to_name, is_single, resolved_key)
 
     async def add(self, name: I | str, origin: I | str, label: I | str, target_or_value,
                   *, kind: str, interp: I | str | None = None, id_: I | str | None = None) -> None:
@@ -368,6 +380,39 @@ def _subgraph_across_blocking(conn, gpks: list[int], root_ids: set[str], hops: i
     cur = conn.cursor()
     g = rel.build_union(*_fetch_union_rows(cur, gpks))
     return rel.extract_subgraph(g, root_ids, hops)
+
+
+def _fetch_overlay_rows(cur, gpk_to_name: dict[int, str]):
+    '''Like ``_fetch_union_rows``, but the assertion rows carry each row's source graph name
+    (``build_overlay`` needs it for `key()`; ``build_union`` never does).'''
+    gpks = list(gpk_to_name)
+    placeholders = ','.join('?' * len(gpks))
+    cur.execute(f'SELECT ident_pk, id FROM onya_ident WHERE graph_pk IN ({placeholders})', gpks)
+    idents = cur.fetchall()
+    cur.execute(
+        f'SELECT n.node_pk, n.ident_pk FROM onya_node n'
+        f' JOIN onya_ident i ON i.ident_pk = n.ident_pk WHERE i.graph_pk IN ({placeholders})', gpks)
+    nodes = cur.fetchall()
+    cur.execute(
+        f'SELECT nt.node_pk, nt.type_iri FROM onya_node_type nt'
+        f' JOIN onya_node n ON n.node_pk = nt.node_pk'
+        f' JOIN onya_ident i ON i.ident_pk = n.ident_pk WHERE i.graph_pk IN ({placeholders})', gpks)
+    node_types = cur.fetchall()
+    cur.execute(
+        f'SELECT assertion_pk, graph_pk, kind, origin_node, origin_assertion, label, target_ident,'
+        f' value, ident_pk, interp FROM onya_assertion WHERE graph_pk IN ({placeholders})'
+        f' ORDER BY assertion_pk', gpks)
+    assertions = [
+        (apk, gpk_to_name[gpk], kind, onode, oassert, label, tident, value, ident_pk, interp)
+        for (apk, gpk, kind, onode, oassert, label, tident, value, ident_pk, interp) in cur.fetchall()
+    ]
+    return idents, nodes, node_types, assertions
+
+
+def _overlay_blocking(conn, gpk_to_name: dict[int, str], is_single, key):
+    cur = conn.cursor()
+    idents, nodes, node_types, assertions = _fetch_overlay_rows(cur, gpk_to_name)
+    return rel.build_overlay(idents, nodes, node_types, assertions, is_single=is_single, key=key)
 
 
 def _subgraph_blocking(conn, name: str, root_ids: set[str], hops: int) -> graph:

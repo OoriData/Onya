@@ -38,11 +38,14 @@ explicitly permits. Corrected in ``ddl_statements``.
 from __future__ import annotations
 
 import hashlib
+from collections import namedtuple
 from dataclasses import dataclass
 
 from amara.iri import I
 
 from onya.graph import GraphMergeError, edge, graph, node
+from onya.store.base import OverlayCandidate, ShadowedConflict
+from onya.terms import ONYA_METHOD_REL, ONYA_CONFIDENCE_REL
 
 SKELETON_HASH_VERSION = '1'
 SCHEMA_VERSION = '1'
@@ -629,6 +632,248 @@ def extract_subgraph(g: graph, root_ids: set[str], hops: int) -> graph:
     for nid in included:
         _copy(g[nid], out[nid])
     return out
+
+
+# --- overlay(): precedence-based conflict resolution across named graphs (issue #38) ---
+
+# One assertion row, with the source graph name threaded through -- build_union's rows don't
+# carry this (union never needs to know provenance to decide whether two rows merge), but
+# overlay's `key()` does. Same column order as build_union's `assertions` input, with
+# `graph_name` inserted right after `apk`.
+_OverlayRow = namedtuple(
+    '_OverlayRow', 'apk graph_name kind onode oassert label tident value ident_pk interp')
+
+
+def normalize_cardinality_predicate(single_cardinality) -> callable:
+    '''
+    ``single_cardinality`` is polymorphic per the ticket: either a plain collection of
+    assertion label IRIs, or (for arbitrary logic) a callable ``label -> bool``. Normalize
+    once to the callable form. Covers assertion labels generally -- edges and properties
+    share the identical cardinality ambiguity (a `primaryContact` edge is plausibly
+    single-valued, `knows` plainly isn't), so this is never restricted by assertion kind.
+    '''
+    if callable(single_cardinality):
+        return single_cardinality
+    labels = {str(x) for x in single_cardinality}
+    return lambda label: str(label) in labels
+
+
+def make_overlay_key(*, precedence=None, prefer_confidence: bool = False):
+    '''
+    Build the default ``key`` function for ``overlay()`` from its convenience parameters --
+    "be like Python sorting" (docs.python.org/3/howto/sorting.html): the common case is a
+    plain precedence list, arbitrary logic is a caller-supplied ``key`` instead of a bespoke
+    override-policy object. ``prefer_confidence=True`` makes the default key prefer a
+    candidate's own `@confidence` first, falling back to `precedence` order only when
+    confidence is absent or tied on both sides -- exactly `onya.provenance.highest_confidence`'s
+    rule, generalized from one assertion's corroborating entries to competing whole-graph
+    claims. With no `precedence` and no confidence, ties fall back to first-seen (arrival)
+    order via `max`'s stable tie-breaking over dict insertion order.
+    '''
+    prec_index = {str(n): i for i, n in enumerate(precedence)} if precedence else {}
+
+    def _key(c: OverlayCandidate):
+        idxs = [prec_index[g] for g in c.graph_names if g in prec_index]
+        prec_score = -min(idxs) if idxs else -len(prec_index)
+        if not prefer_confidence:
+            return (prec_score,)
+        conf = c.confidence
+        return (conf is not None, conf if conf is not None else 0.0, prec_score)
+
+    return _key
+
+
+def _row_confidence(apk: int, children_by_parent: dict) -> float | None:
+    '''
+    Best (max) confidence among `apk`'s own `@method`/`@confidence` entries, read directly
+    off pre-fetched rows (the row's own subtree may not be committed into the graph yet --
+    see `build_overlay`). Mirrors `onya.provenance.highest_confidence`, one layer lower.
+    '''
+    best = None
+    for child in children_by_parent.get(apk, ()):
+        if child.kind != 'E' or child.label != str(ONYA_METHOD_REL):
+            continue
+        for gc in children_by_parent.get(child.apk, ()):
+            if gc.kind != 'P' or gc.label != str(ONYA_CONFIDENCE_REL):
+                continue
+            try:
+                v = float(gc.value)
+            except (TypeError, ValueError):
+                continue
+            if best is None or v > best:
+                best = v
+    return best
+
+
+def build_overlay(idents, nodes, node_types, assertions, *, is_single, key) -> tuple:
+    '''
+    Like ``build_union``, but for any ``(origin, label)`` group where ``is_single(label)`` is
+    true and the group's rows disagree on payload (value/target), resolve to a single winner
+    via ``key`` instead of keeping every value -- ``key(candidate)`` feeds `max()`, exactly
+    Python's own `sorted()`/`max(key=...)` idiom (see `make_overlay_key`).
+
+    A genuine ``@id`` (Rule 1) conflict is ALWAYS resolved this way in overlay, regardless of
+    ``is_single`` -- an explicit ``@id`` already declares single-occurrence intent by
+    construction, so it never needs to be separately listed. This is overlay's one
+    behavioral difference from ``union()`` for that case: never raises, always resolves.
+
+    Returns ``(graph, list[ShadowedConflict])``. The merged view stays clean (losing
+    assertions are removed, not left in the graph tagged) -- the audit trail is the returned
+    list, never silently dropped.
+
+    Documented simplification: within one cardinality-conflict group, values are grouped by
+    payload alone (not ``(payload, interp)``) -- two rows sharing a payload but declaring
+    different `@as` interpretations are treated as one candidate rather than two. This is a
+    narrow edge case (a caller declaring differing interpretations for the identical string
+    value on a single-cardinality label across two named graphs); not resolved here.
+
+    Row shape (matching each backend's bulk fetch, `graph_name` inserted after `apk`):
+    ``(assertion_pk, graph_name, kind, origin_node, origin_assertion, label, target_ident,
+    value, ident_pk, interp)``, ORDERED BY assertion_pk ascending (see ``build_union``).
+    '''
+    rows = [_OverlayRow(*t) for t in assertions]
+    g = graph()
+    id_by_ipk = {ipk: idv for ipk, idv in idents}
+
+    id_by_npk: dict[int, str] = {}
+    for npk, ipk in nodes:
+        nid = id_by_ipk[ipk]
+        id_by_npk[npk] = nid
+        if nid not in g.nodes:
+            g.node(I(nid))
+    for npk, type_iri in node_types:
+        g[I(id_by_npk[npk])].types.add(I(type_iri))
+
+    children_by_parent: dict[int, list] = {}
+    for r in rows:
+        if r.oassert is not None:
+            children_by_parent.setdefault(r.oassert, []).append(r)
+
+    obj_by_apk: dict[int, object] = {}
+    anon_fine_index: dict[tuple, dict] = {}     # (origin_key, kind, label, payload) -> {interp: obj}
+    coarse_groups: dict[tuple, dict] = {}        # (origin_key, kind, label) -> {payload: (obj, [rows])}
+    identified_groups: dict[str, dict] = {}      # id_str -> {skeleton_key: (obj, [rows])}
+    pending_edges: list[tuple] = []
+
+    for r in rows:
+        if r.onode is not None:
+            origin = g[I(id_by_npk[r.onode])]
+        else:
+            origin = obj_by_apk.get(r.oassert)
+            if origin is None:   # parent dropped (NULL-adopts-nothing) -- skip its subtree
+                continue
+        payload = r.value if r.kind == 'P' else id_by_ipk[r.tident]
+
+        if r.ident_pk is not None:
+            id_str = id_by_ipk[r.ident_pk]
+            skeleton_key = (_origin_key(origin), r.kind, r.label, payload)
+            group = identified_groups.setdefault(id_str, {})
+            entry = group.get(skeleton_key)
+            if entry is None:
+                obj = origin.add_property(I(r.label), r.value) if r.kind == 'P' else origin.add_edge(I(r.label), None)
+                if r.kind == 'E':
+                    pending_edges.append((obj, r.tident))
+                if r.interp is not None:
+                    obj.interp = I(r.interp)
+                group[skeleton_key] = (obj, [r])
+            else:
+                obj, contributing = entry
+                contributing.append(r)
+                if obj.interp is None and r.interp is not None:
+                    obj.interp = I(r.interp)
+            obj_by_apk[r.apk] = group[skeleton_key][0]
+            continue
+
+        origin_key = _origin_key(origin)
+        fine_key = (origin_key, r.kind, r.label, payload)
+        bucket = anon_fine_index.setdefault(fine_key, {})
+        action, chosen, set_interp = classify_anonymous([(o, i) for i, o in bucket.items()], r.interp)
+        if action == 'drop':
+            continue
+        if action == 'merge':
+            obj = chosen
+            if set_interp is not None:
+                del bucket[None]
+                bucket[set_interp] = obj
+                obj.interp = I(set_interp)
+        else:
+            obj = origin.add_property(I(r.label), r.value) if r.kind == 'P' else origin.add_edge(I(r.label), None)
+            if r.kind == 'E':
+                pending_edges.append((obj, r.tident))
+            if r.interp is not None:
+                obj.interp = I(r.interp)
+            bucket[r.interp] = obj
+        obj_by_apk[r.apk] = obj
+
+        coarse = coarse_groups.setdefault((origin_key, r.kind, r.label), {})
+        if payload not in coarse:
+            coarse[payload] = (obj, [])
+        coarse[payload][1].append(r)
+
+    conflicts: list[ShadowedConflict] = []
+
+    def _remove(obj, kind):
+        (obj.origin.remove_property if kind == 'P' else obj.origin.remove_edge)(obj)
+
+    # --- identified (@id) conflicts: ALWAYS resolved via key(), never raise ---
+    for id_str, group in identified_groups.items():
+        if len(group) <= 1:
+            (obj, _rows), = group.values()
+            g.register_assertion_id(I(id_str), obj)
+            continue
+        items = [((skel[0], skel[3]), entry) for skel, entry in group.items()]  # keep origin_key/payload
+        candidates = []
+        for (origin_key, payload), (obj, contributing_rows) in items:
+            gnames = tuple(dict.fromkeys(r.graph_name for r in contributing_rows))
+            confs = [c for c in (_row_confidence(r.apk, children_by_parent) for r in contributing_rows)
+                     if c is not None]
+            candidates.append((OverlayCandidate(gnames, I(contributing_rows[0].label), origin_key,
+                                                contributing_rows[0].kind, payload,
+                                                max(confs) if confs else None), obj))
+        winner_c, winner_obj = max(candidates, key=lambda pair: key(pair[0]))
+        g.register_assertion_id(I(id_str), winner_obj)
+        losers = [c for c, o in candidates if o is not winner_obj]
+        for c, o in candidates:
+            if o is not winner_obj:
+                _remove(o, c.kind)
+        if losers:
+            conflicts.append(ShadowedConflict(
+                origin=winner_c.origin, label=winner_c.label, kind=winner_c.kind,
+                winner=winner_c, losers=losers,
+                key_values={c.graph_names: key(c) for c, _ in candidates},
+            ))
+
+    # --- anonymous single-cardinality conflicts ---
+    for (origin_key, kind, label), coarse in coarse_groups.items():
+        if len(coarse) <= 1 or not is_single(I(label)):
+            continue
+        candidates = []
+        for payload, (obj, contributing_rows) in coarse.items():
+            gnames = tuple(dict.fromkeys(r.graph_name for r in contributing_rows))
+            confs = [c for c in (_row_confidence(r.apk, children_by_parent) for r in contributing_rows)
+                     if c is not None]
+            candidates.append((OverlayCandidate(gnames, I(label), origin_key, kind, payload,
+                                                max(confs) if confs else None), obj))
+        winner_c, winner_obj = max(candidates, key=lambda pair: key(pair[0]))
+        losers = [c for c, o in candidates if o is not winner_obj]
+        for c, o in candidates:
+            if o is not winner_obj:
+                _remove(o, c.kind)
+        conflicts.append(ShadowedConflict(
+            origin=winner_c.origin, label=winner_c.label, kind=winner_c.kind,
+            winner=winner_c, losers=losers,
+            key_values={c.graph_names: key(c) for c, _ in candidates},
+        ))
+
+    for edge_obj, tident in pending_edges:
+        tid = id_by_ipk[tident]
+        if tid in g.assertion_ids:
+            edge_obj.target = g.assertion_ids[tid]
+        elif tid in g.nodes:
+            edge_obj.target = g[tid]
+        else:
+            edge_obj.target = g.node(I(tid))
+    return g, conflicts
 
 
 def _put_anonymous(cur, graph_pk, rec, origin_node, origin_assertion, target_ident, edge_source):

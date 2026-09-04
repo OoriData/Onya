@@ -38,7 +38,7 @@ _IMPORT_HINT = 'PostgreSQL support requires: pip install "onya[postgres]"'
 
 
 class PostgresStore:
-    '''PostgreSQL-backed store. Satisfies ``GraphStore`` + ``AssertionStore``.'''
+    '''PostgreSQL-backed store. Satisfies ``GraphStore`` + ``AssertionStore`` + ``OverlayReadStore``.'''
 
     dialect = POSTGRES
 
@@ -169,6 +169,19 @@ class PostgresStore:
             gpks = await _resolve_graph_pks(conn, [str(n) for n in names])
             g = await _build_union(conn, gpks)
         return rel.extract_subgraph(g, {str(r) for r in roots}, int(hops))
+
+    async def overlay(self, names, *, single_cardinality=frozenset(), key=None,
+                      precedence=None, prefer_confidence: bool = False):
+        str_names = [str(n) for n in names]
+        async with self._pool.acquire() as conn:
+            gpks = await _resolve_graph_pks(conn, str_names)
+            gpk_to_name = dict(zip(gpks, str_names))
+            is_single = rel.normalize_cardinality_predicate(single_cardinality)
+            resolved_key = key if key is not None else rel.make_overlay_key(
+                precedence=[str(p) for p in precedence] if precedence is not None else None,
+                prefer_confidence=prefer_confidence)
+            idents, nodes, node_types, assertions = await _fetch_overlay_rows(conn, gpk_to_name)
+        return rel.build_overlay(idents, nodes, node_types, assertions, is_single=is_single, key=resolved_key)
 
     async def subgraph(self, name: I | str, roots: set[I | str], hops: int = 1) -> graph:
         async with self._pool.acquire() as conn:
@@ -538,6 +551,37 @@ async def _build_union(conn, gpks: list[int]) -> graph:
         for r in arows
     ]
     return rel.build_union(idents, nodes, node_types, assertions)
+
+
+async def _fetch_overlay_rows(conn, gpk_to_name: dict[int, str]):
+    '''Like ``_build_union``'s row fetch, but the assertion rows carry each row's source
+    graph name (``build_overlay`` needs it for `key()`; ``build_union`` never does).'''
+    gpks = list(gpk_to_name)
+    ident_rows = await conn.fetch(
+        'SELECT ident_pk, id FROM onya_ident WHERE graph_pk = ANY($1::bigint[])', gpks)
+    idents = [(r['ident_pk'], r['id']) for r in ident_rows]
+
+    node_rows = await conn.fetch(
+        'SELECT n.node_pk, n.ident_pk FROM onya_node n'
+        ' JOIN onya_ident i ON i.ident_pk = n.ident_pk WHERE i.graph_pk = ANY($1::bigint[])', gpks)
+    nodes = [(r['node_pk'], r['ident_pk']) for r in node_rows]
+
+    type_rows = await conn.fetch(
+        'SELECT nt.node_pk, nt.type_iri FROM onya_node_type nt'
+        ' JOIN onya_node n ON n.node_pk = nt.node_pk'
+        ' JOIN onya_ident i ON i.ident_pk = n.ident_pk WHERE i.graph_pk = ANY($1::bigint[])', gpks)
+    node_types = [(r['node_pk'], r['type_iri']) for r in type_rows]
+
+    arows = await conn.fetch(
+        'SELECT assertion_pk, graph_pk, kind, origin_node, origin_assertion, label, target_ident,'
+        ' value, ident_pk, interp FROM onya_assertion WHERE graph_pk = ANY($1::bigint[])'
+        ' ORDER BY assertion_pk', gpks)
+    assertions = [
+        (r['assertion_pk'], gpk_to_name[r['graph_pk']], r['kind'], r['origin_node'], r['origin_assertion'],
+         r['label'], r['target_ident'], r['value'], r['ident_pk'], r['interp'])
+        for r in arows
+    ]
+    return idents, nodes, node_types, assertions
 
 
 # --- canned transitive-reachability helper ------------------------------------------

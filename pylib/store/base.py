@@ -22,12 +22,42 @@ capability question we want to answer.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Sequence
+from collections.abc import AsyncIterator, Callable, Collection, Sequence
+from dataclasses import dataclass
 from typing import Protocol, runtime_checkable
 
 from amara.iri import I
 
 from onya.graph import graph
+
+
+@dataclass(frozen=True)
+class OverlayCandidate:
+    '''
+    One competing claim in a cardinality conflict ``overlay()`` had to resolve: every named
+    graph that asserted this exact value/target for the ``(origin, label)`` slot, the value
+    itself, and the best (max) ``@confidence`` among that value's own corroborating
+    ``@method`` entries, if any (see ``onya.provenance.highest_confidence`` — the same
+    "pick the best" rule, generalized from one assertion's corroborating entries to
+    competing whole-graph claims).
+    '''
+    graph_names: tuple[I | str, ...]   # every source that asserted this value, first-seen order
+    label: I | str
+    origin: I | str                     # the origin's id (node) or an internal reduced-identity key
+    kind: str                            # 'P' | 'E'
+    payload: str                         # value (property) or target id (edge)
+    confidence: float | None
+
+
+@dataclass(frozen=True)
+class ShadowedConflict:
+    '''One ``(origin, label)`` slot where ``overlay()`` picked a winner among disagreeing values.'''
+    origin: I | str
+    label: I | str
+    kind: str
+    winner: OverlayCandidate
+    losers: list[OverlayCandidate]
+    key_values: dict[tuple[I | str, ...], object]   # candidate.graph_names -> the key() result
 
 
 @runtime_checkable
@@ -121,10 +151,6 @@ class OverlayReadStore(Protocol):
 
     SQLite/Postgres: offered, via genuine ``WHERE graph_pk IN (...)`` pushdown rather than
     ``len(names)`` separate round trips.
-
-    ``overlay()`` (ordered-precedence shadowing on conflicts, as an alternative to raising)
-    is deliberately not part of this protocol -- it needs its own design pass. See
-    doc/design-persistence-architecture.md § Deferred / open questions.
     '''
 
     async def union(self, names: Sequence[I | str]) -> graph:
@@ -145,6 +171,51 @@ class OverlayReadStore(Protocol):
     async def subgraph_across(self, names: Sequence[I | str], roots: set[I | str],
                               hops: int = 1) -> graph:
         '''``AssertionStore.subgraph``, scoped to the union of the named graphs.'''
+        ...
+
+    async def overlay(
+        self, names: Sequence[I | str], *,
+        single_cardinality: Collection[I | str] | Callable[[I | str], bool] = frozenset(),
+        key: Callable[[OverlayCandidate], object] | None = None,
+        precedence: Sequence[I | str] | None = None,
+        prefer_confidence: bool = False,
+    ) -> tuple[graph, list[ShadowedConflict]]:
+        '''
+        Like ``union()``, but named graphs are treated as ordered layers: for any
+        ``(origin, label)`` slot where the competing values genuinely disagree, resolve to
+        one winner instead of keeping every value.
+
+        ``union()`` never discards data -- Rule 2 corroboration always keeps every
+        co-existing value, and a genuine ``@id`` conflict raises ``GraphMergeError`` rather
+        than picking a winner. ``overlay()`` is deliberately the more opinionated sibling:
+
+        - ``single_cardinality`` decides whether a same-label disagreement between
+          *anonymous* assertions is "one winner" (shadow) or "genuinely multi-valued" (keep
+          all, exactly like ``union()``) -- Onya's core model carries no schema, so this is
+          the caller's own declaration. Either a plain collection of assertion label IRIs, or
+          a callable ``label -> bool`` for arbitrary logic. Covers edges and properties alike
+          (the identical ambiguity applies to both). Default (empty) shadows nothing, so
+          ``overlay()`` with no cardinality hints reduces to ``union()``'s behavior.
+        - A genuine ``@id`` (Rule 1) conflict is **always** resolved via ``key`` regardless of
+          ``single_cardinality`` -- an explicit ``@id`` already declares single-occurrence
+          intent by construction, so it never raises here (unlike ``union()``).
+        - ``key`` picks the winner among a slot's competing ``OverlayCandidate``s via
+          ``max(candidates, key=key)`` -- "be like Python sorting"
+          (docs.python.org/3/howto/sorting.html): arbitrary complexity is just a function, no
+          bespoke override-policy object. ``precedence`` is sugar for the common case
+          (``key=lambda c: -min(precedence.index(g) for g in c.graph_names)``);
+          ``prefer_confidence=True`` makes the *default* key (only when ``key`` is not
+          supplied) prefer a candidate's own resolved ``@confidence`` first, falling back to
+          ``precedence`` order only when confidence is absent or tied -- generalizing
+          ``onya.provenance.highest_confidence``'s rule from one assertion's corroborating
+          entries to competing whole-graph claims.
+        - The returned graph stays clean: losing assertions are removed, not left in the
+          graph tagged. The audit trail is the returned ``list[ShadowedConflict]`` instead --
+          never silently dropped, per this repo's stance (see #36) of not destroying
+          corroborating evidence without an explicit, separate opt-in.
+
+        Same ``KeyError``/``ValueError`` contract as ``union()`` for absent/empty ``names``.
+        '''
         ...
 
 
