@@ -14,7 +14,7 @@ import pytest
 
 from onya.graph import GraphMergeError
 from onya.store import OverlayReadStore
-from onya.serial.literate import LiterateParser
+# from onya.serial.literate import LiterateParser
 
 from store_helpers import canon, put_each, reference
 
