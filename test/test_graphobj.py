@@ -41,6 +41,29 @@ def test_node_1():
     assert [ e.target for e in n1.traverse(T('maker')) ] == [n2]
 
 
+def test_any_prop_value():
+    n = node(T('spam'), T('Thing'))
+    assert n.any_prop_value(T('title')) is None            # no match -> default
+    assert n.any_prop_value(T('title'), 'fallback') == 'fallback'
+
+    n.add_property(T('title'), 'Give me a cookie!')
+    assert n.any_prop_value(T('title')) == 'Give me a cookie!'  # raw value, not the object
+
+    # more than one match: arbitrary pick, but always one of the actual values (never None/default)
+    n.add_property(T('title'), 'Or a muffin!')
+    assert n.any_prop_value(T('title')) in {'Give me a cookie!', 'Or a muffin!'}
+
+
+def test_any_edge_target():
+    n1 = node(T('spam'), T('Thing'))
+    assert n1.any_edge_target(T('maker')) is None
+    assert n1.any_edge_target(T('maker'), 'fallback') == 'fallback'
+
+    n2 = node(T('Homer'), T('Agent'))
+    n1.add_edge(T('maker'), n2)
+    assert n1.any_edge_target(T('maker')) is n2                 # raw target, not the edge object
+
+
 #def test_node_2():
 #    og = graph()
 

@@ -42,12 +42,13 @@ class ProvenanceEntry:
 
 
 def _confidence_of(method_edge: edge) -> float | None:
-    for prop in method_edge.getprop(ONYA_CONFIDENCE_REL):
-        try:
-            return float(prop.value)
-        except ValueError:
-            return None
-    return None
+    value = method_edge.any_prop_value(ONYA_CONFIDENCE_REL)
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
 
 
 def list_provenance(assertion) -> list[ProvenanceEntry]:

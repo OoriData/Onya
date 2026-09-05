@@ -79,6 +79,28 @@ class assertions_mixin:
             if edge_.label == label:
                 yield edge_
 
+    def any_prop_value(self, label: I | str, default=None) -> str | None:
+        '''
+        The value of *a* property with the given label, or `default` if none exists.
+        `properties` is a set — with more than one match this is an arbitrary pick, not
+        necessarily order-stable across runs; well-defined only when there is at most one
+        (the intended use: single-cardinality access to a label the model itself makes no
+        promise about — see `overlay()`'s `single_cardinality` if that needs enforcing across
+        merged sources). To keep the assertion object itself (e.g. to chain into its own
+        nested properties, or read `.interp`/`.id`), use `next(self.getprop(label), None)`
+        instead — this method only ever returns the raw string.
+        '''
+        return next((p.value for p in self.properties if p.label == label), default)
+
+    def any_edge_target(self, label: I | str, default=None):
+        '''
+        The target of *an* edge with the given label, or `default` if none exists. Same
+        arbitrary-pick caveat as `any_prop_value` when there is more than one match, and the
+        same `next(self.getedge(label), None)` alternative when the edge object itself
+        (rather than its target) is what's needed.
+        '''
+        return next((e.target for e in self.edges if e.label == label), default)
+
 
 class node(assertions_mixin):
     '''
