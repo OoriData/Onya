@@ -26,7 +26,7 @@ from __future__ import annotations
 
 from amara.iri import I
 
-from onya.graph import GraphMergeError, graph
+from onya.graph import GraphMergeError, edge, graph
 from onya.store import _relational as rel
 from onya.store._relational import (
     POSTGRES, SCHEMA_VERSION, SKELETON_HASH_VERSION, classify_anonymous, ddl_statements,
@@ -136,13 +136,15 @@ class PostgresStore:
             rows = await conn.fetch(sql, *args)
             results = []
             for r in rows:
+                if where is not None and not rel.where_matches_values(
+                        await _nested_prop_values(conn, r['assertion_pk'], str(where[0])), where):
+                    continue
                 target = r['value'] if r['kind'] == 'P' else I(r['target_id'])
                 ann_rows = await conn.fetch(
                     "SELECT label, value FROM onya_assertion WHERE origin_assertion = $1 AND kind = 'P'",
                     r['assertion_pk'])
                 annotations = {I(a['label']): a['value'] for a in ann_rows}
-                if rel.matches_where(annotations, where):
-                    results.append((I(r['origin_id']), I(r['label']), target, annotations))
+                results.append((I(r['origin_id']), I(r['label']), target, annotations))
         for row in results:
             yield row
 
@@ -155,14 +157,23 @@ class PostgresStore:
 
     async def match_across(self, names, origin: I | str | None = None,
                            label: I | str | None = None, where=None):
+        '''
+        Built over ``select()`` rather than ``match()`` so ``where=`` can walk each
+        candidate's own nested properties recursively (``rel.where_matches_object``) --
+        ``match()``'s tuple projection only exposes direct-child annotations, which would
+        silently miss e.g. `@confidence` nested under `@method`.
+        '''
         async with self._pool.acquire() as conn:
             gpks = await _resolve_graph_pks(conn, [str(n) for n in names])
             g = await _build_union(conn, gpks)
         o = I(origin) if origin is not None else None
         lbl = I(label) if label is not None else None
-        for row in g.match(o, lbl):
-            if rel.matches_where(row[3], where):
-                yield row
+        for a in g.select(origin=o, label=lbl):
+            if not rel.where_matches_object(a, where):
+                continue
+            target = a.target.id if isinstance(a, edge) else a.value
+            annotations = {p.label: p.value for p in a.properties}
+            yield (a.origin.id, a.label, target, annotations)
 
     async def subgraph_across(self, names, roots: set[I | str], hops: int = 1) -> graph:
         async with self._pool.acquire() as conn:
@@ -285,6 +296,29 @@ async def _ensure_pgq(conn) -> None:
               DESTINATION KEY (target_ident) REFERENCES onya_ident (ident_pk)
               LABEL hop PROPERTIES (label))
     ''')
+
+
+async def _nested_prop_values(conn, apk: int, label: str) -> list:
+    '''
+    Every property value at ANY nesting depth under ``apk`` sharing ``label`` -- what
+    ``where=`` actually needs to search (see ``rel.where_matches_values``): `@confidence`
+    nests under `@method`, itself nested under the matched assertion, so a direct-children
+    search would silently never find it. One recursive-CTE round trip per candidate row.
+    '''
+    rows = await conn.fetch(
+        '''
+        WITH RECURSIVE descendants(apk) AS (
+            SELECT assertion_pk FROM onya_assertion WHERE origin_assertion = $1
+            UNION ALL
+            SELECT a.assertion_pk FROM onya_assertion a
+            JOIN descendants d ON a.origin_assertion = d.apk
+        )
+        SELECT value FROM onya_assertion
+        WHERE assertion_pk IN (SELECT apk FROM descendants) AND label = $2 AND kind = 'P'
+        ''',
+        apk, label,
+    )
+    return [r['value'] for r in rows]
 
 
 # --- write path (async mirror of _relational.write_graph) ---------------------------

@@ -14,6 +14,7 @@ import pytest
 
 from onya.graph import GraphMergeError
 from onya.store import OverlayReadStore
+from onya.terms import ONYA_CONFIDENCE_REL
 # from onya.serial.literate import LiterateParser
 
 from store_helpers import canon, put_each, reference
@@ -175,6 +176,37 @@ async def test_match_across_where_predicate(store):
     high = [row async for row in
            store.match_across(names, label='https://schema.org/value',
                               where=('https://schema.org/confidence', '>', 0.8))]
+    assert len(high) == 1
+    assert high[0][2] == '100'
+
+
+async def test_match_across_where_reaches_confidence_nested_under_method(store):
+    '''
+    Regression test: `@confidence` nests under `@method` per SPEC (#36), two levels below
+    the matched assertion -- not a direct child, unlike the sibling test above. A
+    direct-children-only `where=` search would silently find nothing here, even against
+    data tagged exactly the recommended way.
+    '''
+    doc = '''\
+# @docheader
+
+* @document: http://e.o/docConfNested
+* @nodebase: http://e.o/
+* @schema: https://schema.org/
+
+# Filing [Thing]
+
+* value: "100"
+    * @method -> XbrlTag
+        * @confidence: 0.95
+* value: "200"
+    * @method -> NerTag
+        * @confidence: 0.5
+'''
+    names = await put_each(store, doc)
+    high = [row async for row in
+           store.match_across(names, label='https://schema.org/value',
+                              where=(ONYA_CONFIDENCE_REL, '>', 0.8))]
     assert len(high) == 1
     assert high[0][2] == '100'
 

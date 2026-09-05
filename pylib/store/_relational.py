@@ -427,24 +427,55 @@ _WHERE_OPS = {
 }
 
 
-def matches_where(annotations: dict, where: tuple | None) -> bool:
+def where_matches_values(values, where: tuple | None) -> bool:
     '''
-    Does ``annotations`` (a ``{label: value}`` dict of one assertion's direct nested
-    properties, as ``match()`` already builds) satisfy ``where``? ``where=None`` always
-    matches. Compares numerically when both sides parse as a number, else as strings
-    (meaningful only for ``==``/``!=``); a missing label never matches.
+    Does *any* of ``values`` satisfy ``where``? ``where=None`` always matches; an empty
+    ``values`` never does. Compares numerically when both sides parse as a number, else as
+    strings (meaningful only for ``==``/``!=``).
+
+    ``values`` is expected to already be "every property value, at *any* nesting depth under
+    the matched assertion, sharing ``where``'s label" -- not just direct children. This
+    matters concretely: `@confidence` (SPEC § Optional assertion provenance) nests under
+    `@method`, itself nested under the fact it corroborates, so a direct-children-only search
+    would silently never find it -- exactly the shape `where=(ONYA_CONFIDENCE_REL, '>', 0.8)`
+    is meant to filter on. See ``where_matches_object`` (in-memory) and each backend's
+    ``_nested_prop_values`` (SQL, a recursive CTE) for how the two read paths collect this.
     '''
     if where is None:
         return True
-    label, op, want = where
-    if str(label) not in {str(k) for k in annotations}:
-        return False
-    have = next(v for k, v in annotations.items() if str(k) == str(label))
-    try:
-        have_cmp, want_cmp = float(have), float(want)
-    except (TypeError, ValueError):
-        have_cmp, want_cmp = str(have), str(want)
-    return _WHERE_OPS[op](have_cmp, want_cmp)
+    _label, op, want = where
+    for have in values:
+        try:
+            have_cmp, want_cmp = float(have), float(want)
+        except (TypeError, ValueError):
+            have_cmp, want_cmp = str(have), str(want)
+        if _WHERE_OPS[op](have_cmp, want_cmp):
+            return True
+    return False
+
+
+def where_matches_object(assertion_obj, where: tuple | None) -> bool:
+    '''
+    ``where_matches_values``, collecting the candidate values itself by walking
+    ``assertion_obj``'s own nested properties recursively (at any depth) for ``where``'s
+    label -- the in-memory counterpart to each SQL backend's ``_nested_prop_values``, used by
+    ``match_across`` (built over an already-materialized ``build_union`` graph).
+    '''
+    if where is None:
+        return True
+    label = str(where[0])
+    values = []
+
+    def walk(container):
+        for p in container.properties:
+            if str(p.label) == label:
+                values.append(p.value)
+            walk(p)
+        for e in container.edges:
+            walk(e)
+
+    walk(assertion_obj)
+    return where_matches_values(values, where)
 
 
 # --- read-time union across multiple named graphs (OverlayReadStore) ----------------

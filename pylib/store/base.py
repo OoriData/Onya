@@ -105,14 +105,19 @@ class AssertionStore(Protocol):
         '''
         Stream assertions matching the constraints (``None`` means unconstrained).
 
-        ``where`` is an optional single comparison against one *nested* property of the
-        matched assertion: ``(label, op, value)`` with ``op`` one of ``'==' '!=' '<' '<='
-        '>' '>='``, e.g. ``where=(ONYA_CONFIDENCE_REL, '>', 0.8)`` -- "edges labeled X whose
-        nested @confidence > 0.8" -- without loading the graph. Deliberately narrow: a
-        single comparison, not a general filter language, consistent with this store
-        layer's stance that ``GraphQueryStore`` is the escape hatch for anything richer, not
-        a query language Onya wraps. ``value`` compares numerically when both sides parse as
-        a number, else as a string (only meaningful for ``'=='``/``'!='``).
+        ``where`` is an optional single comparison against a nested property of the matched
+        assertion, at ANY depth (not just its direct children): ``(label, op, value)`` with
+        ``op`` one of ``'==' '!=' '<' '<=' '>' '>='``, e.g. ``where=(ONYA_CONFIDENCE_REL, '>',
+        0.8)`` -- "edges labeled X whose nested @confidence > 0.8" -- without loading the
+        graph. Matches if *any* property at any nesting depth carries the label and satisfies
+        the comparison; this is deliberate, not incidental -- `@confidence` (SPEC § Optional
+        assertion provenance) nests under `@method`, itself nested under the fact it
+        corroborates, exactly two levels below the matched assertion, so a direct-children-
+        only search would silently never find it. Deliberately narrow otherwise: a single
+        comparison, not a general filter language, consistent with this store layer's stance
+        that ``GraphQueryStore`` is the escape hatch for anything richer, not a query language
+        Onya wraps. ``value`` compares numerically when both sides parse as a number, else as
+        a string (only meaningful for ``'=='``/``'!='``).
         '''
         ...
 

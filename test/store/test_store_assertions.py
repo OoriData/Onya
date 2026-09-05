@@ -12,6 +12,7 @@ filesystem backend is skipped (it is not an ``AssertionStore``).
 import pytest
 
 from onya.store import AssertionStore
+from onya.terms import ONYA_CONFIDENCE_REL
 from store_helpers import DOCHEADER, NAME, parse
 
 
@@ -68,6 +69,29 @@ async def test_subgraph_bounded_expansion(store):
     # A's own name survives; C carries no assertions at 1 hop (dangling)
     assert {p.value for p in one['http://e.o/A'].getprop(NAME_P)} == {'Ada'}
     assert not list(one['http://e.o/C'].getprop(NAME_P))
+
+
+async def test_match_where_reaches_confidence_nested_under_method(store):
+    '''
+    Regression test: `@confidence` nests under `@method` per SPEC (#36), two levels below the
+    matched assertion -- not a direct child. A direct-children-only `where=` search would
+    silently find nothing here, even against data tagged exactly the recommended way.
+    '''
+    doc = DOCHEADER + '''
+# Filing [Thing]
+
+* value: "100"
+    * @method -> XbrlTag
+        * @confidence: 0.95
+* value: "200"
+    * @method -> NerTag
+        * @confidence: 0.5
+'''
+    await store.put(NAME, parse(doc))
+    high = [t async for o, r, t, ann in
+           store.match(NAME, label='https://schema.org/value',
+                       where=(ONYA_CONFIDENCE_REL, '>', 0.8))]
+    assert high == ['100']
 
 
 async def test_add_and_remove_roundtrip(store):

@@ -23,7 +23,7 @@ import sqlite3
 
 from amara.iri import I
 
-from onya.graph import graph
+from onya.graph import edge, graph
 from onya.store import _relational as rel
 from onya.store._relational import Dialect, SQLITE
 
@@ -293,6 +293,30 @@ def _annotations(cur, assertion_pk: int) -> dict:
     return {I(label): value for label, value in cur.fetchall()}
 
 
+def _nested_prop_values(cur, apk: int, label: str) -> list:
+    '''
+    Every property value at ANY nesting depth under ``apk`` sharing ``label`` -- what
+    ``where=`` actually needs to search (see ``rel.where_matches_values``): `@confidence`
+    nests under `@method`, itself nested under the matched assertion, so a direct-children
+    search (``_annotations``) would silently never find it. One recursive-CTE round trip
+    per candidate row, not a client-side walk.
+    '''
+    cur.execute(
+        '''
+        WITH RECURSIVE descendants(apk) AS (
+            SELECT assertion_pk FROM onya_assertion WHERE origin_assertion = ?
+            UNION ALL
+            SELECT a.assertion_pk FROM onya_assertion a
+            JOIN descendants d ON a.origin_assertion = d.apk
+        )
+        SELECT value FROM onya_assertion
+        WHERE assertion_pk IN (SELECT apk FROM descendants) AND label = ? AND kind = 'P'
+        ''',
+        (apk, label),
+    )
+    return [r[0] for r in cur.fetchall()]
+
+
 def _match_blocking(conn, name: str, origin: str | None, label: str | None, where) -> list:
     cur = conn.cursor()
     gpk = _graph_pk(cur, name)
@@ -320,10 +344,12 @@ def _match_blocking(conn, name: str, origin: str | None, label: str | None, wher
         if not batch:
             break
         for (apk, kind, lbl, value, target_id, origin_id) in batch:
+            if where is not None and not rel.where_matches_values(
+                    _nested_prop_values(cur, apk, str(where[0])), where):
+                continue
             target = value if kind == 'P' else I(target_id)
             annotations = _annotations(cur, apk)
-            if rel.matches_where(annotations, where):
-                out.append((I(origin_id), I(lbl), target, annotations))
+            out.append((I(origin_id), I(lbl), target, annotations))
     return out
 
 
@@ -369,11 +395,23 @@ def _union_blocking(conn, gpks: list[int]) -> graph:
 
 
 def _match_across_blocking(conn, gpks: list[int], origin: str | None, label: str | None, where) -> list:
+    '''
+    Built over ``select()`` rather than ``match()`` so ``where=`` can walk each candidate's
+    own nested properties recursively (``rel.where_matches_object``) -- ``match()``'s tuple
+    projection only exposes direct-child annotations, which would silently miss e.g.
+    `@confidence` nested under `@method` (see ``AssertionStore.match``'s docstring).
+    '''
     cur = conn.cursor()
     g = rel.build_union(*_fetch_union_rows(cur, gpks))
-    return [row for row in g.match(I(origin) if origin is not None else None,
-                                   I(label) if label is not None else None)
-            if rel.matches_where(row[3], where)]
+    out = []
+    for a in g.select(origin=I(origin) if origin is not None else None,
+                      label=I(label) if label is not None else None):
+        if not rel.where_matches_object(a, where):
+            continue
+        target = a.target.id if isinstance(a, edge) else a.value
+        annotations = {p.label: p.value for p in a.properties}
+        out.append((a.origin.id, a.label, target, annotations))
+    return out
 
 
 def _subgraph_across_blocking(conn, gpks: list[int], root_ids: set[str], hops: int) -> graph:
