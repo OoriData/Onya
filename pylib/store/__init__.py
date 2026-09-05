@@ -27,7 +27,9 @@ from __future__ import annotations
 
 from onya.graph import AssertionIdConflict, GraphMergeError
 
-from onya.store.base import AssertionStore, GraphQueryStore, GraphStore, OverlayReadStore
+from onya.store.base import (
+    AssertionStore, GraphQueryStore, GraphStore, OverlayCandidate, OverlayReadStore, ShadowedConflict,
+)
 from onya.store.exceptions import StoreError, UnknownSchemaVersion
 
 __all__ = [
@@ -35,6 +37,8 @@ __all__ = [
     'GraphStore',
     'AssertionStore',
     'OverlayReadStore',
+    'OverlayCandidate',
+    'ShadowedConflict',
     'GraphQueryStore',
     'StoreError',
     'UnknownSchemaVersion',
