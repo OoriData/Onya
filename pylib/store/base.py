@@ -103,9 +103,14 @@ class AssertionStore(Protocol):
 
     def match(self, name: I | str, origin: I | str | None = None,
               label: I | str | None = None, where: tuple[I | str, str, float | str] | None = None,
+              *, target: I | str | None = None,
               ) -> AsyncIterator[tuple[I | str, I | str, str | I, dict]]:
         '''
         Stream assertions matching the constraints (``None`` means unconstrained).
+
+        ``target`` restricts results to (first-level) **edges** pointing at that node id —
+        the edge face of the object slot, as in ``graph.select(target=)`` — so "who links
+        here?" is answerable without loading the graph. Additive; default unconstrained.
 
         ``where`` is an optional single comparison against a nested property of the matched
         assertion, at ANY depth (not just its direct children): ``(label, op, value)`` with

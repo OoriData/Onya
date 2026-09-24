@@ -121,7 +121,7 @@ class PostgresStore:
     # --- AssertionStore -------------------------------------------------------------
 
     async def match(self, name: I | str, origin: I | str | None = None,
-                    label: I | str | None = None, where=None):
+                    label: I | str | None = None, where=None, *, target: I | str | None = None):
         async with self._pool.acquire() as conn:
             gpk = await _graph_pk(conn, str(name))
             if gpk is None:
@@ -141,6 +141,9 @@ class PostgresStore:
             if label is not None:
                 args.append(str(label))
                 sql += f' AND a.label = ${len(args)}'
+            if target is not None:
+                args.append(str(target))
+                sql += f" AND a.kind = 'E' AND ti.id = ${len(args)}"
             rows = await conn.fetch(sql, *args)
             results = []
             for r in rows:

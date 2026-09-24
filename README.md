@@ -207,9 +207,25 @@ hits[0].node_id, hits[0].tier, hits[0].score      # ranked list; ambiguity is th
 [e.origin.id for e in g.inbound(ify, label='knows')]   # -> ['http://example.org/people/Chuks']
 ```
 
+Once you've found the node, `onya.view` turns "show me this thing" into data — which
+fields, in what order, which links to follow (outbound, inbound, or edges on the link itself),
+and what to show of each — leaving the rendering to you:
+
+```python
+from onya import view
+
+specs = view.load([{'type': 'Person', 'fields': ['name'],
+                    'follow': [{'edge': 'knows', 'show': ['name']}]}])
+view.project(g, chuks, specs)
+# {'id': '.../Chuks', 'type': 'Person', 'label': 'Chukwuemeka Okafor',
+#  'fields': [('name', 'Chukwuemeka Okafor')],
+#  'knows': [{'id': '.../Ify', 'label': 'Ifeoma Obasi', 'fields': [('name', 'Ifeoma Obasi')]}]}
+```
+
 Stores offer the same lookup without loading a graph (`await store.search(name, 'chukwuemka',
 labels=[...])`, `store.nodes_by_type(name, type_iri)`); PostgreSQL serves it from a `pg_trgm`
-trigram index.
+trigram index. `await view.project_from_store(store, name, node_id, specs, prefixes=...)`
+fetches just the neighborhood a view needs, so "search → project" is a handful of small queries.
 
 ## Persistence
 

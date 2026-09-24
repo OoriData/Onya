@@ -76,9 +76,9 @@ class SyncStore:
     # --- AssertionStore (bound in __init__ only when the store offers it) -----------
 
     def _match(self, name: I | str, origin: I | str | None = None, label: I | str | None = None,
-              where=None) -> list:
+               where=None, *, target: I | str | None = None) -> list:
         async def _collect():
-            return [r async for r in self._store.match(name, origin, label, where)]
+            return [r async for r in self._store.match(name, origin, label, where, target=target)]
         return asyncio.run(_collect())
 
     def _subgraph(self, name: I | str, roots: set[I | str], hops: int = 1) -> graph:

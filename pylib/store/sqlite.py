@@ -127,10 +127,11 @@ class SqliteStore:
     # --- AssertionStore -------------------------------------------------------------
 
     async def match(self, name: I | str, origin: I | str | None = None,
-                    label: I | str | None = None, where=None):
+                    label: I | str | None = None, where=None, *, target: I | str | None = None):
         rows = await self._run(_match_blocking, str(name),
                                None if origin is None else str(origin),
-                               None if label is None else str(label), where)
+                               None if label is None else str(label), where,
+                               None if target is None else str(target))
         for r in rows:
             yield r
 
@@ -345,7 +346,8 @@ def _nested_prop_values(cur, apk: int, label: str) -> list:
     return [r[0] for r in cur.fetchall()]
 
 
-def _match_blocking(conn, name: str, origin: str | None, label: str | None, where) -> list:
+def _match_blocking(conn, name: str, origin: str | None, label: str | None, where,
+                    target: str | None = None) -> list:
     cur = conn.cursor()
     gpk = _graph_pk(cur, name)
     if gpk is None:
@@ -365,6 +367,9 @@ def _match_blocking(conn, name: str, origin: str | None, label: str | None, wher
     if label is not None:
         sql += ' AND a.label = ?'
         params.append(label)
+    if target is not None:
+        sql += " AND a.kind = 'E' AND ti.id = ?"
+        params.append(target)
     cur.execute(sql, params)
     out: list = []
     while True:

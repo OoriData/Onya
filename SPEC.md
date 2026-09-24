@@ -301,7 +301,10 @@ the same selection to flat `(origin, label, target, annotations)` tuples.
 Two library conveniences sit alongside it, above the core rather than part of it:
 `graph.inbound(node, label=None)` selects edges by target (including nested edges)
 from a reverse index, and `onya.query.search()` ranks nodes by how well a
-property value matches a human-typed name. Neither is a query language.
+property value matches a human-typed name. `onya.view` projects a node through
+declarative, per-type specs into ordered plain data for display. None of these is a
+query language, and views are read-side selection, not shape validation: a view never
+rejects a graph.
 
 # Example: assertions in practice
 
