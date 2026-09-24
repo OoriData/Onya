@@ -25,7 +25,7 @@ from contextlib import contextmanager
 from amara.iri import I
 
 from onya.graph import graph
-from onya.store import AssertionStore, OverlayReadStore, connect as _async_connect
+from onya.store import AssertionStore, OverlayReadStore, SearchStore, connect as _async_connect
 
 
 class SyncStore:
@@ -34,7 +34,7 @@ class SyncStore:
     (non-``async``) methods; every streamed/generator call (``names``, ``match``,
     ``match_across``) returns a materialized list rather than an iterator.
 
-    ``AssertionStore``/``OverlayReadStore`` methods are wired in only when the wrapped store
+    ``AssertionStore``/``OverlayReadStore``/``SearchStore`` methods are wired in only when the wrapped store
     actually satisfies that capability — mirroring the async layer's own "capabilities over
     inheritance" stance rather than raising ``NotImplementedError`` for absent ones. This
     means ``isinstance(sync_store, AssertionStore)`` (etc.) reports the same capability the
@@ -53,6 +53,9 @@ class SyncStore:
             self.match_across = self._match_across
             self.subgraph_across = self._subgraph_across
             self.overlay = self._overlay
+        if isinstance(store, SearchStore):
+            self.search = self._search
+            self.nodes_by_type = self._nodes_by_type
 
     # --- GraphStore -----------------------------------------------------------------
 
@@ -109,6 +112,16 @@ class SyncStore:
         return asyncio.run(self._store.overlay(
             names, single_cardinality=single_cardinality, key=key,
             precedence=precedence, prefer_confidence=prefer_confidence))
+
+    # --- SearchStore (bound in __init__ only when the store offers it) --------------
+
+    def _search(self, name: I | str, query: str, **kwargs) -> list:
+        return asyncio.run(self._store.search(name, query, **kwargs))
+
+    def _nodes_by_type(self, name: I | str, type_iri: I | str) -> list:
+        async def _collect():
+            return [n async for n in self._store.nodes_by_type(name, type_iri)]
+        return asyncio.run(_collect())
 
 
 @contextmanager

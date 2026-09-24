@@ -298,6 +298,11 @@ objects — so a consumer can read a result's `id`, `interp`, or nested
 assertions, or remove it in place. `graph.match()` is a convenience projection of
 the same selection to flat `(origin, label, target, annotations)` tuples.
 
+Two library conveniences sit alongside it, above the core rather than part of it:
+`graph.inbound(node, label=None)` selects edges by target (including nested edges)
+from a reverse index, and `onya.query.search()` ranks nodes by how well a
+property value matches a human-typed name. Neither is a query language.
+
 # Example: assertions in practice
 
 The pieces above — anonymous assertions that can themselves carry assertions, made addressable only when a modeler chooses — cover a surprising range of modeling needs with no extra machinery. A small scenario shows how they fit together.
@@ -421,6 +426,8 @@ Use **compact CURIEs** anywhere an IRI label or type is expected:
 **CURIE** namespace joining (under `@iri`) follows RDF/XML rules: if the prefix base already ends with `/`, `#`, or `?`, the local name is appended directly (no extra `/`); otherwise a single `/` is inserted between base and local name. So `@iri` prefix bases should usually be written **without** a trailing slash unless the vocabulary IRIs are defined that way. This differs from the bare-name `@nodebase`/`@schema`/`@typebase` bases above, which join by pure concatenation and therefore *must* carry their own trailing separator. The two converge for any base that ends in a separator — which is why the auto-registered `schema:` prefix and bare names agree for the usual trailing-slash `@schema`.
 
 Onya built-in names use a leading `@` and the Onya vocabulary (e.g. `@document`, `@source`, `@id`, `@as`), not the `@iri` map.
+
+Prefixes are an authoring and serialization convenience, **not** part of the model: a graph's assertions hold full IRIs, and two graphs that differ only in the prefixes their documents declared are the same graph. An implementation MAY retain a parsed document's prefix map alongside the graph (so that application code can address labels as `schema:name` rather than full IRIs), but it is non-canonical and plays no part in identity or merge. When combining graphs, an implementation that retains prefixes SHOULD warn when one prefix is bound to two different namespaces (two prefixes for one namespace is harmless) and keep one binding; which one never affects the data.
 
 Example (Acme client with schema.org contact details):
 

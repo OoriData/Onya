@@ -9,7 +9,7 @@ backend is a ``GraphStore``; the filesystem backend is *not* an ``AssertionStore
     pytest -s test/store/test_store_capabilities.py
 '''
 
-from onya.store import AssertionStore, GraphQueryStore, GraphStore, OverlayReadStore, connect
+from onya.store import AssertionStore, GraphQueryStore, GraphStore, OverlayReadStore, SearchStore, connect
 
 
 async def test_filesystem_capabilities(tmp_path):
@@ -17,6 +17,7 @@ async def test_filesystem_capabilities(tmp_path):
         assert isinstance(store, GraphStore)
         assert not isinstance(store, AssertionStore)   # would be a lie for a whole-file backend
         assert not isinstance(store, OverlayReadStore)  # same reason — no pushdown is possible
+        assert isinstance(store, SearchStore)           # in-process over the parsed file
         assert not isinstance(store, GraphQueryStore)
 
 
@@ -25,4 +26,5 @@ async def test_sqlite_capabilities(tmp_path):
         assert isinstance(store, GraphStore)
         assert isinstance(store, AssertionStore)
         assert isinstance(store, OverlayReadStore)
+        assert isinstance(store, SearchStore)
         assert not isinstance(store, GraphQueryStore)   # PGQ is PostgreSQL >= 19 only

@@ -14,6 +14,8 @@ abstraction):
 - the SQL backends additionally satisfy ``AssertionStore`` (fine-grained access without
   materializing the whole graph) and ``OverlayReadStore`` (read-time union/scoped access
   across *multiple* named graphs, without disturbing per-graph storage);
+- every shipped backend satisfies ``SearchStore`` (ranked entry-point lookup by property value,
+  plus ``nodes_by_type``) — indexed via ``pg_trgm`` on PostgreSQL, in-process elsewhere;
 - PostgreSQL >= 19 additionally satisfies ``GraphQueryStore`` (SQL/PGQ escape hatch).
 
 ``runtime_checkable`` only checks method *presence*, not signatures — which is exactly the
@@ -221,6 +223,46 @@ class OverlayReadStore(Protocol):
 
         Same ``KeyError``/``ValueError`` contract as ``union()`` for absent/empty ``names``.
         '''
+        ...
+
+
+@runtime_checkable
+class SearchStore(Protocol):
+    '''
+    Entry-point lookup without materializing a graph: "which node is the user talking about?"
+    Kept apart from ``AssertionStore`` so that protocol stays minimal (and so the filesystem
+    backend, which has no ``AssertionStore``, can still offer search).
+
+    Semantics are ``onya.query.search``'s — the same tiers (exact > prefix > word > fuzzy),
+    normalization, ``per_node``/``limit``/``min_score``/``similarity`` behavior, and default
+    label set (properties whose interpretation is absent or ``text``). Only first-level node properties
+    are searched. Label and type arguments are **full IRIs**: a store holds no prefix map.
+    Hits carry ``node_id``, ``label`` and ``value``; ``node``/``assertion`` are None.
+
+    SQLite and the filesystem rank in-process with ``onya.query``'s scorer, so their results
+    equal an in-memory search.
+
+    **PostgreSQL scores differently.** It computes the tiers in SQL and scores with
+    ``pg_trgm`` (``similarity`` / ``word_similarity``) behind a GIN trigram index. What is the
+    same as every other backend: the ``exact``/``prefix``/``word`` hits (membership and tier),
+    and the tier of any node both return. What can differ: fuzzy *scores* are trigram-based,
+    so which values clear ``min_score`` in the fuzzy tier, and the order within the fuzzy
+    tier, may not match an in-memory search — e.g. for ``'ada lovelac'``, difflib scores
+    ``'Adah Isaacs Menken'`` 0.55 (a hit at the default 0.5) while ``pg_trgm`` gives it 0.25
+    (no hit). Passing a custom ``normalize`` or ``similarity`` (or running without
+    ``pg_trgm``) switches PostgreSQL to the in-process scorer, whose results do match.
+    '''
+
+    async def search(self, name: I | str, query: str, *, labels: Collection[I | str] | None = None,
+                     types: Collection[I | str] | None = None, limit: int | None = None,
+                     min_score: float = 0.5, per_node: bool = True,
+                     normalize: Callable[[str], str] | None = None,
+                     similarity: str | Callable[[str, str], float] | None = None) -> list:
+        '''Ranked ``list[onya.query.SearchHit]`` for ``query`` in the named graph (empty if absent).'''
+        ...
+
+    def nodes_by_type(self, name: I | str, type_iri: I | str) -> AsyncIterator[I]:
+        '''Async-iterate the ids of nodes in the named graph carrying ``type_iri``.'''
         ...
 
 

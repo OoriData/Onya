@@ -45,7 +45,10 @@ from amara.iri import I
 
 from onya.graph import GraphMergeError, edge, graph, node
 from onya.store.base import OverlayCandidate, ShadowedConflict
-from onya.terms import ONYA_METHOD_REL, ONYA_CONFIDENCE_REL
+from onya.terms import ONYA_INTERP, ONYA_METHOD_REL, ONYA_CONFIDENCE_REL
+
+# Interpretation whose property values are searchable by default (alongside interp-free ones).
+TEXT_INTERP = ONYA_INTERP('text')
 
 SKELETON_HASH_VERSION = '1'
 SCHEMA_VERSION = '1'

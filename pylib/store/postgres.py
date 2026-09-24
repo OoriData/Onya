@@ -24,9 +24,12 @@ differs here. SQLite is the tested proving ground for the projection's semantics
 
 from __future__ import annotations
 
+import logging
+
 from amara.iri import I
 
 from onya.graph import GraphMergeError, edge, graph
+from onya.query import DEFAULT_MIN_SCORE, SearchHit, normalize as query_normalize, rank, score_candidates
 from onya.store import _relational as rel
 from onya.store._relational import (
     POSTGRES, SCHEMA_VERSION, SKELETON_HASH_VERSION, classify_anonymous, ddl_statements,
@@ -36,15 +39,19 @@ from onya.store.exceptions import UnknownSchemaVersion
 
 _IMPORT_HINT = 'PostgreSQL support requires: pip install "onya[postgres]"'
 
+logger = logging.getLogger(__name__)
+
 
 class PostgresStore:
-    '''PostgreSQL-backed store. Satisfies ``GraphStore`` + ``AssertionStore`` + ``OverlayReadStore``.'''
+    '''PostgreSQL-backed store. Satisfies ``GraphStore`` + ``AssertionStore`` + ``OverlayReadStore``
+    + ``SearchStore`` (``pg_trgm``-indexed when the extension is available).'''
 
     dialect = POSTGRES
 
-    def __init__(self, pool, server_major: int):
+    def __init__(self, pool, server_major: int, *, has_trgm: bool = False):
         self._pool = pool
         self.server_major = server_major
+        self.has_trgm = has_trgm  # pg_trgm available -> indexed search; else in-process fallback
         # Fast path (INSERT ... ON CONFLICT DO SELECT) is a PG19 feature; feature-detected by
         # version, not try/except. Currently the portable case-analysis path is used on every
         # version pending PG19-final verification (see the filed follow-up); the flag is kept so
@@ -66,10 +73,11 @@ class PostgresStore:
             major = ver[0] if isinstance(ver, tuple) else ver.major
             async with conn.transaction():
                 await _ensure_schema(conn)
+                has_trgm = await _ensure_search(conn)
                 if major >= 19:
                     await _ensure_pgq(conn)
         store_cls = PostgresGraphQueryStore if major >= 19 else cls
-        return store_cls(pool, major)
+        return store_cls(pool, major, has_trgm=has_trgm)
 
     async def __aenter__(self) -> 'PostgresStore':
         return self
@@ -238,6 +246,55 @@ class PostgresStore:
                 ' AND ident_pk IS NULL', gpk, sk)
 
 
+    # --- SearchStore ------------------------------------------------------------------
+
+    async def search(self, name: I | str, query: str, *, labels=None, types=None, limit=None,
+                     min_score: float = DEFAULT_MIN_SCORE, per_node: bool = True, normalize=None,
+                     similarity=None) -> list:
+        '''
+        With ``pg_trgm`` (and the default normalization): tiers computed in SQL against
+        ``onya_normalize(value)`` — exact ``=``, prefix/word via ``LIKE`` patterns, fuzzy via
+        the ``%`` / ``<%`` trigram operators with thresholds set to ``min_score`` — all served
+        by the GIN trigram index, so no graph is loaded. Scores: 1.0 for exact, ``similarity``
+        for prefix/word, ``greatest(similarity, word_similarity)`` for fuzzy.
+
+        Trigram scores are not difflib/rapidfuzz scores: non-fuzzy hits and tiers match the
+        other backends, but fuzzy-tier inclusion near ``min_score`` and fuzzy-tier order can
+        differ (see ``SearchStore``). Without ``pg_trgm``, or given a custom ``normalize`` or
+        ``similarity``, the label/type-filtered property rows are instead ranked in-process
+        with ``onya.query``'s scorer — unindexed, but identical to an in-memory search.
+        '''
+        lbls = None if labels is None else [str(x) for x in labels]
+        typs = None if types is None else [str(t) for t in types]
+        async with self._pool.acquire() as conn:
+            gpk = await _graph_pk(conn, str(name))
+            if gpk is None:
+                return []
+            if not self.has_trgm or normalize is not None or similarity is not None:  # in-process path
+                rows = await _search_candidates(conn, gpk, lbls, typs)
+                cands = ((I(r['node_id']), I(r['label']), r['value'], None, None) for r in rows)
+                hits = score_candidates(query, cands, min_score=min_score,
+                                        normalize=normalize or query_normalize, similarity=similarity)
+                return rank(hits, per_node=per_node, limit=limit)
+            async with conn.transaction():
+                rows = await _search_trgm(conn, gpk, query, lbls, typs, min_score)
+        hits = (SearchHit(I(r['node_id']), I(r['label']), r['value'], r['tier'], float(r['score']))
+                for r in rows if r['tier'] != 'fuzzy' or r['score'] >= min_score)
+        return rank(hits, per_node=per_node, limit=limit)
+
+    async def nodes_by_type(self, name: I | str, type_iri: I | str):
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                'SELECT i.id FROM onya_node_type nt'
+                ' JOIN onya_node n ON n.node_pk = nt.node_pk'
+                ' JOIN onya_ident i ON i.ident_pk = n.ident_pk'
+                ' JOIN onya_graph g ON g.graph_pk = i.graph_pk'
+                ' WHERE g.name = $1 AND nt.type_iri = $2 ORDER BY i.id',
+                str(name), str(type_iri))
+        for r in rows:
+            yield I(r['id'])
+
+
 class PostgresGraphQueryStore(PostgresStore):
     '''PostgreSQL >= 19: additionally satisfies ``GraphQueryStore`` (SQL/PGQ escape hatch).'''
 
@@ -264,6 +321,107 @@ async def _ensure_schema(conn) -> None:
             await conn.execute('INSERT INTO onya_meta (key, value) VALUES ($1, $2)', key, expected)
         elif val != expected:
             raise UnknownSchemaVersion(found=val, expected=expected)
+
+
+# Mirror of `onya.query.normalize` in SQL: lowercase, collapse non-alphanumeric runs to one
+# space, trim. IMMUTABLE so it can back an expression index. (`lower` rather than Python's
+# `casefold`: they differ only for a few characters such as `ß`.)
+_NORMALIZE_FN = '''
+    CREATE OR REPLACE FUNCTION onya_normalize(t text) RETURNS text
+    LANGUAGE sql IMMUTABLE PARALLEL SAFE
+    AS $$ SELECT btrim(regexp_replace(lower(t), '[^[:alnum:]]+', ' ', 'g')) $$
+'''
+
+
+async def _ensure_search(conn) -> bool:
+    '''
+    Bootstrap search support: the ``onya_normalize`` function always, and — when the
+    ``pg_trgm`` extension can be created (it ships with stock PostgreSQL and the usual hosted
+    offerings) — a GIN trigram index over normalized property values. Returns whether
+    ``pg_trgm`` is available. The ``CREATE EXTENSION`` runs in a savepoint so a role lacking
+    the privilege doesn't abort the schema bootstrap.
+    '''
+    await conn.execute(_NORMALIZE_FN)
+    try:
+        async with conn.transaction():
+            await conn.execute('CREATE EXTENSION IF NOT EXISTS pg_trgm')
+    except Exception as e:  # asyncpg.PostgresError; asyncpg itself is imported lazily
+        logger.info('pg_trgm could not be enabled (%s); onya search will rank in-process', e)
+    has_trgm = bool(await conn.fetchval("SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm'"))
+    if has_trgm:
+        await conn.execute(
+            'CREATE INDEX IF NOT EXISTS onya_assertion_value_trgm ON onya_assertion'
+            " USING gin (onya_normalize(value) gin_trgm_ops) WHERE kind = 'P'")
+    else:
+        logger.info('pg_trgm unavailable; onya search will rank in-process (unindexed)')
+    return has_trgm
+
+
+def _search_filters(args: list, labels, types) -> str:
+    '''SQL fragment for the SearchStore label/interp and type filters, appending to ``args``.'''
+    sql = ''
+    if labels is not None:
+        args.append(labels)
+        sql += f' AND a.label = ANY(${len(args)}::text[])'
+    else:
+        args.append(str(rel.TEXT_INTERP))
+        sql += f' AND (a.interp IS NULL OR a.interp = ${len(args)})'
+    if types is not None:
+        args.append(types)
+        sql += (' AND EXISTS (SELECT 1 FROM onya_node_type nt WHERE nt.node_pk = a.origin_node'
+                f' AND nt.type_iri = ANY(${len(args)}::text[]))')
+    return sql
+
+
+async def _search_candidates(conn, gpk: int, labels, types) -> list:
+    '''Unindexed fallback: every first-level property row the search should score.'''
+    args: list = [gpk]
+    sql = (
+        'SELECT i.id AS node_id, a.label, a.value FROM onya_assertion a'
+        ' JOIN onya_node n ON n.node_pk = a.origin_node'
+        ' JOIN onya_ident i ON i.ident_pk = n.ident_pk'
+        " WHERE a.graph_pk = $1 AND a.kind = 'P'"
+    ) + _search_filters(args, labels, types)
+    return await conn.fetch(sql, *args)
+
+
+async def _search_trgm(conn, gpk: int, query: str, labels, types, min_score: float) -> list:
+    '''Indexed search (call inside a transaction: the trigram thresholds are ``SET LOCAL``).'''
+    q = await conn.fetchval('SELECT onya_normalize($1)', query)  # same normalization as the index
+    if not q:
+        return []
+    for knob in ('pg_trgm.similarity_threshold', 'pg_trgm.word_similarity_threshold'):
+        await conn.execute('SELECT set_config($1, $2, true)', knob, str(min_score))
+    # $2 query; $3 contains-pattern (index-served; also covers exact/prefix/word); $4 prefix
+    # pattern; $5 whole-word pattern. A normalized query holds only alphanumerics and spaces,
+    # so it needs no LIKE escaping.
+    args: list = [gpk, q, f'%{q}%', f'{q} %', f'% {q} %']
+    filters = _search_filters(args, labels, types)
+    sql = f'''
+        WITH c AS (
+            SELECT i.id AS node_id, a.label, a.value, onya_normalize(a.value) AS nv
+            FROM onya_assertion a
+            JOIN onya_node n ON n.node_pk = a.origin_node
+            JOIN onya_ident i ON i.ident_pk = n.ident_pk
+            WHERE a.graph_pk = $1 AND a.kind = 'P'{filters}
+              AND (onya_normalize(a.value) LIKE $3
+                   OR $2 % onya_normalize(a.value)
+                   OR $2 <% onya_normalize(a.value))
+        ), t AS (
+            SELECT node_id, label, value, nv,
+                   CASE WHEN nv = $2 THEN 'exact'
+                        WHEN nv LIKE $4 THEN 'prefix'
+                        WHEN (' ' || nv || ' ') LIKE $5 THEN 'word'
+                        ELSE 'fuzzy' END AS tier
+            FROM c
+        )
+        SELECT node_id, label, value, tier,
+               CASE tier WHEN 'exact' THEN 1.0
+                         WHEN 'fuzzy' THEN greatest(similarity($2, nv), word_similarity($2, nv))
+                         ELSE similarity($2, nv) END AS score
+        FROM t
+    '''
+    return await conn.fetch(sql, *args)
 
 
 async def _ensure_pgq(conn) -> None:

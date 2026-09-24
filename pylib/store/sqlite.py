@@ -12,8 +12,9 @@ blocks the event loop. ``PRAGMA journal_mode=WAL`` and ``PRAGMA foreign_keys=ON`
 open. This is a solid single-process backend; for networked, multi-writer concurrency use
 PostgreSQL.
 
-Implements ``GraphStore``, ``AssertionStore``, and ``OverlayReadStore``. The schema, skeleton hashing, and
-write-path merge algorithm are shared with PostgreSQL in ``onya.store._relational``.
+Implements ``GraphStore``, ``AssertionStore``, ``OverlayReadStore``, and ``SearchStore`` (ranked
+in-process with ``onya.query``'s scorer over SQL-filtered candidate rows — not indexed). The
+schema, skeleton hashing, and write-path merge algorithm are shared with PostgreSQL in ``onya.store._relational``.
 '''
 
 from __future__ import annotations
@@ -24,6 +25,7 @@ import sqlite3
 from amara.iri import I
 
 from onya.graph import edge, graph
+from onya.query import DEFAULT_MIN_SCORE, normalize as query_normalize, rank, score_candidates
 from onya.store import _relational as rel
 from onya.store._relational import Dialect, SQLITE
 
@@ -41,7 +43,7 @@ def _url_to_path(url: str) -> str:
 
 class SqliteStore:
     '''A SQLite database holding many named graphs. Satisfies ``GraphStore`` + ``AssertionStore``
-    + ``OverlayReadStore``.'''
+    + ``OverlayReadStore`` + ``SearchStore``.'''
 
     dialect: Dialect = SQLITE
 
@@ -190,6 +192,32 @@ class SqliteStore:
             conn.commit()
 
         await self._run(_remove)
+
+    # --- SearchStore ------------------------------------------------------------------
+
+    async def search(self, name: I | str, query: str, *, labels=None, types=None, limit=None,
+                     min_score: float = DEFAULT_MIN_SCORE, per_node: bool = True, normalize=None,
+                     similarity=None) -> list:
+        rows = await self._run(_search_candidates_blocking, str(name),
+                               None if labels is None else [str(x) for x in labels],
+                               None if types is None else [str(t) for t in types])
+        cands = ((I(nid), I(lbl), value, None, None) for nid, lbl, value in rows)
+        hits = score_candidates(query, cands, min_score=min_score, normalize=normalize or query_normalize,
+                                similarity=similarity)
+        return rank(hits, per_node=per_node, limit=limit)
+
+    async def nodes_by_type(self, name: I | str, type_iri: I | str):
+        def _nodes(conn):
+            return [r[0] for r in conn.execute(
+                'SELECT i.id FROM onya_node_type nt'
+                ' JOIN onya_node n ON n.node_pk = nt.node_pk'
+                ' JOIN onya_ident i ON i.ident_pk = n.ident_pk'
+                ' JOIN onya_graph g ON g.graph_pk = i.graph_pk'
+                ' WHERE g.name = ? AND nt.type_iri = ? ORDER BY i.id',
+                (str(name), str(type_iri)))]
+
+        for nid in await self._run(_nodes):
+            yield I(nid)
 
 
 # --- blocking query/reconstruction helpers ------------------------------------------
@@ -351,6 +379,37 @@ def _match_blocking(conn, name: str, origin: str | None, label: str | None, wher
             annotations = _annotations(cur, apk)
             out.append((I(origin_id), I(lbl), target, annotations))
     return out
+
+
+def _search_candidates_blocking(conn, name: str, labels: list[str] | None, types: list[str] | None) -> list:
+    '''
+    First-level node properties that ``search`` should score: ``labels`` if given, else those
+    whose interp is absent or ``text`` (``SearchStore`` contract), restricted to nodes carrying
+    one of ``types`` if given. Returns ``(node_id, label, value)`` rows.
+    '''
+    cur = conn.cursor()
+    gpk = _graph_pk(cur, name)
+    if gpk is None:
+        return []
+    sql = (
+        'SELECT i.id, a.label, a.value FROM onya_assertion a'
+        ' JOIN onya_node n ON n.node_pk = a.origin_node'
+        ' JOIN onya_ident i ON i.ident_pk = n.ident_pk'
+        " WHERE a.graph_pk = ? AND a.kind = 'P'"
+    )
+    params: list = [gpk]
+    if labels is not None:
+        sql += f' AND a.label IN ({",".join("?" * len(labels))})'
+        params += labels
+    else:
+        sql += ' AND (a.interp IS NULL OR a.interp = ?)'
+        params.append(str(rel.TEXT_INTERP))
+    if types is not None:
+        sql += (' AND EXISTS (SELECT 1 FROM onya_node_type nt WHERE nt.node_pk = a.origin_node'
+                f' AND nt.type_iri IN ({",".join("?" * len(types))}))')
+        params += types
+    cur.execute(sql, params)
+    return cur.fetchall()
 
 
 # --- OverlayReadStore (read-time union/scoped access across named graphs) -----------

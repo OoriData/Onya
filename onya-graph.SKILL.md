@@ -236,6 +236,15 @@ async def save():
 
 The load-bearing guarantee: **a round trip through a store is identical to an in-memory graph union** — `put(merge=True)` applies exactly the merge rules above, so the same-ids/skeletons discipline from authoring is what controls how stored graphs combine. A blocking facade (`from onya.store.sync import connect`) mirrors the API for scripts. Backends, schema, and the SQL/PGQ layer are documented in [doc/design-persistence-architecture.md](https://github.com/OoriData/Onya/blob/main/doc/design-persistence-architecture.md); the walkthrough is in [doc/python-tutorial.md](https://github.com/OoriData/Onya/blob/main/doc/python-tutorial.md). The store emits `.onya` and reads `.onya`/`.onya.md`.
 
+## Looking up nodes from application code
+
+Downstream code shouldn't hand-roll "find the node the user named" or reverse-edge scans, and shouldn't compare IRI tails ("local names") — `schema:name` and `ex:name` collide that way. Instead:
+
+- **CURIE-keyed accessors.** A parsed graph keeps its docheader prefixes as `g.prefixes` (non-canonical: a convenience, not data). Label arguments to `getprop`/`getedge`/`any_prop_value`/`any_edge_target`/`select`/`typematch`/`inbound` accept a full IRI, a CURIE (`'schema:name'`), or a bare `@schema` name (`'name'`). An undeclared prefix raises `UnknownPrefixError`.
+- **Ranked search.** `g.search('ada lovelac', labels=['schema:name'], types=['schema:Person'], limit=5)` → `list[SearchHit]` (`node_id`, `node`, `label`, `value`, `tier`, `score`). Tiers: `exact` > `prefix` (word-boundary) > `word` > `fuzzy`; tier beats score. Default labels: properties with no `@as` or `@as: text`. It never picks for you — `hits[0]` plus `SearchHit.is_clear_winner(hits)` is the usual pattern. `similarity='rapidfuzz'` (needs `onya[fuzzy]`) is a faster opt-in scorer. Keep a reference to the graph while using its nodes' CURIE accessors — nodes hold their graph only weakly.
+- **Inbound edges.** `g.inbound(node_or_id, label=None)` (index-backed; `node.reverse(label, g)` wraps it).
+- **In a store.** `await store.search(name, query, labels=[full IRIs], ...)` and `store.nodes_by_type(name, type_iri)` work on every backend without loading the graph (PostgreSQL uses a `pg_trgm` index; its fuzzy scores are trigram-based, so fuzzy hits near `min_score` can differ from other backends — tiers and non-fuzzy hits don't). Store arguments are full IRIs — a store has no prefix map.
+
 ## Common pitfalls
 
 - **Multi-type headers are fine, but don't over-stack.** `[Organization lv:Client]` parses as a *set* of two types (as of 0.4.0; older Onya rejected it). That's correct when a node genuinely has two independent types — but if one merely specializes the other, prefer the single specific type and model "is-a-kind-of" as a vocabulary `rdfs:subClassOf`, rather than stacking both on every instance.

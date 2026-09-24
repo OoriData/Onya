@@ -29,11 +29,13 @@ import io
 import os
 import re
 import time
+from dataclasses import replace
 from pathlib import Path
 
 from amara.iri import I
 
 from onya.graph import graph
+from onya.query import DEFAULT_MIN_SCORE, normalize as query_normalize, search as query_search
 from onya.serial.literate import LiterateParser, write as literate_write
 from onya.store.exceptions import StoreError
 
@@ -69,9 +71,10 @@ def _url_to_root(url: str) -> Path:
 
 class FileStore:
     '''
-    A directory of Onya Literate files, one per named graph. Satisfies ``GraphStore``.
-    Does not satisfy ``AssertionStore`` or ``OverlayReadStore`` -- no pushdown is possible
-    (a file must be parsed whole anyway). For a union across named graphs on this backend,
+    A directory of Onya Literate files, one per named graph. Satisfies ``GraphStore`` and
+    ``SearchStore`` (in-process, over the parsed graph — no index). Does not satisfy
+    ``AssertionStore`` or ``OverlayReadStore`` -- no pushdown is possible (a file must be
+    parsed whole anyway). For a union across named graphs on this backend,
     compose ``get()`` + ``graph.union()`` (see ``OverlayReadStore``'s docstring).
     '''
 
@@ -255,3 +258,32 @@ class FileStore:
 
         for name in await asyncio.to_thread(_scan):
             yield I(name)
+
+    # --- SearchStore (in-process: a file is parsed whole anyway) ----------------------
+
+    async def _get_or_none(self, name: I | str) -> graph | None:
+        try:
+            return await self.get(name)
+        except KeyError:
+            return None
+
+    async def search(self, name: I | str, query: str, *, labels=None, types=None, limit=None,
+                     min_score: float = DEFAULT_MIN_SCORE, per_node: bool = True, normalize=None,
+                     similarity=None) -> list:
+        g = await self._get_or_none(name)
+        if g is None:
+            return []
+        # Store-level labels/types are full IRIs (SearchStore contract); wrapping in `I` skips
+        # CURIE/bare-name resolution against the parsed file's prefixes, matching the SQL backends.
+        hits = query_search(g, query, labels=None if labels is None else [I(str(x)) for x in labels],
+                            types=None if types is None else [I(str(t)) for t in types],
+                            limit=limit, min_score=min_score, per_node=per_node,
+                            normalize=normalize or query_normalize, similarity=similarity)
+        return [replace(h, node=None, assertion=None) for h in hits]
+
+    async def nodes_by_type(self, name: I | str, type_iri: I | str):
+        g = await self._get_or_none(name)
+        if g is None:
+            return
+        for n in g.typematch(I(str(type_iri))):
+            yield n.id

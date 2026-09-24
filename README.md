@@ -191,6 +191,26 @@ for edge in chuks.traverse('https://schema.org/knows'):
 write(g)
 ```
 
+### Finding the node a user means
+
+Label arguments take a full IRI, a CURIE, or a bare `@schema` name, resolved against the
+prefixes the parsed document declared (`g.prefixes`; an undeclared prefix raises rather than
+guessing). `g.search()` is a ranked, typo-tolerant lookup by property value, and `g.inbound()`
+answers "what points here?" from a reverse index instead of a scan:
+
+```python
+chuks.any_prop_value('name')             # -> 'Chukwuemeka Okafor' (same as 'schema:name')
+
+hits = g.search('chukwuemka', types=['Person'])   # tiers: exact > prefix > word > fuzzy
+hits[0].node_id, hits[0].tier, hits[0].score      # ranked list; ambiguity is the caller's call
+
+[e.origin.id for e in g.inbound(ify, label='knows')]   # -> ['http://example.org/people/Chuks']
+```
+
+Stores offer the same lookup without loading a graph (`await store.search(name, 'chukwuemka',
+labels=[...])`, `store.nodes_by_type(name, type_iri)`); PostgreSQL serves it from a `pg_trgm`
+trigram index.
+
 ## Persistence
 
 `onya.store` keeps graphs across sessions and processes. It is a peripheral, not
