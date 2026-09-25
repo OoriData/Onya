@@ -43,7 +43,7 @@ from dataclasses import dataclass
 
 from amara.iri import I
 
-from onya.graph import GraphMergeError, edge, graph, node
+from onya.graph import GraphMergeError, edge, fold_prefixes, graph, node
 from onya.store.base import OverlayCandidate, ShadowedConflict
 from onya.terms import ONYA_INTERP, ONYA_METHOD_REL, ONYA_CONFIDENCE_REL
 
@@ -97,6 +97,15 @@ def ddl_statements(d: Dialect) -> list[str]:
         ' graph_pk BIGINT NOT NULL REFERENCES onya_graph(graph_pk) ON DELETE CASCADE,'
         ' id TEXT NOT NULL,'
         ' UNIQUE (graph_pk, id))',
+
+        # A graph's CURIE prefix map (non-canonical: it never affects identity, merge, or query
+        # results; it only lets readers address labels as `schema:name`). A new table rather than
+        # a schema-version bump: `CREATE TABLE IF NOT EXISTS` upgrades existing stores on open.
+        'CREATE TABLE IF NOT EXISTS onya_graph_prefix ('
+        ' graph_pk BIGINT NOT NULL REFERENCES onya_graph(graph_pk) ON DELETE CASCADE,'
+        ' prefix TEXT NOT NULL,'
+        ' namespace TEXT NOT NULL,'
+        ' PRIMARY KEY (graph_pk, prefix))',
 
         'CREATE TABLE IF NOT EXISTS onya_node ('
         f' node_pk {pk},'
@@ -325,12 +334,35 @@ def _maybe_edge_hop(cur, assertion_pk, rec: ARecord, source_ident, target_ident)
     )
 
 
-def write_graph(cur, name: str, g, *, merge: bool, dialect: Dialect = SQLITE) -> None:
+def read_prefixes(cur, graph_pk: int) -> dict[str, str]:
+    '''The stored prefix map of one graph.'''
+    cur.execute('SELECT prefix, namespace FROM onya_graph_prefix WHERE graph_pk = ? ORDER BY prefix',
+                (graph_pk,))
+    return dict(cur.fetchall())
+
+
+def write_prefixes(cur, graph_pk: int, prefixes: dict | None) -> list:
+    '''
+    Fold ``prefixes`` into the stored map by the ``graph.add_prefixes`` rule (stored binding
+    wins). Returns the ``fold_prefixes`` clashes for the caller to warn about — outside the
+    worker thread, so warning filters and ``pytest.warns`` see them.
+    '''
+    additions, clashes = fold_prefixes(read_prefixes(cur, graph_pk), prefixes)
+    for k, v in sorted(additions.items()):
+        cur.execute('INSERT INTO onya_graph_prefix (graph_pk, prefix, namespace) VALUES (?, ?, ?)',
+                    (graph_pk, k, v))
+    return clashes
+
+
+def write_graph(cur, name: str, g, *, merge: bool, dialect: Dialect = SQLITE) -> list:
     '''
     Persist ``g`` under ``name`` via the write-path merge algorithm. ``merge=True`` unions
     with the stored graph; ``merge=False`` replaces it wholesale (the relational projection
     is always normalized, so incoming duplicate occurrences collapse either way). The caller
     is responsible for the surrounding transaction and for ``g.validate_id_space()``.
+
+    ``g.prefixes`` are folded into the stored prefix map (replaced outright under
+    ``merge=False``, since the graph row is recreated). Returns prefix clashes to warn about.
     '''
     name = str(name)
     if not merge:
@@ -385,6 +417,8 @@ def write_graph(cur, name: str, g, *, merge: bool, dialect: Dialect = SQLITE) ->
                                      target_ident, edge_source)
             if apk is not None:
                 pk_by_obj[id(rec.obj)] = apk
+
+    return write_prefixes(cur, graph_pk, getattr(g, 'prefixes', None))
 
 
 def _put_identified(cur, graph_pk, rec, origin_node, origin_assertion, target_ident,

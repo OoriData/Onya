@@ -224,7 +224,7 @@ view.project(g, chuks, specs)
 
 Stores offer the same lookup without loading a graph (`await store.search(name, 'chukwuemka',
 labels=[...])`, `store.nodes_by_type(name, type_iri)`); PostgreSQL serves it from a `pg_trgm`
-trigram index. `await view.project_from_store(store, name, node_id, specs, prefixes=...)`
+trigram index. `await view.project_from_store(store, name, node_id, specs)`
 fetches just the neighborhood a view needs, so "search → project" is a handful of small queries.
 
 ## Persistence

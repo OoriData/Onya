@@ -34,7 +34,8 @@ from pathlib import Path
 
 from amara.iri import I
 
-from onya.graph import graph
+from onya.graph import fold_prefixes, graph, warn_prefix_clashes
+from onya.util import namespace_for_curie
 from onya.query import DEFAULT_MIN_SCORE, normalize as query_normalize, search as query_search
 from onya.serial.literate import LiterateParser, write as literate_write
 from onya.store.exceptions import StoreError
@@ -134,6 +135,30 @@ class FileStore:
         cls._reader.parse(text, g)
         return g
 
+    @staticmethod
+    def _merged_convention(schema, prefixes, incoming: dict | None, *, merge: bool):
+        '''
+        The (schema, prefixes, clashes) to write: the existing file's convention folded with the
+        graph's own `prefixes` by the `graph.add_prefixes` rule (file's binding wins) under
+        `merge`; under replace, the graph's prefixes when it has any, else the file's convention
+        (a file must be written with *some* convention, and it's a serialization choice only).
+        '''
+        existing = dict(prefixes or {})
+        if schema:
+            existing['schema'] = namespace_for_curie(schema)
+        if merge:
+            additions, clashes = fold_prefixes(existing, incoming)
+            merged = {**existing, **additions}
+        else:
+            merged, clashes = (dict(incoming) if incoming else existing), []
+        out_schema = merged.pop('schema', None)
+        if out_schema is not None:
+            if schema and namespace_for_curie(schema) == namespace_for_curie(out_schema):
+                out_schema = schema  # keep the file's own spelling of @schema
+            elif not out_schema.endswith(('/', '#', '?')):
+                out_schema += '/'   # bare names join by concatenation: needs its separator back
+        return out_schema, merged, clashes
+
     def _existing_convention(self, name: str):
         '''
         Namespace convention (schema, nodebase, prefixes) declared by an existing stored file,
@@ -178,7 +203,7 @@ class FileStore:
 
     # --- blocking put implementation (runs in a worker thread) ----------------------
 
-    def _put_blocking(self, name: str, g: graph, merge: bool) -> None:
+    def _put_blocking(self, name: str, g: graph, merge: bool) -> list:
         lock = self._acquire_lock(name)
         try:
             if merge:
@@ -198,19 +223,22 @@ class FileStore:
                     schema, nodebase, prefixes = r.schema, r.nodebase, r.prefixes
                 incoming = self._from_literate(self._to_literate(g, name))
                 stored.union(incoming)
+                schema, prefixes, clashes = self._merged_convention(schema, prefixes, g.prefixes, merge=True)
                 text = self._to_literate(stored, name, schema=schema, nodebase=nodebase, prefixes=prefixes)
             else:
                 g.validate_id_space()  # wholesale replace, but never persist an id-space collision
                 schema, nodebase, prefixes = self._existing_convention(name)
+                schema, prefixes, clashes = self._merged_convention(schema, prefixes, g.prefixes, merge=False)
                 text = self._to_literate(g, name, schema=schema, nodebase=nodebase, prefixes=prefixes)
             self._atomic_write(self._write_path(name), text)
+            return clashes
         finally:
             self._release_lock(lock)
 
     # --- GraphStore -----------------------------------------------------------------
 
     async def put(self, name: I | str, g: graph, *, merge: bool = True) -> None:
-        await asyncio.to_thread(self._put_blocking, str(name), g, merge)
+        warn_prefix_clashes(await asyncio.to_thread(self._put_blocking, str(name), g, merge), stacklevel=2)
 
     async def get(self, name: I | str) -> graph:
         name = str(name)

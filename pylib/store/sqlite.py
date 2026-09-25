@@ -24,7 +24,7 @@ import sqlite3
 
 from amara.iri import I
 
-from onya.graph import edge, graph
+from onya.graph import edge, graph, warn_prefix_clashes
 from onya.query import DEFAULT_MIN_SCORE, normalize as query_normalize, rank, score_candidates
 from onya.store import _relational as rel
 from onya.store._relational import Dialect, SQLITE
@@ -88,13 +88,14 @@ class SqliteStore:
         def _put(conn):
             cur = conn.cursor()
             try:
-                rel.write_graph(cur, str(name), g, merge=merge, dialect=self.dialect)
+                clashes = rel.write_graph(cur, str(name), g, merge=merge, dialect=self.dialect)
                 conn.commit()
+                return clashes
             except Exception:
                 conn.rollback()
                 raise
 
-        await self._run(_put)
+        warn_prefix_clashes(await self._run(_put), stacklevel=2)
 
     async def get(self, name: I | str) -> graph:
         def _get(conn):
@@ -143,7 +144,18 @@ class SqliteStore:
 
     async def union(self, names) -> graph:
         gpks = await self._run(_resolve_graph_pks, [str(n) for n in names])
-        return await self._run(_union_blocking, gpks)
+        g = await self._run(_union_blocking, gpks)
+        return await self._with_prefixes(g, gpks)
+
+    async def _with_prefixes(self, g: graph, gpks: list[int]) -> graph:
+        '''Attach the named graphs' stored prefixes, folded in `names` order (first wins, warns
+        on a clash, as chaining `graph.union()` would). Folded here, on the caller's thread.'''
+        def _read(conn):
+            cur = conn.cursor()
+            return [rel.read_prefixes(cur, gpk) for gpk in gpks]
+        for pmap in await self._run(_read):
+            g.add_prefixes(pmap)
+        return g
 
     async def match_across(self, names, origin: I | str | None = None,
                            label: I | str | None = None, where=None):
@@ -157,7 +169,8 @@ class SqliteStore:
     async def subgraph_across(self, names, roots: set[I | str], hops: int = 1) -> graph:
         gpks = await self._run(_resolve_graph_pks, [str(n) for n in names])
         root_ids = {str(r) for r in roots}
-        return await self._run(_subgraph_across_blocking, gpks, root_ids, int(hops))
+        g = await self._run(_subgraph_across_blocking, gpks, root_ids, int(hops))
+        return await self._with_prefixes(g, gpks)
 
     async def overlay(self, names, *, single_cardinality=frozenset(), key=None,
                       precedence=None, prefer_confidence: bool = False):
@@ -168,7 +181,8 @@ class SqliteStore:
         resolved_key = key if key is not None else rel.make_overlay_key(
             precedence=[str(p) for p in precedence] if precedence is not None else None,
             prefer_confidence=prefer_confidence)
-        return await self._run(_overlay_blocking, gpk_to_name, is_single, resolved_key)
+        g, conflicts = await self._run(_overlay_blocking, gpk_to_name, is_single, resolved_key)
+        return await self._with_prefixes(g, gpks), conflicts
 
     async def add(self, name: I | str, origin: I | str, label: I | str, target_or_value,
                   *, kind: str, interp: I | str | None = None, id_: I | str | None = None) -> None:
@@ -235,7 +249,9 @@ def _build_graph(cur, gpk: int, node_idents: set[int] | None = None) -> graph:
     node idents are materialized as full nodes; edge targets outside the set become bare
     (dangling) nodes, exactly as the parser represents an undescribed target.
     '''
-    g = graph()
+    # One graph: nothing to fold, no clash possible. (Read first — `cur` is reused below, and a
+    # query issued between an execute and its fetchall would discard the pending rows.)
+    g = graph(prefixes=rel.read_prefixes(cur, gpk))
 
     # idents: ident_pk -> id
     cur.execute('SELECT ident_pk, id FROM onya_ident WHERE graph_pk = ?', (gpk,))

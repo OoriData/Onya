@@ -98,6 +98,32 @@ def resolve_label(label: I | str, prefixes: dict[str, str] | None) -> I | str:
     )
 
 
+def fold_prefixes(existing: dict[str, str] | None, incoming: dict[str, str] | None) -> tuple[dict, list]:
+    '''
+    The prefix-merge rule (pure; see `graph.add_prefixes`): returns `(additions, clashes)`.
+    `additions` are incoming prefixes `existing` lacks; a prefix bound in both to different
+    namespaces (after trailing-`/` normalization) is a clash, reported as `(prefix, kept,
+    ignored)` — the existing binding wins. Two prefixes for one namespace is not a clash.
+    '''
+    existing = existing or {}
+    additions: dict = {}
+    clashes: list = []
+    for k, v in (incoming or {}).items():
+        mine = existing.get(k, additions.get(k))
+        if mine is None:
+            additions[k] = v
+        elif namespace_for_curie(mine) != namespace_for_curie(v):
+            clashes.append((k, mine, v))
+    return additions, clashes
+
+
+def warn_prefix_clashes(clashes: list, *, stacklevel: int = 2) -> None:
+    '''Emit the standard `UserWarning` for each `fold_prefixes` clash.'''
+    for k, kept, ignored in clashes:
+        warnings.warn(f'Prefix {k!r} clash on merge: keeping {kept!r}, ignoring {ignored!r}',
+                      stacklevel=stacklevel + 1)
+
+
 class assertions_mixin:
     '''
     Mixin for objects that can have assertions (edges and properties)
@@ -520,15 +546,9 @@ class graph(MutableMapping):
         fine (both kept). One prefix bound to two different namespaces warns, and the existing
         binding wins — prefixes are non-canonical, so this never affects the data.
         '''
-        for k, v in (prefixes or {}).items():
-            mine = self.prefixes.get(k)
-            if mine is None:
-                self.prefixes[k] = v
-            elif namespace_for_curie(mine) != namespace_for_curie(v):
-                warnings.warn(
-                    f'Prefix {k!r} clash on merge: keeping {mine!r}, ignoring {v!r}',
-                    stacklevel=3,
-                )
+        additions, clashes = fold_prefixes(self.prefixes, prefixes)
+        self.prefixes.update(additions)
+        warn_prefix_clashes(clashes, stacklevel=3)
 
     def touch(self) -> None:
         '''

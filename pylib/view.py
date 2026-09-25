@@ -550,10 +550,9 @@ async def project_from_store(store, name, node_id, specs, *, prefixes: Mapping[s
     `subgraph(hops=0)` for missing nodes. The result equals `project` over the whole graph.
     Other stores (the filesystem) fall back to `get()`.
 
-    `prefixes`: resolves the spec's CURIEs/bare names. SQL stores don't keep a graph's
-    (non-canonical) prefixes, so pass the ones the specs are written against — e.g. the
-    `g.prefixes` of the graph as parsed — or write specs in full IRIs. Raises `KeyError` if
-    the node is absent.
+    `prefixes`: resolve the spec's CURIEs/bare names. Optional — stores keep each graph's
+    prefixes (from `put`), and those are used; prefixes passed here take precedence over stored
+    ones (a clash warns). Raises `KeyError` if the node is absent.
     '''
     from onya.store.base import AssertionStore  # lazy: keep onya.view importable without the store layer
 
