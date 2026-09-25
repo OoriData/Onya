@@ -24,27 +24,36 @@ differs here. SQLite is the tested proving ground for the projection's semantics
 
 from __future__ import annotations
 
+import logging
+import re
+
 from amara.iri import I
 
-from onya.graph import GraphMergeError, edge, graph
+from onya.graph import GraphMergeError, edge, graph, warn_prefix_clashes
+from onya.util import namespace_for_curie
+from onya.query import DEFAULT_MIN_SCORE, SearchHit, normalize as query_normalize, rank, score_candidates
 from onya.store import _relational as rel
 from onya.store._relational import (
     POSTGRES, SCHEMA_VERSION, SKELETON_HASH_VERSION, classify_anonymous, ddl_statements,
     iter_records, skeleton_hash,
 )
-from onya.store.exceptions import UnknownSchemaVersion
+from onya.store.exceptions import StoreError, UnknownSchemaVersion
 
 _IMPORT_HINT = 'PostgreSQL support requires: pip install "onya[postgres]"'
 
+logger = logging.getLogger(__name__)
+
 
 class PostgresStore:
-    '''PostgreSQL-backed store. Satisfies ``GraphStore`` + ``AssertionStore`` + ``OverlayReadStore``.'''
+    '''PostgreSQL-backed store. Satisfies ``GraphStore`` + ``AssertionStore`` + ``OverlayReadStore``
+    + ``SearchStore`` (``pg_trgm``-indexed when the extension is available).'''
 
     dialect = POSTGRES
 
-    def __init__(self, pool, server_major: int):
+    def __init__(self, pool, server_major: int, *, has_trgm: bool = False):
         self._pool = pool
         self.server_major = server_major
+        self.has_trgm = has_trgm  # pg_trgm available -> indexed search; else in-process fallback
         # Fast path (INSERT ... ON CONFLICT DO SELECT) is a PG19 feature; feature-detected by
         # version, not try/except. Currently the portable case-analysis path is used on every
         # version pending PG19-final verification (see the filed follow-up); the flag is kept so
@@ -66,10 +75,10 @@ class PostgresStore:
             major = ver[0] if isinstance(ver, tuple) else ver.major
             async with conn.transaction():
                 await _ensure_schema(conn)
-                if major >= 19:
-                    await _ensure_pgq(conn)
-        store_cls = PostgresGraphQueryStore if major >= 19 else cls
-        return store_cls(pool, major)
+                has_trgm = await _ensure_search(conn)
+                has_pgq = await _ensure_pgq(conn) if major >= 19 else False
+        store_cls = PostgresGraphQueryStore if has_pgq else cls
+        return store_cls(pool, major, has_trgm=has_trgm)
 
     async def __aenter__(self) -> 'PostgresStore':
         return self
@@ -88,7 +97,8 @@ class PostgresStore:
         g.validate_id_space()
         async with self._pool.acquire() as conn:
             async with conn.transaction():
-                await _write_graph(conn, str(name), g, merge=merge)
+                clashes = await _write_graph(conn, str(name), g, merge=merge)
+        warn_prefix_clashes(clashes, stacklevel=2)
 
     async def get(self, name: I | str) -> graph:
         async with self._pool.acquire() as conn:
@@ -113,7 +123,7 @@ class PostgresStore:
     # --- AssertionStore -------------------------------------------------------------
 
     async def match(self, name: I | str, origin: I | str | None = None,
-                    label: I | str | None = None, where=None):
+                    label: I | str | None = None, where=None, *, target: I | str | None = None):
         async with self._pool.acquire() as conn:
             gpk = await _graph_pk(conn, str(name))
             if gpk is None:
@@ -133,6 +143,9 @@ class PostgresStore:
             if label is not None:
                 args.append(str(label))
                 sql += f' AND a.label = ${len(args)}'
+            if target is not None:
+                args.append(str(target))
+                sql += f" AND a.kind = 'E' AND ti.id = ${len(args)}"
             rows = await conn.fetch(sql, *args)
             results = []
             for r in rows:
@@ -153,7 +166,7 @@ class PostgresStore:
     async def union(self, names) -> graph:
         async with self._pool.acquire() as conn:
             gpks = await _resolve_graph_pks(conn, [str(n) for n in names])
-            return await _build_union(conn, gpks)
+            return await _with_prefixes(conn, await _build_union(conn, gpks), gpks)
 
     async def match_across(self, names, origin: I | str | None = None,
                            label: I | str | None = None, where=None):
@@ -179,7 +192,11 @@ class PostgresStore:
         async with self._pool.acquire() as conn:
             gpks = await _resolve_graph_pks(conn, [str(n) for n in names])
             g = await _build_union(conn, gpks)
-        return rel.extract_subgraph(g, {str(r) for r in roots}, int(hops))
+            pmaps = [await _read_prefixes(conn, gpk) for gpk in gpks]
+        out = rel.extract_subgraph(g, {str(r) for r in roots}, int(hops))
+        for pmap in pmaps:
+            out.add_prefixes(pmap)
+        return out
 
     async def overlay(self, names, *, single_cardinality=frozenset(), key=None,
                       precedence=None, prefer_confidence: bool = False):
@@ -192,7 +209,12 @@ class PostgresStore:
                 precedence=[str(p) for p in precedence] if precedence is not None else None,
                 prefer_confidence=prefer_confidence)
             idents, nodes, node_types, assertions = await _fetch_overlay_rows(conn, gpk_to_name)
-        return rel.build_overlay(idents, nodes, node_types, assertions, is_single=is_single, key=resolved_key)
+            pmaps = [await _read_prefixes(conn, gpk) for gpk in gpks]
+        g, conflicts = rel.build_overlay(idents, nodes, node_types, assertions, is_single=is_single,
+                                         key=resolved_key)
+        for pmap in pmaps:
+            g.add_prefixes(pmap)
+        return g, conflicts
 
     async def subgraph(self, name: I | str, roots: set[I | str], hops: int = 1) -> graph:
         async with self._pool.acquire() as conn:
@@ -238,6 +260,55 @@ class PostgresStore:
                 ' AND ident_pk IS NULL', gpk, sk)
 
 
+    # --- SearchStore ------------------------------------------------------------------
+
+    async def search(self, name: I | str, query: str, *, labels=None, types=None, limit=None,
+                     min_score: float = DEFAULT_MIN_SCORE, per_node: bool = True, normalize=None,
+                     similarity=None) -> list:
+        '''
+        With ``pg_trgm`` (and the default normalization): tiers computed in SQL against
+        ``onya_normalize(value)`` — exact ``=``, prefix/word via ``LIKE`` patterns, fuzzy via
+        the ``%`` / ``<%`` trigram operators with thresholds set to ``min_score`` — all served
+        by the GIN trigram index, so no graph is loaded. Scores: 1.0 for exact, ``similarity``
+        for prefix/word, ``greatest(similarity, word_similarity)`` for fuzzy.
+
+        Trigram scores are not difflib/rapidfuzz scores: non-fuzzy hits and tiers match the
+        other backends, but fuzzy-tier inclusion near ``min_score`` and fuzzy-tier order can
+        differ (see ``SearchStore``). Without ``pg_trgm``, or given a custom ``normalize`` or
+        ``similarity``, the label/type-filtered property rows are instead ranked in-process
+        with ``onya.query``'s scorer — unindexed, but identical to an in-memory search.
+        '''
+        lbls = None if labels is None else [str(x) for x in labels]
+        typs = None if types is None else [str(t) for t in types]
+        async with self._pool.acquire() as conn:
+            gpk = await _graph_pk(conn, str(name))
+            if gpk is None:
+                return []
+            if not self.has_trgm or normalize is not None or similarity is not None:  # in-process path
+                rows = await _search_candidates(conn, gpk, lbls, typs)
+                cands = ((I(r['node_id']), I(r['label']), r['value'], None, None) for r in rows)
+                hits = score_candidates(query, cands, min_score=min_score,
+                                        normalize=normalize or query_normalize, similarity=similarity)
+                return rank(hits, per_node=per_node, limit=limit)
+            async with conn.transaction():
+                rows = await _search_trgm(conn, gpk, query, lbls, typs, min_score)
+        hits = (SearchHit(I(r['node_id']), I(r['label']), r['value'], r['tier'], float(r['score']))
+                for r in rows if r['tier'] != 'fuzzy' or r['score'] >= min_score)
+        return rank(hits, per_node=per_node, limit=limit)
+
+    async def nodes_by_type(self, name: I | str, type_iri: I | str):
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                'SELECT i.id FROM onya_node_type nt'
+                ' JOIN onya_node n ON n.node_pk = nt.node_pk'
+                ' JOIN onya_ident i ON i.ident_pk = n.ident_pk'
+                ' JOIN onya_graph g ON g.graph_pk = i.graph_pk'
+                ' WHERE g.name = $1 AND nt.type_iri = $2 ORDER BY i.id',
+                str(name), str(type_iri))
+        for r in rows:
+            yield I(r['id'])
+
+
 class PostgresGraphQueryStore(PostgresStore):
     '''PostgreSQL >= 19: additionally satisfies ``GraphQueryStore`` (SQL/PGQ escape hatch).'''
 
@@ -254,9 +325,54 @@ class PostgresGraphQueryStore(PostgresStore):
 
 # --- schema / PGQ -------------------------------------------------------------------
 
+# Relations the canonical DDL creates, read off the DDL itself so there is no second list to
+# keep in sync. Checked with `to_regclass`, which resolves through the connection's search_path.
+_DDL_OBJECT = re.compile(r'^CREATE (?:UNIQUE )?(?:TABLE|INDEX) IF NOT EXISTS (\w+)')
+_SQL_EXAMPLE_HINT = ('Provision it once as a role that can (e.g. the schema owner, or with '
+                     'sql/examples/postgres-schema.sql from the onya repository), then reconnect.')
+
+
+def _core_objects() -> list[str]:
+    return [m.group(1) for stmt in ddl_statements(POSTGRES) if (m := _DDL_OBJECT.match(stmt))]
+
+
+def _is_privilege_error(e: Exception) -> bool:
+    return getattr(e, 'sqlstate', None) == '42501'  # insufficient_privilege (incl. "must be owner")
+
+
+async def _missing_relations(conn, names: list[str]) -> list[str]:
+    rows = await conn.fetch('SELECT n FROM unnest($1::text[]) AS n WHERE to_regclass(n) IS NULL', names)
+    return [r['n'] for r in rows]
+
+
+async def _try_ddl(conn, *stmts: str) -> Exception | None:
+    '''Run DDL in a savepoint (a failure must not abort the bootstrap); return the error, if any.'''
+    try:
+        async with conn.transaction():
+            for stmt in stmts:
+                await conn.execute(stmt)
+    except Exception as e:  # asyncpg.PostgresError; asyncpg itself is imported lazily
+        return e
+    return None
+
+
 async def _ensure_schema(conn) -> None:
-    for stmt in ddl_statements(POSTGRES):
-        await conn.execute(stmt)
+    '''
+    Create the schema only if something is missing. PostgreSQL checks CREATE privilege even for
+    `CREATE ... IF NOT EXISTS` on an existing object, so running the DDL unconditionally would
+    lock out an application role that only has data privileges on a schema someone else
+    provisioned. When DDL is needed but not permitted, fail with the objects that are missing.
+    '''
+    missing = await _missing_relations(conn, _core_objects())
+    if missing:
+        err = await _try_ddl(conn, *ddl_statements(POSTGRES))
+        if err is not None:
+            if _is_privilege_error(err):
+                raise StoreError(
+                    f'The onya store schema is incomplete (missing: {", ".join(missing)}) and the '
+                    f'connecting role may not create it ({err}). {_SQL_EXAMPLE_HINT}'
+                ) from err
+            raise err
     for key, expected in (('schema_version', SCHEMA_VERSION),
                           ('skeleton_hash_version', SKELETON_HASH_VERSION)):
         val = await conn.fetchval('SELECT value FROM onya_meta WHERE key = $1', key)
@@ -266,7 +382,144 @@ async def _ensure_schema(conn) -> None:
             raise UnknownSchemaVersion(found=val, expected=expected)
 
 
-async def _ensure_pgq(conn) -> None:
+# Mirror of `onya.query.normalize` in SQL: lowercase, collapse non-alphanumeric runs to one
+# space, trim. IMMUTABLE so it can back an expression index. (`lower` rather than Python's
+# `casefold`: they differ only for a few characters such as `ß`.)
+_NORMALIZE_FN = '''
+    CREATE OR REPLACE FUNCTION onya_normalize(t text) RETURNS text
+    LANGUAGE sql IMMUTABLE PARALLEL SAFE
+    AS $$ SELECT btrim(regexp_replace(lower(t), '[^[:alnum:]]+', ' ', 'g')) $$
+'''
+
+
+async def _ensure_search(conn) -> bool:
+    '''
+    Bootstrap search support, creating only what's missing: the ``onya_normalize`` function,
+    the ``pg_trgm`` extension (stock PostgreSQL and the usual hosted offerings ship it), and a
+    GIN trigram index over normalized property values. Returns whether indexed-path search is
+    usable (extension + function). Search is optional, so nothing here fails the open: each
+    step runs in a savepoint, and a role that can't create a missing object just gets a logged
+    notice and, at worst, in-process ranking.
+
+    An existing ``onya_normalize`` is left as is (not ``CREATE OR REPLACE``d, which would need
+    ownership); if its definition ever changes, this must compare definitions before skipping.
+    '''
+    async def has_fn() -> bool:
+        return bool(await conn.fetchval("SELECT to_regprocedure('onya_normalize(text)') IS NOT NULL"))
+
+    async def has_ext() -> bool:
+        return bool(await conn.fetchval("SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm'"))
+
+    if not await has_fn() and (err := await _try_ddl(conn, _NORMALIZE_FN)) is not None:
+        logger.info('onya_normalize() could not be created (%s); onya search will rank in-process', err)
+    if not await has_ext() and (err := await _try_ddl(conn, 'CREATE EXTENSION IF NOT EXISTS pg_trgm')) is not None:
+        logger.info('pg_trgm could not be enabled (%s); onya search will rank in-process', err)
+    usable = await has_ext() and await has_fn()
+    if not usable:
+        logger.info('pg_trgm unavailable; onya search will rank in-process (unindexed)')
+        return False
+    if await _missing_relations(conn, ['onya_assertion_value_trgm']):
+        err = await _try_ddl(conn, 'CREATE INDEX IF NOT EXISTS onya_assertion_value_trgm ON onya_assertion'
+                                   " USING gin (onya_normalize(value) gin_trgm_ops) WHERE kind = 'P'")
+        if err is not None:
+            logger.info('onya search trigram index could not be created (%s); trigram search runs unindexed', err)
+    return True
+
+
+def _search_filters(args: list, labels, types) -> str:
+    '''SQL fragment for the SearchStore label/interp and type filters, appending to ``args``.'''
+    sql = ''
+    if labels is not None:
+        args.append(labels)
+        sql += f' AND a.label = ANY(${len(args)}::text[])'
+    else:
+        args.append(str(rel.TEXT_INTERP))
+        sql += f' AND (a.interp IS NULL OR a.interp = ${len(args)})'
+    if types is not None:
+        args.append(types)
+        sql += (' AND EXISTS (SELECT 1 FROM onya_node_type nt WHERE nt.node_pk = a.origin_node'
+                f' AND nt.type_iri = ANY(${len(args)}::text[]))')
+    return sql
+
+
+async def _search_candidates(conn, gpk: int, labels, types) -> list:
+    '''Unindexed fallback: every first-level property row the search should score.'''
+    args: list = [gpk]
+    sql = (
+        'SELECT i.id AS node_id, a.label, a.value FROM onya_assertion a'
+        ' JOIN onya_node n ON n.node_pk = a.origin_node'
+        ' JOIN onya_ident i ON i.ident_pk = n.ident_pk'
+        " WHERE a.graph_pk = $1 AND a.kind = 'P'"
+    ) + _search_filters(args, labels, types)
+    return await conn.fetch(sql, *args)
+
+
+async def _search_trgm(conn, gpk: int, query: str, labels, types, min_score: float) -> list:
+    '''Indexed search (call inside a transaction: the trigram thresholds are ``SET LOCAL``).'''
+    q = await conn.fetchval('SELECT onya_normalize($1)', query)  # same normalization as the index
+    if not q:
+        return []
+    for knob in ('pg_trgm.similarity_threshold', 'pg_trgm.word_similarity_threshold'):
+        await conn.execute('SELECT set_config($1, $2, true)', knob, str(min_score))
+    # $2 query; $3 contains-pattern (index-served; also covers exact/prefix/word); $4 prefix
+    # pattern; $5 whole-word pattern. A normalized query holds only alphanumerics and spaces,
+    # so it needs no LIKE escaping.
+    args: list = [gpk, q, f'%{q}%', f'{q} %', f'% {q} %']
+    filters = _search_filters(args, labels, types)
+    sql = f'''
+        WITH c AS (
+            SELECT i.id AS node_id, a.label, a.value, onya_normalize(a.value) AS nv
+            FROM onya_assertion a
+            JOIN onya_node n ON n.node_pk = a.origin_node
+            JOIN onya_ident i ON i.ident_pk = n.ident_pk
+            WHERE a.graph_pk = $1 AND a.kind = 'P'{filters}
+              AND (onya_normalize(a.value) LIKE $3
+                   OR $2 % onya_normalize(a.value)
+                   OR $2 <% onya_normalize(a.value))
+        ), t AS (
+            SELECT node_id, label, value, nv,
+                   CASE WHEN nv = $2 THEN 'exact'
+                        WHEN nv LIKE $4 THEN 'prefix'
+                        WHEN (' ' || nv || ' ') LIKE $5 THEN 'word'
+                        ELSE 'fuzzy' END AS tier
+            FROM c
+        )
+        SELECT node_id, label, value, tier,
+               CASE tier WHEN 'exact' THEN 1.0
+                         WHEN 'fuzzy' THEN greatest(similarity($2, nv), word_similarity($2, nv))
+                         ELSE similarity($2, nv) END AS score
+        FROM t
+    '''
+    return await conn.fetch(sql, *args)
+
+
+async def _ensure_pgq(conn) -> bool:
+    '''
+    Returns whether both property graphs exist afterwards. They're left as is when present
+    (refreshing needs ownership); when missing and not creatable, the store opens without the
+    ``GraphQueryStore`` capability instead of failing. (Unverified against PostgreSQL 19 here.)
+    '''
+    if not await _missing_relations(conn, ['onya_base', 'onya_reified']):
+        return True
+    err = await _try_ddl_pgq(conn)
+    if err is not None:
+        if not _is_privilege_error(err):
+            raise err
+        logger.info('SQL/PGQ property graphs could not be created (%s); GraphQueryStore unavailable', err)
+        return False
+    return True
+
+
+async def _try_ddl_pgq(conn) -> Exception | None:
+    try:
+        async with conn.transaction():
+            await _create_pgq(conn)
+    except Exception as e:  # asyncpg.PostgresError
+        return e
+    return None
+
+
+async def _create_pgq(conn) -> None:
     '''
     Create/refresh the two SQL/PGQ property graph definitions over the existing tables
     (PostgreSQL >= 19). ``onya_edge_hop`` is a driver-maintained companion table rather than a
@@ -369,7 +622,7 @@ async def _maybe_edge_hop(conn, apk, rec, source_ident, target_ident) -> None:
         ' VALUES ($1,$2,$3,$4)', apk, source_ident, target_ident, rec.label)
 
 
-async def _write_graph(conn, name: str, g, *, merge: bool) -> None:
+async def _write_graph(conn, name: str, g, *, merge: bool) -> list:
     if not merge:
         await conn.execute('DELETE FROM onya_graph WHERE name = $1', name)
     gpk = await _get_or_create_graph(conn, name)
@@ -417,6 +670,28 @@ async def _write_graph(conn, name: str, g, *, merge: bool) -> None:
                                            target_ident, edge_source)
             if apk is not None:
                 pk_by_obj[id(rec.obj)] = apk
+
+    return await _write_prefixes(conn, gpk, getattr(g, 'prefixes', None))
+
+
+async def _read_prefixes(conn, gpk: int) -> dict[str, str]:
+    rows = await conn.fetch(
+        'SELECT prefix, namespace FROM onya_graph_prefix WHERE graph_pk = $1 ORDER BY prefix', gpk)
+    return {r['prefix']: r['namespace'] for r in rows}
+
+
+async def _write_prefixes(conn, gpk: int, prefixes: dict | None) -> list:
+    '''
+    Fold ``prefixes`` into the stored map (stored binding wins; ``_relational.write_prefixes``
+    rule). Insert-if-absent then read back, so concurrent writers converge on one binding and
+    the clash report reflects whichever binding actually won.
+    '''
+    for k, v in sorted((prefixes or {}).items()):
+        await conn.execute('INSERT INTO onya_graph_prefix (graph_pk, prefix, namespace)'
+                           ' VALUES ($1, $2, $3) ON CONFLICT DO NOTHING', gpk, k, v)
+    stored = await _read_prefixes(conn, gpk)
+    return [(k, stored[k], v) for k, v in sorted((prefixes or {}).items())
+            if namespace_for_curie(stored[k]) != namespace_for_curie(v)]
 
 
 async def _put_identified(conn, gpk, rec, origin_node, origin_assertion, target_ident,
@@ -486,7 +761,7 @@ async def _add_one(conn, name, origin, label, payload, *, kind, interp, id_):
 # --- build a graph from rows (async mirror of sqlite._build_graph) ------------------
 
 async def _build_graph(conn, gpk: int, node_idents: set[int] | None = None) -> graph:
-    g = graph()
+    g = graph(prefixes=await _read_prefixes(conn, gpk))
 
     ident_rows = await conn.fetch('SELECT ident_pk, id FROM onya_ident WHERE graph_pk = $1', gpk)
     id_by_ipk = {r['ident_pk']: r['id'] for r in ident_rows}
@@ -557,6 +832,14 @@ async def _resolve_graph_pks(conn, names: list[str]) -> list[int]:
             raise KeyError(name)
         gpks.append(gpk)
     return gpks
+
+
+async def _with_prefixes(conn, g: graph, gpks: list[int]) -> graph:
+    '''Attach the named graphs' stored prefixes, folded in `names` order (first wins, warns on a
+    clash, as chaining `graph.union()` would).'''
+    for gpk in gpks:
+        g.add_prefixes(await _read_prefixes(conn, gpk))
+    return g
 
 
 async def _build_union(conn, gpks: list[int]) -> graph:

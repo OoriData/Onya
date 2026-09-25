@@ -48,6 +48,9 @@ postgresql = 'onya.store.postgres:PostgresStore'
 # PostgreSQL backend (onya.store.postgres). asyncpg is imported lazily, so the base install
 # stays dependency-free; only `pip install "onya[postgres]"` pulls it in.
 postgres = ['asyncpg>=0.30']
+# rapidfuzz as an opt-in, faster fuzzy scorer for onya.query search (`similarity='rapidfuzz'`).
+# Imported lazily and only when asked for; the default scorer is stdlib difflib.
+fuzzy = ['rapidfuzz>=3.0']
 # networkx projection + analytics writeback (onya.viz.nx). networkx is imported lazily, so
 # the base install stays dependency-free; only `pip install "onya[nx]"` pulls it in.
 nx = ['networkx>=3.0']
@@ -63,6 +66,7 @@ dev = [
     "pytest-asyncio",
     "hypothesis",  # property-based tests for the interp `number` round-trip law (test-only)
     "networkx>=3.0",  # exercises onya.viz.nx tests in CI (extras-gated in production)
+    "rapidfuzz>=3.0",  # exercises the opt-in similarity='rapidfuzz' search path (extras-gated)
 ]
 
 demo = [

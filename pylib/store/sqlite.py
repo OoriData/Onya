@@ -12,8 +12,9 @@ blocks the event loop. ``PRAGMA journal_mode=WAL`` and ``PRAGMA foreign_keys=ON`
 open. This is a solid single-process backend; for networked, multi-writer concurrency use
 PostgreSQL.
 
-Implements ``GraphStore``, ``AssertionStore``, and ``OverlayReadStore``. The schema, skeleton hashing, and
-write-path merge algorithm are shared with PostgreSQL in ``onya.store._relational``.
+Implements ``GraphStore``, ``AssertionStore``, ``OverlayReadStore``, and ``SearchStore`` (ranked
+in-process with ``onya.query``'s scorer over SQL-filtered candidate rows — not indexed). The
+schema, skeleton hashing, and write-path merge algorithm are shared with PostgreSQL in ``onya.store._relational``.
 '''
 
 from __future__ import annotations
@@ -23,7 +24,8 @@ import sqlite3
 
 from amara.iri import I
 
-from onya.graph import edge, graph
+from onya.graph import edge, graph, warn_prefix_clashes
+from onya.query import DEFAULT_MIN_SCORE, normalize as query_normalize, rank, score_candidates
 from onya.store import _relational as rel
 from onya.store._relational import Dialect, SQLITE
 
@@ -41,7 +43,7 @@ def _url_to_path(url: str) -> str:
 
 class SqliteStore:
     '''A SQLite database holding many named graphs. Satisfies ``GraphStore`` + ``AssertionStore``
-    + ``OverlayReadStore``.'''
+    + ``OverlayReadStore`` + ``SearchStore``.'''
 
     dialect: Dialect = SQLITE
 
@@ -86,13 +88,14 @@ class SqliteStore:
         def _put(conn):
             cur = conn.cursor()
             try:
-                rel.write_graph(cur, str(name), g, merge=merge, dialect=self.dialect)
+                clashes = rel.write_graph(cur, str(name), g, merge=merge, dialect=self.dialect)
                 conn.commit()
+                return clashes
             except Exception:
                 conn.rollback()
                 raise
 
-        await self._run(_put)
+        warn_prefix_clashes(await self._run(_put), stacklevel=2)
 
     async def get(self, name: I | str) -> graph:
         def _get(conn):
@@ -125,10 +128,11 @@ class SqliteStore:
     # --- AssertionStore -------------------------------------------------------------
 
     async def match(self, name: I | str, origin: I | str | None = None,
-                    label: I | str | None = None, where=None):
+                    label: I | str | None = None, where=None, *, target: I | str | None = None):
         rows = await self._run(_match_blocking, str(name),
                                None if origin is None else str(origin),
-                               None if label is None else str(label), where)
+                               None if label is None else str(label), where,
+                               None if target is None else str(target))
         for r in rows:
             yield r
 
@@ -140,7 +144,18 @@ class SqliteStore:
 
     async def union(self, names) -> graph:
         gpks = await self._run(_resolve_graph_pks, [str(n) for n in names])
-        return await self._run(_union_blocking, gpks)
+        g = await self._run(_union_blocking, gpks)
+        return await self._with_prefixes(g, gpks)
+
+    async def _with_prefixes(self, g: graph, gpks: list[int]) -> graph:
+        '''Attach the named graphs' stored prefixes, folded in `names` order (first wins, warns
+        on a clash, as chaining `graph.union()` would). Folded here, on the caller's thread.'''
+        def _read(conn):
+            cur = conn.cursor()
+            return [rel.read_prefixes(cur, gpk) for gpk in gpks]
+        for pmap in await self._run(_read):
+            g.add_prefixes(pmap)
+        return g
 
     async def match_across(self, names, origin: I | str | None = None,
                            label: I | str | None = None, where=None):
@@ -154,7 +169,8 @@ class SqliteStore:
     async def subgraph_across(self, names, roots: set[I | str], hops: int = 1) -> graph:
         gpks = await self._run(_resolve_graph_pks, [str(n) for n in names])
         root_ids = {str(r) for r in roots}
-        return await self._run(_subgraph_across_blocking, gpks, root_ids, int(hops))
+        g = await self._run(_subgraph_across_blocking, gpks, root_ids, int(hops))
+        return await self._with_prefixes(g, gpks)
 
     async def overlay(self, names, *, single_cardinality=frozenset(), key=None,
                       precedence=None, prefer_confidence: bool = False):
@@ -165,7 +181,8 @@ class SqliteStore:
         resolved_key = key if key is not None else rel.make_overlay_key(
             precedence=[str(p) for p in precedence] if precedence is not None else None,
             prefer_confidence=prefer_confidence)
-        return await self._run(_overlay_blocking, gpk_to_name, is_single, resolved_key)
+        g, conflicts = await self._run(_overlay_blocking, gpk_to_name, is_single, resolved_key)
+        return await self._with_prefixes(g, gpks), conflicts
 
     async def add(self, name: I | str, origin: I | str, label: I | str, target_or_value,
                   *, kind: str, interp: I | str | None = None, id_: I | str | None = None) -> None:
@@ -191,6 +208,32 @@ class SqliteStore:
 
         await self._run(_remove)
 
+    # --- SearchStore ------------------------------------------------------------------
+
+    async def search(self, name: I | str, query: str, *, labels=None, types=None, limit=None,
+                     min_score: float = DEFAULT_MIN_SCORE, per_node: bool = True, normalize=None,
+                     similarity=None) -> list:
+        rows = await self._run(_search_candidates_blocking, str(name),
+                               None if labels is None else [str(x) for x in labels],
+                               None if types is None else [str(t) for t in types])
+        cands = ((I(nid), I(lbl), value, None, None) for nid, lbl, value in rows)
+        hits = score_candidates(query, cands, min_score=min_score, normalize=normalize or query_normalize,
+                                similarity=similarity)
+        return rank(hits, per_node=per_node, limit=limit)
+
+    async def nodes_by_type(self, name: I | str, type_iri: I | str):
+        def _nodes(conn):
+            return [r[0] for r in conn.execute(
+                'SELECT i.id FROM onya_node_type nt'
+                ' JOIN onya_node n ON n.node_pk = nt.node_pk'
+                ' JOIN onya_ident i ON i.ident_pk = n.ident_pk'
+                ' JOIN onya_graph g ON g.graph_pk = i.graph_pk'
+                ' WHERE g.name = ? AND nt.type_iri = ? ORDER BY i.id',
+                (str(name), str(type_iri)))]
+
+        for nid in await self._run(_nodes):
+            yield I(nid)
+
 
 # --- blocking query/reconstruction helpers ------------------------------------------
 
@@ -206,7 +249,9 @@ def _build_graph(cur, gpk: int, node_idents: set[int] | None = None) -> graph:
     node idents are materialized as full nodes; edge targets outside the set become bare
     (dangling) nodes, exactly as the parser represents an undescribed target.
     '''
-    g = graph()
+    # One graph: nothing to fold, no clash possible. (Read first — `cur` is reused below, and a
+    # query issued between an execute and its fetchall would discard the pending rows.)
+    g = graph(prefixes=rel.read_prefixes(cur, gpk))
 
     # idents: ident_pk -> id
     cur.execute('SELECT ident_pk, id FROM onya_ident WHERE graph_pk = ?', (gpk,))
@@ -317,7 +362,8 @@ def _nested_prop_values(cur, apk: int, label: str) -> list:
     return [r[0] for r in cur.fetchall()]
 
 
-def _match_blocking(conn, name: str, origin: str | None, label: str | None, where) -> list:
+def _match_blocking(conn, name: str, origin: str | None, label: str | None, where,
+                    target: str | None = None) -> list:
     cur = conn.cursor()
     gpk = _graph_pk(cur, name)
     if gpk is None:
@@ -337,6 +383,9 @@ def _match_blocking(conn, name: str, origin: str | None, label: str | None, wher
     if label is not None:
         sql += ' AND a.label = ?'
         params.append(label)
+    if target is not None:
+        sql += " AND a.kind = 'E' AND ti.id = ?"
+        params.append(target)
     cur.execute(sql, params)
     out: list = []
     while True:
@@ -351,6 +400,37 @@ def _match_blocking(conn, name: str, origin: str | None, label: str | None, wher
             annotations = _annotations(cur, apk)
             out.append((I(origin_id), I(lbl), target, annotations))
     return out
+
+
+def _search_candidates_blocking(conn, name: str, labels: list[str] | None, types: list[str] | None) -> list:
+    '''
+    First-level node properties that ``search`` should score: ``labels`` if given, else those
+    whose interp is absent or ``text`` (``SearchStore`` contract), restricted to nodes carrying
+    one of ``types`` if given. Returns ``(node_id, label, value)`` rows.
+    '''
+    cur = conn.cursor()
+    gpk = _graph_pk(cur, name)
+    if gpk is None:
+        return []
+    sql = (
+        'SELECT i.id, a.label, a.value FROM onya_assertion a'
+        ' JOIN onya_node n ON n.node_pk = a.origin_node'
+        ' JOIN onya_ident i ON i.ident_pk = n.ident_pk'
+        " WHERE a.graph_pk = ? AND a.kind = 'P'"
+    )
+    params: list = [gpk]
+    if labels is not None:
+        sql += f' AND a.label IN ({",".join("?" * len(labels))})'
+        params += labels
+    else:
+        sql += ' AND (a.interp IS NULL OR a.interp = ?)'
+        params.append(str(rel.TEXT_INTERP))
+    if types is not None:
+        sql += (' AND EXISTS (SELECT 1 FROM onya_node_type nt WHERE nt.node_pk = a.origin_node'
+                f' AND nt.type_iri IN ({",".join("?" * len(types))}))')
+        params += types
+    cur.execute(sql, params)
+    return cur.fetchall()
 
 
 # --- OverlayReadStore (read-time union/scoped access across named graphs) -----------

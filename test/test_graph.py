@@ -10,6 +10,7 @@ pytest -s test/test_graph.py
 
 # Requires pytest-mock
 
+import pytest
 from amara.iri import I
 
 from onya.graph import node, graph, property_, edge
@@ -32,9 +33,12 @@ def test_graph_1():
     assert len(n1.properties) == 2
     assert isinstance(p1, property_)
 
-    g2 = graph(nodes=[n1])
-    # Graphs are allowed to share nodes
+    # Graphs may still share a node object, but it's flagged: the node's (weak) back-reference
+    # follows the latest graph, so only that graph's indexes track mutations made through it.
+    with pytest.warns(UserWarning, match='already in another live graph'):
+        g2 = graph(nodes=[n1])
     assert g1[T('spam')] == g2[T('spam')]
+    assert n1._graph is g2
 
     n2 = node(T('Homer'), T('Agent'))
     e1 = n1.add_edge(T('maker'), n2)

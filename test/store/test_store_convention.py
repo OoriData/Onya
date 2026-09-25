@@ -80,8 +80,8 @@ async def test_put_merge_preserves_authored_convention(tmp_path):
     assert not any('vocabtitle' in t[2] or 'vocabcolor' in t[2] for t in tr)
 
 
-async def test_new_graph_without_seed_uses_explicit_form(tmp_path):
-    '''With no prior file, the store falls back to the faithful explicit-IRI form (unchanged).'''
+async def test_new_graph_without_seed_uses_its_own_prefixes(tmp_path):
+    '''With no prior file, the graph's own (parsed) prefixes set the convention: compact, faithful.'''
     root = tmp_path / 'graphs'
     root.mkdir()
     store = FileStore(root)
@@ -90,7 +90,26 @@ async def test_new_graph_without_seed_uses_explicit_form(tmp_path):
     await store.put(NAME, g, merge=True)
 
     text = (root / f'{_slug(NAME)}.onya').read_text()
-    assert '@schema' not in text                            # no convention to preserve
+    assert '* @schema: https://example.org/vocab/' in text  # separator restored for bare-name joins
+    assert '* title: Sprocket' in text                      # compact
+    got = graph()
+    _reader.parse(text, got)
+    assert _triples(got) == _triples(g)
+    assert got.prefixes == g.prefixes
+
+
+async def test_new_graph_without_prefixes_uses_explicit_form(tmp_path):
+    '''A prefix-less graph and no prior file: the faithful explicit-IRI form (unchanged).'''
+    root = tmp_path / 'graphs'
+    root.mkdir()
+    store = FileStore(root)
+    g = graph()
+    read(SEED, g)
+    g.prefixes.clear()
+    await store.put(NAME, g, merge=True)
+
+    text = (root / f'{_slug(NAME)}.onya').read_text()
+    assert '@schema' not in text                            # no convention to use
     assert '<https://example.org/vocab/title>' in text      # explicit, still faithful
     got = graph()
     _reader.parse(text, got)

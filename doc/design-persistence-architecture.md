@@ -383,7 +383,9 @@ via the model's merge (the same code path every backend's semantics are
 defined against), re-serialize. This backend is therefore
 *definitionally correct* — it is the executable specification the SQL
 backends are tested against, and the zero-dependency fake for downstream
-projects' test suites. Concurrency story: a `.lock` sidecar via
+projects' test suites. Prefixes live in the docheader: the existing file's
+convention folded with the incoming graph's `prefixes` (file wins), so a
+graph the store writes first comes out compact rather than explicit-IRI. Concurrency story: a `.lock` sidecar via
 `os.open(O_CREAT|O_EXCL)`; this is a testing and small-tool backend, not
 a contended one, and we say so in its docstring.
 
@@ -449,6 +451,42 @@ CREATE TABLE onya_node_type (
 A node referenced as an edge target but never described (legal in Onya)
 is simply an `onya_ident` + bare `onya_node` row — the same shape the
 in-memory parser produces.
+
+### Prefixes: kept, but outside the model
+
+```sql
+CREATE TABLE onya_graph_prefix (
+    graph_pk   BIGINT NOT NULL REFERENCES onya_graph ON DELETE CASCADE,
+    prefix     TEXT NOT NULL,
+    namespace  TEXT NOT NULL,
+    PRIMARY KEY (graph_pk, prefix)
+);
+```
+
+A graph's CURIE prefix map (`graph.prefixes`) is non-canonical (SPEC §
+Vocabulary prefixes): it never affects identity, merge, or query results.
+It is stored so that a graph read back supports CURIE-keyed accessors,
+`search` and view specs without the caller re-supplying prefixes. `put`
+folds incoming prefixes by the `graph.add_prefixes` rule (the stored
+binding wins; one prefix bound to a different namespace warns), and
+`put(merge=False)` replaces the map. Multi-graph reads fold in `names`
+order. PostgreSQL inserts with `ON CONFLICT DO NOTHING` and reads the map
+back, so concurrent writers converge on one binding. The table was added
+without a `schema_version` bump: `CREATE TABLE IF NOT EXISTS` upgrades an
+existing store on open, and older data simply has no prefixes recorded.
+Backfill from a source document by putting a prefixes-only graph,
+`store.put(name, graph(prefixes=...))`, which adds prefix rows and leaves
+the data untouched. `sql/examples/postgres-schema.sql` is an example-only
+rendering of the full PostgreSQL DDL for teams that manage schema changes
+themselves.
+
+Opening a PostgreSQL store runs DDL only for objects that are missing
+(checked with `to_regclass` against the connection's `search_path`),
+because PostgreSQL checks CREATE privilege even for `IF NOT EXISTS` on an
+existing object. An application role with only data privileges can
+therefore open a store someone else provisioned; if core objects are
+missing and it can't create them, the open fails with a `StoreError` naming
+them.
 
 ### Assertions, recursively
 

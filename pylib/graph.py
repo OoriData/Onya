@@ -19,12 +19,17 @@ The Onya graph model:
 '''
 
 from __future__ import annotations
+import re
+import warnings
+import weakref
 from collections.abc import MutableMapping, Iterator
 from abc import ABC
 
 from amara.iri import I
 
+from onya import ONYA_BASEIRI
 from onya.terms import ONYA_ASSERTION
+from onya.util import join_namespace, namespace_for_curie
 
 
 class AssertionIdConflict(ValueError):
@@ -45,10 +50,121 @@ class GraphMergeError(ValueError):
     '''
 
 
+class UnknownPrefixError(ValueError):
+    '''
+    Raised when a CURIE label argument (e.g. `'ex:name'`) names a prefix the graph never
+    declared. Deliberately an error rather than a silent fallback to local-name matching,
+    which would conflate same-named labels from different vocabularies.
+    '''
+
+
+# Schemes treated as absolute IRIs (never CURIE prefixes) even without a `//` authority.
+_ABSOLUTE_SCHEMES = frozenset({'urn', 'tag', 'mailto', 'did', 'data', 'file'})
+_CURIE_RE = re.compile(r'^([A-Za-z_][A-Za-z0-9_.\-]*):(.*)$')
+
+
+def resolve_label(label: I | str, prefixes: dict[str, str] | None) -> I | str:
+    '''
+    Resolve a label argument against a prefix map (SPEC: CURIEs), the way the Literate format
+    reads labels:
+
+    - an `I` instance is already a full IRI and passes through untouched (the fast path, and
+      what every pre-existing caller passes);
+    - `<...>` is an explicit IRI (its inner text is itself resolved, so `<ex:name>` works);
+    - `prefix:local` with a declared prefix expands; `@name` is the Onya built-in vocabulary;
+    - a string with a `//` authority, or an absolute scheme like `urn:`, is a full IRI;
+    - a bare name (no colon) resolves against the `schema` prefix (the document's `@schema`)
+      when one is declared, else is returned unchanged;
+    - any other `prefix:local` raises `UnknownPrefixError` — never a local-name fallback.
+    '''
+    if isinstance(label, I):
+        return label
+    if label.startswith('<') and label.endswith('>'):
+        return I(resolve_label(label[1:-1], prefixes))
+    if label.startswith('@'):
+        return ONYA_BASEIRI(label[1:])
+    m = _CURIE_RE.match(label)
+    if m is None:
+        if prefixes and 'schema' in prefixes and label:
+            return I(join_namespace(prefixes['schema'], label))
+        return label
+    prefix, local = m.groups()
+    if prefixes and prefix in prefixes:
+        return I(join_namespace(prefixes[prefix], local))
+    if local.startswith('//') or prefix.lower() in _ABSOLUTE_SCHEMES:
+        return label
+    raise UnknownPrefixError(
+        f'Unknown prefix {prefix!r} in label {label!r}; declared prefixes: {sorted(prefixes or {})}'
+    )
+
+
+def fold_prefixes(existing: dict[str, str] | None, incoming: dict[str, str] | None) -> tuple[dict, list]:
+    '''
+    The prefix-merge rule (pure; see `graph.add_prefixes`): returns `(additions, clashes)`.
+    `additions` are incoming prefixes `existing` lacks; a prefix bound in both to different
+    namespaces (after trailing-`/` normalization) is a clash, reported as `(prefix, kept,
+    ignored)` — the existing binding wins. Two prefixes for one namespace is not a clash.
+    '''
+    existing = existing or {}
+    additions: dict = {}
+    clashes: list = []
+    for k, v in (incoming or {}).items():
+        mine = existing.get(k, additions.get(k))
+        if mine is None:
+            additions[k] = v
+        elif namespace_for_curie(mine) != namespace_for_curie(v):
+            clashes.append((k, mine, v))
+    return additions, clashes
+
+
+def warn_prefix_clashes(clashes: list, *, stacklevel: int = 2) -> None:
+    '''Emit the standard `UserWarning` for each `fold_prefixes` clash.'''
+    for k, kept, ignored in clashes:
+        warnings.warn(f'Prefix {k!r} clash on merge: keeping {kept!r}, ignoring {ignored!r}',
+                      stacklevel=stacklevel + 1)
+
+
 class assertions_mixin:
     '''
     Mixin for objects that can have assertions (edges and properties)
+
+    Label arguments to the accessors (`getprop`, `getedge`, `any_prop_value`, ...) accept a
+    full IRI, or a CURIE / bare name resolved against the owning graph's `prefixes` (see
+    `resolve_label`). An object not (yet) attached to a graph resolves with no prefixes.
     '''
+    def _root_node(self) -> 'node | None':
+        obj = self
+        while isinstance(obj, assertion):
+            obj = obj.origin
+        return obj if isinstance(obj, node) else None
+
+    def _owning_graph(self) -> 'graph | None':
+        root = self._root_node()
+        return root._graph if root is not None else None
+
+    def _touch_owner(self) -> None:
+        '''Invalidate the owning graph's derived indexes (no-op for a detached object).'''
+        g = self._owning_graph()
+        if g is not None:
+            g.touch()
+
+    def _resolve(self, label: I | str) -> I | str:
+        if isinstance(label, I):
+            return label
+        g = self._owning_graph()
+        try:
+            return resolve_label(label, g.prefixes if g is not None else None)
+        except UnknownPrefixError as e:
+            root = self._root_node()
+            if g is None and root is not None and root._graph_ref is not None:
+                # Held only weakly: the node outlived the graph it came from (e.g.
+                # `read(doc).graph[nid]` with the graph itself never kept), taking its prefixes.
+                raise UnknownPrefixError(
+                    f'{e}. (This node\'s graph is no longer alive — keep a reference to the '
+                    'graph to resolve CURIEs through its prefixes.)'
+                ) from None
+            raise
+
     def add_property(self, label: I | str, value: str, interp: I | str | None = None):
         p = property_(self, label, value)
         if interp is not None:
@@ -59,22 +175,27 @@ class assertions_mixin:
     def add_edge(self, label: I | str, target: 'node'):
         e = edge(self, label, target)
         self.edges.add(e)
+        self._touch_owner()
         return e
 
     def remove_property(self, prop: 'property_'):
         self.properties.remove(prop)
+        self._touch_owner()  # takes any edges nested under the property with it
 
     def remove_edge(self, edge_: 'edge'):
         self.edges.remove(edge_)
+        self._touch_owner()
 
     def getprop(self, label: I | str):
         '''Get properties with a given label'''
+        label = self._resolve(label)
         for prop in self.properties:
             if prop.label == label:
                 yield prop
-    
+
     def getedge(self, label: I | str):
         '''Get edges with a given label'''
+        label = self._resolve(label)
         for edge_ in self.edges:
             if edge_.label == label:
                 yield edge_
@@ -90,6 +211,7 @@ class assertions_mixin:
         nested properties, or read `.interp`/`.id`), use `next(self.getprop(label), None)`
         instead — this method only ever returns the raw string.
         '''
+        label = self._resolve(label)
         return next((p.value for p in self.properties if p.label == label), default)
 
     def any_edge_target(self, label: I | str, default=None):
@@ -99,6 +221,7 @@ class assertions_mixin:
         same `next(self.getedge(label), None)` alternative when the edge object itself
         (rather than its target) is what's needed.
         '''
+        label = self._resolve(label)
         return next((e.target for e in self.edges if e.label == label), default)
 
 
@@ -110,10 +233,15 @@ class node(assertions_mixin):
     (edges and properties). Both edges and properties are sets, not sequences,
     because pervasive ordering is not a core requirement of the model.
     '''
-    __slots__ = ['id', 'types', 'properties', 'edges']
+    __slots__ = ['id', 'types', 'properties', 'edges', '_graph_ref']
 
     def __init__(self, id_: I | str, types: I | str | set[I | str] | None = None):
         self.id = id_
+        # Weak back-reference to the graph holding this node, set when it is added to one. Used
+        # only to find `prefixes` for CURIE-keyed accessors and to invalidate that graph's
+        # reverse-edge index on mutation; the model itself never depends on it. Weak, so a node
+        # never keeps a graph alive (and no node <-> graph reference cycle forms).
+        self._graph_ref: weakref.ref | None = None
         if isinstance(types, str):
             types = I(types)
         if isinstance(types, I):
@@ -122,18 +250,25 @@ class node(assertions_mixin):
         self.properties: set['property_'] = set()
         self.edges: set['edge'] = set()
     
+    @property
+    def _graph(self) -> 'graph | None':
+        return self._graph_ref() if self._graph_ref is not None else None
+
+    @_graph.setter
+    def _graph(self, g: 'graph | None') -> None:
+        self._graph_ref = weakref.ref(g) if g is not None else None
+
     def traverse(self, label: I | str) -> Iterator['edge']:
         '''Find edges with a given label'''
-        for e in self.edges:
-            if e.label == label:
-                yield e
+        return self.getedge(label)
 
-    def reverse(self, label: I | str, graph: 'graph') -> Iterator['edge']:
-        '''Find edges targeting this node with a given label (requires graph access)'''
-        for nid, nobj in graph.nodes.items():
-            for e in nobj.traverse(label):
-                if e.target == self:
-                    yield e
+    def reverse(self, label: I | str | None, graph: 'graph') -> Iterator['edge']:
+        '''
+        Find edges targeting this node with a given label (requires graph access). A thin
+        wrapper over `graph.inbound()`, so it uses the graph's reverse index rather than
+        scanning every node, and includes edges nested inside assertions.
+        '''
+        return graph.inbound(self, label=label)
 
 
 class assertion(assertions_mixin, ABC):
@@ -357,21 +492,73 @@ class graph(MutableMapping):
 
     This is the top-level container for an Onya graph.
     '''
-    def __init__(self, nodes: list[node] = ()):
+    def __init__(self, nodes: list[node] = (), *, prefixes: dict[str, str] | None = None):
         self.nodes: dict[I | str, node] = {}
-        self.nodes.update({n.id: n for n in nodes})
+        # Reverse-edge index behind `inbound()`, rebuilt lazily whenever `_generation` (bumped by
+        # every API mutation of this graph's nodes/edges) has moved on since it was built.
+        self._generation = 0
+        self._inbound_index: dict | None = None
+        self._inbound_generation = -1
         # Explicit assertion identifiers (see SPEC: Assertion Identifiers), sharing the
         # node id space. Maps id -> assertion, so an identified assertion can be an edge target.
         self.assertion_ids: dict[I | str, assertion] = {}
+        # CURIE prefix map (prefix -> namespace), e.g. populated from a parsed docheader's
+        # `@iri` block plus `schema` for `@schema`. Helpful but NON-CANONICAL: it only drives
+        # label resolution in accessors and queries; the graph's data holds full IRIs, and two
+        # graphs differing only in prefixes are the same graph.
+        self.prefixes: dict[str, str] = dict(prefixes or {})
+        for n in nodes:
+            self[n.id] = n
 
     def __getitem__(self, key: I | str) -> node:
         return self.nodes[key]
 
     def __delitem__(self, nid: I | str) -> None:
         del self.nodes[nid]
+        self.touch()
 
     def __setitem__(self, nid: I | str, nobj: node) -> None:
+        prior = nobj._graph
+        if prior is not None and prior is not self and prior.nodes.get(nobj.id) is nobj:
+            # Still held by another live graph: sharing one node object between graphs leaves
+            # the other graph's reverse index un-invalidated by later mutations through it (and
+            # its accessors resolving CURIEs against *this* graph's prefixes). Warn, then
+            # re-point the back-reference here, invalidating the other graph's index one last time.
+            warnings.warn(
+                f'Node {nobj.id!r} is already in another live graph; it now belongs to this one. '
+                "Sharing one node object between graphs isn't supported — the other graph's "
+                'indexes will no longer track mutations made through it. Use graph.union() to '
+                'combine graphs, or add a copy.',
+                stacklevel=2,
+            )
+            prior.touch()
         self.nodes[nid] = nobj
+        nobj._graph = self
+        self.touch()
+
+    def resolve(self, label: I | str) -> I | str:
+        '''Resolve a label/type argument (full IRI, CURIE, or bare name) against `prefixes`.'''
+        return resolve_label(label, self.prefixes)
+
+    def add_prefixes(self, prefixes: dict[str, str] | None) -> None:
+        '''
+        Fold `prefixes` into this graph's prefix map. Two prefixes for the same namespace are
+        fine (both kept). One prefix bound to two different namespaces warns, and the existing
+        binding wins — prefixes are non-canonical, so this never affects the data.
+        '''
+        additions, clashes = fold_prefixes(self.prefixes, prefixes)
+        self.prefixes.update(additions)
+        warn_prefix_clashes(clashes, stacklevel=3)
+
+    def touch(self) -> None:
+        '''
+        Invalidate this graph's derived indexes (the reverse-edge index behind `inbound`).
+        The API mutators do this automatically, finding the graph through the node's back-
+        reference; call it after editing `.edges` or an edge's `.target` directly. A node
+        object belongs to one graph at a time: `union` hands nodes over explicitly, and adding
+        a node still held by another live graph warns and moves its back-reference here.
+        '''
+        self._generation += 1
 
     def __iter__(self) -> Iterator[I | str]:
         return iter(self.nodes)
@@ -419,6 +606,7 @@ class graph(MutableMapping):
         '''
         for n in self.nodes.values():
             _merge_container(n)
+        self.touch()
         return self
 
     def _iter_assertions(self) -> Iterator[assertion]:
@@ -498,10 +686,12 @@ class graph(MutableMapping):
         Pass a throwaway (e.g. a freshly parsed copy) when the argument must survive; the
         store backends do exactly this so a caller's graph is never mutated.
         '''
+        self.add_prefixes(other.prefixes)
         for nid, onode in other.nodes.items():
             keeper = self.nodes.get(nid)
             if keeper is None:
-                self.nodes[nid] = onode
+                onode._graph = None  # an explicit handoff: `other` is consumed (see docstring)
+                self[nid] = onode
                 continue
             keeper.types |= set(onode.types)
             for p in list(onode.properties):
@@ -516,16 +706,48 @@ class graph(MutableMapping):
         self.validate_id_space()
         self.merge()
         self._reindex_assertion_ids()
+        self.touch()
+        other.touch()  # hollowed out; make sure a stale index there can't be served
         return self
 
     def typematch(self, types: I | str | set[I | str]) -> Iterator[node]:
-        '''Find nodes with matching types'''
+        '''Find nodes with matching types (each a full IRI, CURIE, or bare name)'''
         if isinstance(types, (str, I)):
             types = {types}
-        types_set = set(types)
+        types_set = {self.resolve(t) for t in types}
         for n in self.nodes.values():
             if n.types & types_set:
                 yield n
+
+    def _inbound(self) -> dict:
+        '''The reverse-edge index (target id -> edges), rebuilt lazily after any mutation.'''
+        if self._inbound_index is None or self._inbound_generation != self._generation:
+            index: dict = {}
+            for a in self._iter_assertions():
+                if isinstance(a, edge) and a.target is not None:
+                    index.setdefault(a.target.id, []).append(a)
+            self._inbound_index = index
+            self._inbound_generation = self._generation
+        return self._inbound_index
+
+    def inbound(self, node_or_id: 'node | assertion | I | str',
+                label: I | str | None = None) -> Iterator[edge]:
+        '''
+        Yield edge assertions whose target is the given node (or identified assertion),
+        including edges nested inside other assertions, optionally restricted to `label`
+        (full IRI, CURIE, or bare name). Backed by a reverse index built on first use and
+        invalidated by any API mutation, so repeated calls cost a dict lookup, not a scan.
+        '''
+        tid = node_or_id if isinstance(node_or_id, str) else node_or_id.id
+        label = None if label is None else self.resolve(label)
+        for e in list(self._inbound().get(tid, ())):
+            if label is None or e.label == label:
+                yield e
+
+    def search(self, query: str, **kwargs) -> list:
+        '''Ranked lookup of nodes by property value; see `onya.query.search` for the parameters.'''
+        from onya.query import search  # lazy: onya.query builds on this module
+        return search(self, query, **kwargs)
 
     def select(self, origin: I | str | node | assertion | None = None,
                label: I | str | None = None, *,
@@ -561,6 +783,8 @@ class graph(MutableMapping):
         '''
         if value is not None and target is not None:
             raise ValueError('select() takes at most one of value= (properties) or target= (edges)')
+        if label is not None:
+            label = self.resolve(label)
 
         want_props = target is None  # a target= constraint can only be satisfied by an edge
         want_edges = value is None   # a value= constraint can only be satisfied by a property

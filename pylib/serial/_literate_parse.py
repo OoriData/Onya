@@ -416,6 +416,11 @@ class LiterateParser:
         # `doc.iris` includes the auto-registered `schema` entry; exclude it (schema travels
         # separately, matching write()'s `prefixes` parameter).
         prefixes = {k: v for k, v in (doc.iris or {}).items() if k != 'schema'}
+        # The graph keeps the full map (schema included) as its non-canonical `prefixes`, so
+        # accessors and queries can take CURIEs / bare names. Parsing into an existing graph
+        # folds them in with the same clash rule as `graph.union` (existing binding wins).
+        if hasattr(graph_obj, 'add_prefixes'):
+            graph_obj.add_prefixes(doc.iris)
         return ParseResult(doc.iri, graph_obj, nodes_added,
                            schema=doc.schemabase, nodebase=doc.nodebase,
                            typebase=doc.typebase, prefixes=prefixes)
