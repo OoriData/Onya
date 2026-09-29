@@ -6,6 +6,28 @@ For interim changes not yet earmarked for a particular release, can use this hea
 ## [Unreleased]
 -->
 
+## [0.5.1] — Curator-controlled ranking in views: `prefer` and `order_by`. `title` replaces the display `label`.
+
+### Added
+
+- **`prefer` on view fields** (`onya.view`): rank a field's values by patterns over each value's *direct* nested assertions, so a curator can mark which value a single-valued display shows, in whatever shape the vocabulary uses. A pattern has `graph.select()`'s components: `"ex:primary"` (any nested assertion with that label), `{ label = "ex:primary", value = true }` (a nested property with that value), or `{ label = "ex:use", target = "ex:Primary" }` (a nested edge to that node, given as an IRI or CURIE). `prefer` takes one pattern or an ordered list; a value ranks by the first pattern it matches, with non-matching values after all matching ones. A **string** `value` compares with the stored text. A **non-string** one (TOML `true`, a number, a date) compares with the `@as`-interpreted value, so `value = true` matches `@as: boolean` `true`, never `yes` or `1`, keeping the core boolean contract. `value` together with `target` is a load error. (#45)
+- **`order_by` on view fields**: `order_by = "ex:priority"` (or `-ex:priority`) ranks values by a nested property of each value, typed via `@as` so `9` sorts before `10`; values lacking it sort last. It applies after `prefer`. A field's `order_by` reads the value's own nested assertions; a follow's `order_by` (unchanged) reads the linked node's fields. (#45)
+- **`prefer` on follows**: the same patterns, matched against the *link's* own nested assertions (where markers like `ex:current` live), including for inbound follows. Combined with `limit = 1`, this gives "the current employer". No store changes: a link's nested assertions come with the edge. (#45)
+- **One ranking rule** for fields and follows: `prefer` rank, then `order_by`, then the previous tiebreak (least value for fields; title, then id, for follows). `many = false` shows the first value, `many = true` lists them all in this order (so a preferred value comes first, and nothing is dropped), and follows apply `limit` after sorting. With neither option, output is exactly as in 0.5.0. `title` placeholders (`"{email}"`) use the same pick as the field with that label. Patterns look at direct nested assertions only.
+- **`view.Pattern`**, **`Field.prefer` / `Field.order_by` / `Follow.prefer`** on the spec dataclasses.
+
+### Changed
+
+- **View display strings are now `title`, not `label`**, in both the spec (view- and follow-level `title = [...]`) and the output (`'title'`). In a view spec, `label` now always means an assertion label, as in the SPEC and `graph.select()` (field dicts, `prefer` patterns). `title` is now a reserved follow output name; `label` stays reserved while the legacy output key exists. The old spellings keep working; see Deprecated.
+
+### Deprecated
+
+Each of these keeps working through 0.5.x and is removed in 0.6.0:
+
+- **The view/follow-level spec key `label =`** (the display-string candidates): still accepted, with a `DeprecationWarning` pointing at `title =`. Giving both `label` and `title` is an error.
+- **The output key `'label'`**: still emitted as a copy of `'title'` by default, so JSON consumers and `item['label']` keep working. Reading it from Python (`item['label']`, `.get('label')`) warns, and so does code that walks every key of an item. `project(..., legacy_label=False)` / `project_from_store(..., legacy_label=False)` emits the 0.6.0 shape now; the flag becomes a no-op in 0.6.0.
+- **`View.label_spec` / `Follow.label_spec`**: aliases of the new `.title` attribute, warning on access.
+
 ## [0.5.0] — Read-time union / overlay across named graphs. Reserved provenance/confidence vocabulary + accessors. `onya.viz` module. Pretty/themable rendering demo: `demo/draw_uli/`.
 
 ### Added

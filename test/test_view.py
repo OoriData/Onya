@@ -7,14 +7,19 @@ values, follows (outbound / inbound / edge-on-edge), selection hooks, depth/cycl
     pytest -s test/test_view.py
 '''
 
+import functools
 import json
 import tomllib
+import warnings
 from decimal import Decimal
 
 import pytest
 
 from onya import view
 from onya.serial import literate
+
+# The 0.6.0 output shape (no deprecated 'label' copy); the legacy default has its own tests below.
+project = functools.partial(view.project, legacy_label=False)
 
 L = 'http://example.org/lib/'
 
@@ -101,17 +106,17 @@ def specs():
 
 
 def test_worked_example(g, specs):
-    p = view.project(g, L + 'ada', specs)
-    assert list(p) == ['id', 'type', 'label', 'fields', 'employer', 'works']
-    assert p['id'] == L + 'ada' and p['type'] == 'Person' and p['label'] == 'Ada Lovelace'
+    p = project(g, L + 'ada', specs)
+    assert list(p) == ['id', 'type', 'title', 'fields', 'employer', 'works']
+    assert p['id'] == L + 'ada' and p['type'] == 'Person' and p['title'] == 'Ada Lovelace'
     assert p['fields'] == [('name', 'Ada Lovelace'),
                            ('email', ['ada@example.org', 'countess@example.org'])]  # sorted
     [emp] = p['employer']
-    assert emp == {'id': L + 'analytical-engine-co', 'label': 'Analytical Engine Company',
+    assert emp == {'id': L + 'analytical-engine-co', 'title': 'Analytical Engine Company',
                    'fields': [('name', 'Analytical Engine Company'), ('url', 'http://example.org/aec')],
                    'edge': [('startDate', '1842'), ('ex:role', 'http://example.org/vocab/Translator')]}
     # order_by datePublished ascending; the undated book (missing value) sorts last
-    assert [w['label'] for w in p['works']] == [
+    assert [w['title'] for w in p['works']] == [
         'Sketch of the Analytical Engine', 'Notes on the Analytical Engine', 'An Undated Letter']
     assert json.dumps(view.jsonable(p))
 
@@ -119,31 +124,31 @@ def test_worked_example(g, specs):
 def test_descending_order_and_limit(g):
     spec = {'type': 'Person', 'fields': ['name'],
             'follow': [{'inbound': 'author', 'show': ['name'], 'order_by': '-datePublished', 'limit': 2}]}
-    p = view.project(g, L + 'ada', spec)
-    assert [w['label'] for w in p['^author']] == ['Notes on the Analytical Engine',
+    p = project(g, L + 'ada', spec)
+    assert [w['title'] for w in p['^author']] == ['Notes on the Analytical Engine',
                                                   'Sketch of the Analytical Engine']
 
 
 def test_single_value_pick_is_deterministic(g):
-    p = view.project(g, L + 'ada', {'type': 'Person', 'fields': ['email']})
+    p = project(g, L + 'ada', {'type': 'Person', 'fields': ['email']})
     assert p['fields'] == [('email', 'ada@example.org')]  # the least, not an arbitrary one
-    assert p['label'] == 'ada@example.org'
+    assert p['title'] == 'ada@example.org'
 
 
 def test_typed_values_raw_and_malformed(g):
     spec = {'type': 'Book', 'fields': ['name', 'numberOfPages']}
-    assert dict(view.project(g, L + 'notes-on-the-engine', spec)['fields'])['numberOfPages'] in (66, Decimal(66))
-    assert dict(view.project(g, L + 'notes-on-the-engine', spec, raw=True)['fields'])['numberOfPages'] == '66'
+    assert dict(project(g, L + 'notes-on-the-engine', spec)['fields'])['numberOfPages'] in (66, Decimal(66))
+    assert dict(project(g, L + 'notes-on-the-engine', spec, raw=True)['fields'])['numberOfPages'] == '66'
     raw_field = {'type': 'Book', 'fields': [{'label': 'numberOfPages', 'raw': True, 'as': 'pages'}]}
-    assert view.project(g, L + 'notes-on-the-engine', raw_field)['fields'] == [('pages', '66')]
+    assert project(g, L + 'notes-on-the-engine', raw_field)['fields'] == [('pages', '66')]
     # malformed under @as: number -> shown raw, never an error
-    assert dict(view.project(g, L + 'sketch', spec)['fields'])['numberOfPages'] == 'not-a-number'
+    assert dict(project(g, L + 'sketch', spec)['fields'])['numberOfPages'] == 'not-a-number'
 
 
 def test_missing_data_is_fine(g):
     spec = {'type': 'Organization', 'fields': ['name', 'foundingDate'],
             'follow': [{'edge': 'subOrganization', 'show': ['name']}]}
-    p = view.project(g, L + 'analytical-engine-co', spec)
+    p = project(g, L + 'analytical-engine-co', spec)
     assert p['fields'] == [('name', 'Analytical Engine Company')]
     assert p['subOrganization'] == []
 
@@ -152,29 +157,29 @@ def test_edge_prop_follow(g):
     spec = {'type': 'Person', 'fields': ['name'], 'follow': [
         {'edge': 'worksFor', 'as': 'employer', 'show': ['name'],
          'edge_props': ['startDate', {'edge': 'ex:role', 'as': 'role', 'show': ['name']}]}]}
-    [emp] = view.project(g, L + 'ada', spec)['employer']
+    [emp] = project(g, L + 'ada', spec)['employer']
     assert emp['edge'][0] == ('startDate', '1842')
     name, [role] = emp['edge'][1]
-    assert name == 'role' and role['label'] == 'Translator' and role['id'] == 'http://example.org/vocab/Translator'
+    assert name == 'role' and role['title'] == 'Translator' and role['id'] == 'http://example.org/vocab/Translator'
 
 
 def test_showless_follow_uses_target_view_and_cycle_guard(g):
     specs = view.load([
         {'type': 'Person', 'fields': ['name'], 'follow': [{'edge': 'knows'}]},
     ])
-    p = view.project(g, L + 'ada', specs)
+    p = project(g, L + 'ada', specs)
     [bab] = p['knows']
-    assert bab['type'] == 'Person' and bab['label'] == 'Charles Babbage'
+    assert bab['type'] == 'Person' and bab['title'] == 'Charles Babbage'
     [back] = bab['knows']
-    assert back == {'id': L + 'ada', 'type': 'Person', 'label': 'Ada Lovelace', 'truncated': 'cycle'}
+    assert back == {'id': L + 'ada', 'type': 'Person', 'title': 'Ada Lovelace', 'truncated': 'cycle'}
 
 
 def test_max_depth_truncates(g):
     specs = view.load([{'type': 'Person', 'fields': ['name'], 'follow': [{'edge': 'knows'}]}])
-    p = view.project(g, L + 'ada', specs, max_depth=1)
+    p = project(g, L + 'ada', specs, max_depth=1)
     [bab] = p['knows']
     assert bab['truncated'] == 'depth' and 'knows' not in bab and bab['fields'] == [('name', 'Charles Babbage')]
-    assert 'knows' not in view.project(g, L + 'ada', specs, max_depth=0)
+    assert 'knows' not in project(g, L + 'ada', specs, max_depth=0)
 
 
 def test_spec_selection_order_and_when(g):
@@ -185,25 +190,25 @@ def test_spec_selection_order_and_when(g):
 
     def prolific(n, graph_):
         return len(list(graph_.inbound(n, label='author'))) >= 3
-    assert view.project(g, L + 'ada', specs, predicates={'prolific': prolific})['fields'] == \
+    assert project(g, L + 'ada', specs, predicates={'prolific': prolific})['fields'] == \
         [('email', 'ada@example.org')]
-    assert view.project(g, L + 'babbage', specs, predicates={'prolific': prolific})['fields'] == \
+    assert project(g, L + 'babbage', specs, predicates={'prolific': prolific})['fields'] == \
         [('name', 'Charles Babbage')]
     with pytest.raises(KeyError, match='prolific'):
-        view.project(g, L + 'ada', specs)
+        project(g, L + 'ada', specs)
     callable_spec = view.load([{'when': lambda n, _: n.id.endswith('babbage'), 'fields': ['name']}])
-    assert view.project(g, L + 'babbage', callable_spec)['label'] == 'Charles Babbage'
-    assert view.project(g, L + 'ada', callable_spec) == {'id': L + 'ada', 'label': None, 'fields': []}
+    assert project(g, L + 'babbage', callable_spec)['title'] == 'Charles Babbage'
+    assert project(g, L + 'ada', callable_spec) == {'id': L + 'ada', 'title': None, 'fields': []}
 
 
 def test_forced_spec(g, specs):
-    p = view.project(g, L + 'babbage', specs, spec={'fields': ['name']})
-    assert p == {'id': L + 'babbage', 'label': 'Charles Babbage', 'fields': [('name', 'Charles Babbage')]}
+    p = project(g, L + 'babbage', specs, spec={'fields': ['name']})
+    assert p == {'id': L + 'babbage', 'title': 'Charles Babbage', 'fields': [('name', 'Charles Babbage')]}
 
 
 def test_labels_candidates_and_templates(g):
     def label(spec_label):
-        return view.project(g, L + 'ada', {'type': 'Person', 'label': spec_label, 'fields': ['email']})['label']
+        return project(g, L + 'ada', {'type': 'Person', 'title': spec_label, 'fields': ['email']})['title']
     assert label(['givenName', 'name']) == 'Ada Lovelace'            # first present candidate
     assert label('{name} <{email}>') == 'Ada Lovelace <ada@example.org>'
     assert label(['{givenName} {familyName}', 'name']) == 'Ada Lovelace'  # template needs all parts
@@ -246,7 +251,7 @@ def test_name_errors_explain_the_fix():
 
 def test_ids_and_edge_targets_are_iris(g):
     from amara.iri import I
-    p = view.project(g, L + 'ada', {'type': 'Person', 'fields': ['name', 'worksFor'],
+    p = project(g, L + 'ada', {'type': 'Person', 'fields': ['name', 'worksFor'],
                                     'follow': [{'edge': 'knows', 'show': ['name']}]})
     assert isinstance(p['id'], I) and isinstance(p['knows'][0]['id'], I)
     fields = dict(p['fields'])
@@ -259,11 +264,11 @@ def test_ids_and_edge_targets_are_iris(g):
 def test_unknown_prefix_in_spec_raises(g):
     from onya.graph import UnknownPrefixError
     with pytest.raises(UnknownPrefixError):
-        view.project(g, L + 'ada', {'type': 'Person', 'fields': ['foaf:name']})
+        project(g, L + 'ada', {'type': 'Person', 'fields': ['foaf:name']})
 
 
 def test_to_text(g, specs):
-    text = view.to_text(view.project(g, L + 'ada', specs))
+    text = view.to_text(project(g, L + 'ada', specs))
     assert text.splitlines()[0] == 'Ada Lovelace [Person]'
     assert '~startDate: 1842' in text and 'works:' in text
 
@@ -276,3 +281,175 @@ def test_view_does_not_import_store():
             "assert not leaked, leaked; print('OK')")
     r = subprocess.run([sys.executable, '-c', code], capture_output=True, text=True)
     assert r.returncode == 0 and 'OK' in r.stdout, r.stderr
+
+
+# --- prefer / order_by (0.5.1) -------------------------------------------------------------
+
+PREFS = '''# @docheader
+* @nodebase: http://example.org/lib/
+* @schema: https://schema.org/
+* @iri:
+    * ex: http://example.org/vocab/
+
+# ada [Person]
+* name: Ada Lovelace
+* email: ada@example.org
+* email: countess@example.org
+    * ex:use -> ex:Primary
+* telephone: "+44 20 7946 0000"
+    * ex:use -> ex:Work
+    * ex:priority: 10
+        * @as: number
+* telephone: "+44 20 7946 0001"
+    * ex:use -> ex:Home
+    * ex:priority: 9
+        * @as: number
+* telephone: "+44 20 7946 0002"
+* jobTitle: Translator
+    * ex:primary: yes
+* jobTitle: Analyst
+    * ex:primary: true
+        * @as: boolean
+* worksFor -> aec
+* worksFor -> royal-society
+    * ex:current: true
+        * @as: boolean
+
+# aec [Organization]
+* name: Analytical Engine Company
+
+# royal-society [Organization]
+* name: Royal Society
+'''
+
+
+@pytest.fixture
+def pg():
+    return literate.read(PREFS).graph
+
+
+def fields_of(g, fields, **kw):
+    return dict(project(g, L + 'ada', {'type': 'Person', 'fields': fields}, **kw)['fields'])
+
+
+def test_prefer_edge_target_pattern(pg):
+    f = fields_of(pg, [{'label': 'email', 'prefer': {'label': 'ex:use', 'target': 'ex:Primary'}}])
+    assert f['email'] == 'countess@example.org'   # today's rule alone would pick ada@…
+    assert fields_of(pg, ['email'])['email'] == 'ada@example.org'
+
+
+def test_prefer_list_falls_through_in_order(pg):
+    prefer = [{'label': 'ex:use', 'target': 'ex:Mobile'}, {'label': 'ex:use', 'target': 'ex:Home'}]
+    assert fields_of(pg, [{'label': 'telephone', 'prefer': prefer}])['telephone'] == '+44 20 7946 0001'
+    # nothing matches -> least value, exactly as before
+    none = [{'label': 'ex:use', 'target': 'ex:Mobile'}]
+    assert fields_of(pg, [{'label': 'telephone', 'prefer': none}])['telephone'] == '+44 20 7946 0000'
+
+
+def test_prefer_value_typed_vs_string(pg):
+    # typed spec value: matches only `@as`-interpreted True, never the string "yes"
+    def pick(value):
+        return fields_of(pg, [{'label': 'jobTitle', 'prefer': {'label': 'ex:primary', 'value': value}}])['jobTitle']
+    assert pick(True) == 'Analyst'
+    assert pick('yes') == 'Translator'   # a string spec value compares the stored text
+    assert pick('true') == 'Analyst'
+
+
+def test_prefer_presence_shorthand(pg):
+    # `"ex:primary"`: any nested assertion with that label — both jobTitles carry one, so least wins
+    assert fields_of(pg, [{'label': 'jobTitle', 'prefer': 'ex:primary'}])['jobTitle'] == 'Analyst'
+    assert fields_of(pg, [{'label': 'email', 'prefer': 'ex:use'}])['email'] == 'countess@example.org'
+
+
+def test_order_by_on_fields(pg):
+    f = fields_of(pg, [{'label': 'telephone', 'order_by': 'ex:priority'}])
+    assert f['telephone'] == '+44 20 7946 0001'          # 9 < 10 numerically (not as text)
+    many = fields_of(pg, [{'label': 'telephone', 'order_by': 'ex:priority', 'many': True}])['telephone']
+    assert many == ['+44 20 7946 0001', '+44 20 7946 0000', '+44 20 7946 0002']   # missing last
+    desc = fields_of(pg, [{'label': 'telephone', 'order_by': '-ex:priority', 'many': True}])['telephone']
+    assert desc == ['+44 20 7946 0000', '+44 20 7946 0001', '+44 20 7946 0002']   # missing still last
+
+
+def test_prefer_then_order_by_and_many_ordering(pg):
+    spec = {'label': 'telephone', 'many': True, 'order_by': 'ex:priority',
+            'prefer': {'label': 'ex:use', 'target': 'ex:Work'}}
+    assert fields_of(pg, [spec])['telephone'] == ['+44 20 7946 0000', '+44 20 7946 0001', '+44 20 7946 0002']
+    emails = fields_of(pg, [{'label': 'email', 'many': True, 'prefer': 'ex:use'}])['email']
+    assert emails == ['countess@example.org', 'ada@example.org']   # preferred first, nothing dropped
+
+
+def test_title_placeholders_use_the_fields_pick(pg):
+    spec = {'type': 'Person', 'title': '{name} <{email}>',
+            'fields': [{'label': 'email', 'prefer': {'label': 'ex:use', 'target': 'ex:Primary'}}]}
+    assert project(pg, L + 'ada', spec)['title'] == 'Ada Lovelace <countess@example.org>'
+
+
+def test_prefer_on_follows(pg):
+    spec = {'type': 'Person', 'fields': ['name'], 'follow': [
+        {'edge': 'worksFor', 'as': 'employer', 'show': ['name'],
+         'prefer': {'label': 'ex:current', 'value': True}, 'limit': 1}]}
+    [emp] = project(pg, L + 'ada', spec)['employer']
+    assert emp['title'] == 'Royal Society'            # alphabetical order alone would pick the AEC
+
+
+def test_prefer_edge_props_field(pg):
+    roles = ('* worksFor -> aec\n'
+             '    * ex:role -> ex:Clerk\n'
+             '    * ex:role -> ex:Translator\n'
+             '        * ex:primary: true\n'
+             '            * @as: boolean\n')
+    g = literate.read(PREFS.replace('* worksFor -> aec\n', roles)).graph
+    spec = {'type': 'Person', 'fields': ['name'], 'follow': [
+        {'edge': 'worksFor', 'as': 'employer', 'show': ['name'],
+         'edge_props': [{'label': 'ex:role', 'prefer': {'label': 'ex:primary', 'value': True}}]}]}
+    emp = next(e for e in project(g, L + 'ada', spec)['employer'] if e['title'] == 'Analytical Engine Company')
+    # patterns on an edge-valued field read *that edge's* nested assertions
+    assert emp['edge'] == [('ex:role', 'http://example.org/vocab/Translator')]
+
+
+def test_prefer_bare_target_is_rejected(pg):
+    with pytest.raises(ValueError, match='full IRI or CURIE'):
+        fields_of(pg, [{'label': 'email', 'prefer': {'label': 'ex:use', 'target': 'Primary'}}])
+
+
+@pytest.mark.parametrize('bad,msg', [
+    ({'fields': [{'label': 'email', 'prefer': {'label': 'ex:use', 'value': 'x', 'target': 'ex:Y'}}]}, 'not both'),
+    ({'fields': [{'label': 'email', 'prefer': {'value': True}}]}, 'needs a `label`'),
+    ({'fields': [{'label': 'email', 'prefer': {'label': 'ex:use', 'targte': 'ex:Y'}}]}, 'Unknown'),
+    ({'fields': [{'label': 'email', 'prefer': 3}]}, 'label string or a table'),
+    ({'fields': [{'label': 'email', 'order_by': 3}]}, '`order_by` is a label'),
+    ({'follow': [{'edge': 'a', 'prefer': [{'label': 'x', 'target': 5}]}]}, 'IRI or CURIE string'),
+])
+def test_prefer_order_by_load_errors(bad, msg):
+    with pytest.raises(ValueError, match=msg):
+        view.load(bad)
+
+
+# --- deprecation shims (remove in 0.6.0) ---------------------------------------------------
+
+def test_label_spec_key_deprecated_but_works(g):
+    with pytest.warns(DeprecationWarning, match='use `title =`'):
+        specs = view.load({'type': 'Person', 'label': '{name}!', 'fields': ['email']})
+    assert project(g, L + 'ada', specs)['title'] == 'Ada Lovelace!'
+    with pytest.warns(DeprecationWarning, match='use `title =`'):
+        specs = view.load({'type': 'Person', 'fields': ['name'],
+                           'follow': [{'edge': 'worksFor', 'label': 'url', 'show': ['name', 'url']}]})
+    assert project(g, L + 'ada', specs)['worksFor'][0]['title'] == 'http://example.org/aec'
+    with pytest.raises(ValueError, match='give `title` only'):
+        view.load({'type': 'Person', 'label': 'x', 'title': 'y'})
+    with pytest.warns(DeprecationWarning, match='View.title'):
+        assert specs[0].label_spec is None
+
+
+def test_legacy_label_output_key(g, specs):
+    p = view.project(g, L + 'ada', specs)                       # default: legacy copy present
+    assert list(p)[:4] == ['id', 'type', 'title', 'label']
+    assert json.loads(json.dumps(p))['label'] == 'Ada Lovelace'  # JSON consumers unaffected
+    with warnings.catch_warnings():
+        warnings.simplefilter('error')
+        p['title'], dict(p), view.jsonable(p), view.to_text(p)  # no warning without touching 'label'
+    with pytest.warns(DeprecationWarning, match="use 'title'"):
+        assert p['label'] == 'Ada Lovelace'
+    with pytest.warns(DeprecationWarning):
+        assert p['employer'][0].get('label') == 'Analytical Engine Company'
+    assert 'label' not in view.project(g, L + 'ada', specs, legacy_label=False)
