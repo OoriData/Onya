@@ -6,7 +6,7 @@ For interim changes not yet earmarked for a particular release, can use this hea
 ## [Unreleased]
 -->
 
-## [0.5.1] — Curator-controlled ranking in views: `prefer` and `order_by`. `title` replaces the display `label`.
+## [0.5.1] 2026-09-29: Curator-controlled ranking in views: `prefer` and `order_by`. `title` replaces the display `label`.
 
 ### Added
 
@@ -28,7 +28,7 @@ Each of these keeps working through 0.5.x and is removed in 0.6.0:
 - **The output key `'label'`**: still emitted as a copy of `'title'` by default, so JSON consumers and `item['label']` keep working. Reading it from Python (`item['label']`, `.get('label')`) warns, and so does code that walks every key of an item. `project(..., legacy_label=False)` / `project_from_store(..., legacy_label=False)` emits the 0.6.0 shape now; the flag becomes a no-op in 0.6.0.
 - **`View.label_spec` / `Follow.label_spec`**: aliases of the new `.title` attribute, warning on access.
 
-## [0.5.0] — Read-time union / overlay across named graphs. Reserved provenance/confidence vocabulary + accessors. `onya.viz` module. Pretty/themable rendering demo: `demo/draw_uli/`.
+## [0.5.0] 2026-09-24: Read-time union / overlay across named graphs. Reserved provenance/confidence vocabulary + accessors. `onya.viz` module. Pretty/themable rendering demo: `demo/draw_uli/`.
 
 ### Added
 
@@ -75,7 +75,7 @@ Each of these keeps working through 0.5.x and is removed in 0.6.0:
 - **A plain-`str` label argument of the form `prefix:local` whose prefix the graph never declared now raises `UnknownPrefixError`** (previously compared literally). Pass an `amara.iri.I` (always taken as a full IRI, the fast path), a string with a `//` authority, or an absolute scheme such as `urn:`; those are unchanged. A bare name now resolves against the graph's `@schema` when one was declared.
 - **`demo/draw_uli/driver.draw()`'s `signature` parameter changed meaning**: `None` (new default) auto-resolves to the graph's decorative comment, falling back to the Design's own `signature` tagline; `False` suppresses the line; a string overrides it outright. (Previously a bare `bool` toggling the Design's hard-coded tagline.) Demo-only, no supported-API impact.
 
-## [0.4.2] — Friendly Onya Literate syntax diagnostics. Faithful serialization round-trips.
+## [0.4.2] 2026-07-16: Friendly Onya Literate syntax diagnostics. Faithful serialization round-trips.
 
 ### Fixed
 
@@ -86,7 +86,7 @@ Each of these keeps working through 0.5.x and is removed in 0.6.0:
 - **`ParseResult` exposes the docheader namespace convention** — new `schema`, `nodebase`, `typebase`, and `prefixes` fields (the `@iri` map, `schema` entry excluded). A graph holds only full IRIs and cannot remember how it was authored, so re-serializing compactly (bare schema names, CURIE prefixes) requires these; `write(g, schema=r.schema, nodebase=r.nodebase, prefixes=r.prefixes)` reproduces the original style. This is the honest alternative to guessing a convention from a hint-less graph. The `file:` store now uses it: `put(merge=True)` (and wholesale replace) preserves a seeded/authored file's convention across the round trip, so the on-disk `.onya` stays compact and diff-friendly for a "materialize → serialize → commit → re-seed" (git-as-audit-trail) workflow — while a graph first materialized through the store with no seed file still falls back to the faithful explicit-IRI form. `write` gains a `strict_namespace_bases` parameter (mirrors `LiterateParser`).
 - **Actionable parse diagnostics for common malformed Onya Literate** — extends the stray-arrow work (0.4.1) beyond edges. A structural failure now raises **`LiterateSyntaxError`** (importable from `onya.serial.literate`) with a message that names the construct at fault and, where possible, suggests the fix, instead of pyparsing's opaque `Expected end of text` / multi-hundred-char grammar dump. This matters because the message is often fed straight back to an LLM as repair feedback. Recognized cases: a node identifier containing spaces (`# Capt. Doran [Person]` → *"a node identifier must be a single token with no spaces; got `Capt. Doran`. Use e.g. `CaptDoran`…"*), an unclosed `[Type]` bracket (`# A [Person`), a stray/malformed assertion outside a node block, and a Markdown code fence or preamble prose wrapping the graph (both frequent LLM output artifacts). Any unclassified failure still gets a clean generic message naming what was expected — never the raw grammar dump. Like the arrow check it is gated on an actual parse failure (no false positives on valid input) and carries `lineno` / `line` / `category`. New base class **`LiterateParseError(ValueError)`** now parents both `LiterateSyntaxError` and `EdgeArrowError`; the `onya convert` CLI catches the base, so all friendly diagnostics print without a traceback and exit non-zero.
 
-## [0.4.1] — 20260716: Wildcard selector query method. networkx projection + analytics write-back. Stray edge-arrow diagnostics.
+## [0.4.1] 2026-07-16: Wildcard selector query method. networkx projection + analytics write-back. Stray edge-arrow diagnostics.
 
 ### Added
 
@@ -100,7 +100,7 @@ Each of these keeps working through 0.5.x and is removed in 0.6.0:
 
 - **The document node is now first-class in Onya Literate.** Its `@docheader` bullets carry the same expressiveness as any node block — `@as` interpretations, `@id`, nested/reified assertions, and edges — on both parse and serialize, and `@interpretations` defaults apply to them. Previously the docheader was parsed and written as a restricted *flat* `label: value` form, so an interpretation, an `@id`, a nested assertion, or an edge on the document node was silently dropped or misparsed (e.g. `* about -> Thing` became a string property, creating no edge or target node) and lost on `write → read`. Parse and serialize now route document-node assertions through the same machinery as body nodes (`_build_assertions` / `_write_assertions`); only the document node's identity and implicit `onya:Document` type stay directive-driven (`@document`), so it still has no `# NodeID [Type]` header and is never emitted as a separate `#` block. SPEC § Document Header documents this. (#26)
 
-## [0.4.0] — 20260709: Graph merge. Data contract layers. Asserdion IDs. Empty node blocks. Multi-typed nodes. Persistence store.
+## [0.4.0]: 2026-07-09: Graph merge. Data contract layers. Asserdion IDs. Empty node blocks. Multi-typed nodes. Persistence store.
 
 ### Added
 
@@ -131,7 +131,7 @@ Each of these keeps working through 0.5.x and is removed in 0.6.0:
 - **Multi-typed nodes now round-trip.** A node's types form a *set*, and `write()` already emitted them space-separated inside the header brackets (`# acme [Organization lv:Client]`), but the parser expanded the whole bracket group as one IRI — so any graph with a multi-typed node failed `parse → write → parse` and a hand-authored multi-type header raised an opaque error. The parser now tokenizes the bracket content into individual type refs (whitespace-separated, keeping `<…>` wrappers whole), expands each independently, and adds all to `node.types`. SPEC § Node Blocks documents the space-separated multi-type syntax.
 - Onya Literate now handles **arbitrary nesting depth** on both read and write. The parser tracks nesting with an indent stack (previously it collapsed everything below the first level onto that level), so a deeply-nested assertion attaches to its true parent and a nested `@id` names the assertion it is written under (not the top-level one). `write()` is now recursive and emits nested **edges** (previously dropped) and `@id` at every level, so nested assertions — including identified ones and nested n-ary/qualified structures — round-trip.
 
-## [0.3.1] — 20260615: Strict namespacebases.
+## [0.3.1] 2026-06-15: Strict namespacebases.
 
 ### Added
 
@@ -146,7 +146,7 @@ Each of these keeps working through 0.5.x and is removed in 0.6.0:
 
 - Onya Literate parser migrated to PEP8 pyparsing API names (`parse_string`/`parse_all`, `set_parse_action`, `leave_whitespace`, `set_default_whitespace_chars`, `html_comment`, `esc_char`, `DelimitedList`). No behavior change; removes `PyparsingDeprecationWarning`s and keeps the parser working under the upcoming pyparsing 4.0, which drops the legacy pre-PEP8 aliases.
 
-## [0.3.0] — 20260610: Cleanup & AI aids
+## [0.3.0] 2026-06-10: Cleanup & AI aids
 
 ### Added
 
@@ -185,7 +185,7 @@ Each of these keeps working through 0.5.x and is removed in 0.6.0:
 - Test case against missing `onya:Document` regression
 
 
-## [0.2.0] — 20251216
+## [0.2.0]: 20251216
 
 ### Added
 
@@ -209,6 +209,6 @@ Each of these keeps working through 0.5.x and is removed in 0.6.0:
 - Onya Literate `->` edges now create edges even when the RHS is a plain (relative) node ID (e.g. `knows -> B`)
 - onya.serial.literate.write()
 
-## [0.1.1] — 20251118
+## [0.1.1]: 20251118
 
 - Initial public release
