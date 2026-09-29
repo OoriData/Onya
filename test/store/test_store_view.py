@@ -93,3 +93,49 @@ async def test_match_target(store):
     assert [(str(o), str(t)) for o, _, t, _ in rows] == [(L + 'babbage', L + 'ada')]
     rows = [r async for r in store.match(NAME, target=L + 'aec')]
     assert [str(o) for o, *_ in rows] == [L + 'ada']
+
+
+RANKED_DOC = '''# @docheader
+* @nodebase: http://example.org/lib/
+* @schema: https://schema.org/
+* @iri:
+    * ex: http://example.org/vocab/
+
+# ada [Person]
+* name: Ada Lovelace
+* email: ada@example.org
+* email: countess@example.org
+    * ex:use -> ex:Primary
+* telephone: "0000"
+    * ex:priority: 10
+        * @as: number
+* telephone: "0001"
+    * ex:priority: 9
+        * @as: number
+* worksFor -> aec
+* worksFor -> royal-society
+    * ex:current: true
+        * @as: boolean
+
+# aec [Organization]
+* name: Analytical Engine Company
+
+# royal-society [Organization]
+* name: Royal Society
+'''
+
+RANKED_SPEC = {'type': 'Person', 'title': '{name} <{email}>', 'fields': [
+    {'label': 'email', 'prefer': {'label': 'ex:use', 'target': 'ex:Primary'}},
+    {'label': 'telephone', 'order_by': 'ex:priority', 'many': True}],
+    'follow': [{'edge': 'worksFor', 'as': 'employer', 'show': ['name'],
+                'prefer': {'label': 'ex:current', 'value': True}, 'limit': 1}]}
+
+
+async def test_prefer_and_order_by_from_store(store):
+    await store.put(NAME, literate.read(RANKED_DOC).graph)
+    expected = view.project(literate.read(RANKED_DOC).graph, L + 'ada', RANKED_SPEC, legacy_label=False)
+    got = await view.project_from_store(store, NAME, L + 'ada', RANKED_SPEC, legacy_label=False)
+    assert got == expected
+    assert got['title'] == 'Ada Lovelace <countess@example.org>'
+    assert dict(got['fields'])['telephone'] == ['0001', '0000']
+    assert [e['title'] for e in got['employer']] == ['Royal Society']

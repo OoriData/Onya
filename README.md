@@ -217,9 +217,11 @@ from onya import view
 specs = view.load([{'type': 'Person', 'fields': ['name'],
                     'follow': [{'edge': 'knows', 'show': ['name']}]}])
 view.project(g, chuks, specs)
-# {'id': '.../Chuks', 'type': 'Person', 'label': 'Chukwuemeka Okafor',
+# {'id': '.../Chuks', 'type': 'Person', 'title': 'Chukwuemeka Okafor',
 #  'fields': [('name', 'Chukwuemeka Okafor')],
-#  'knows': [{'id': '.../Ify', 'label': 'Ifeoma Obasi', 'fields': [('name', 'Ifeoma Obasi')]}]}
+#  'knows': [{'id': '.../Ify', 'title': 'Ifeoma Obasi', 'fields': [('name', 'Ifeoma Obasi')]}]}
+# (Through 0.5.x each item also carries a deprecated 'label' copy of 'title';
+#  pass legacy_label=False for the 0.6.0 shape.)
 ```
 
 Stores offer the same lookup without loading a graph (`await store.search(name, 'chukwuemka',
