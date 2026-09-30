@@ -606,7 +606,28 @@ Use Markdown's standard mechanism for multi-line list items. After the initial p
 * birthDate: 1930-11-16
 ```
 
-The indented paragraphs are treated as part of the same property value, with newlines preserved.
+The indented paragraphs are treated as part of the same property value, with newlines preserved. The rules:
+
+- **Continuation lines** are the lines after a property line that are indented at least 2 spaces
+  more than its bullet (its content column, as in Markdown; 4 is fine too) and don't start with
+  `* ` (an indented `* ` line is a nested assertion). A blank line before a continuation is
+  optional. Unindented text never continues a value.
+- **The value is preserved exactly:** the first line, then the continuation lines joined by
+  newlines, blank lines included as written. The continuation block's common indentation is
+  removed; relative indentation within it is kept. Blank lines after the last continuation line
+  separate it from what follows and aren't part of the value.
+- **The first line may be empty** (`* bio:` followed by indented lines): the value is then the
+  continuation lines alone.
+- **Only properties with an unquoted first line** take a continuation. Indented text under an
+  edge, a quoted or `<IRI>` value, or a `::` text reference is a parse error.
+- **Directives and nested assertions come after the text**, as ordinary indented bullets. An
+  inline `[=name]` id or a comment stays on the first line. Indented text after a nested
+  assertion is a parse error rather than a second continuation.
+- **Continuation text is literal**: an HTML comment inside it is part of the text. (A comment
+  line *before* the text starts is an ordinary comment.)
+
+The form is syntax only: a value written this way and the same value in a text reference (below)
+parse to the same graph.
 
 ### 2. Text References
 

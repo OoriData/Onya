@@ -105,13 +105,47 @@ def _format_interp(interp, prefixes: dict[str, str]) -> str:
     return compact_iri(s, prefixes)
 
 
-def _write_prop_line(out, indent: str, label: str, value, nodebase, prefixes, textrefs: list) -> None:
+_INDENT_UNSAFE_FIRST = re.compile(r'^\s|\s$|^["\'<]|-->\s*$|\s\[=[^\]\s]+\]$')
+
+
+def _indent_representable(value: str) -> bool:
+    '''
+    Can ``value`` be written as indented continuation text (SPEC § Long Text) and read back
+    exactly? The first line must survive as an unquoted value, and the continuation must not
+    change under the parser's de-indenting, trailing-blank-line trimming, or bullet detection.
+    '''
+    first, _, rest = value.partition('\n')
+    if not first or _INDENT_UNSAFE_FIRST.search(first):
+        return False                      # an empty first line reads back as "no leading newline"
+    lines = rest.split('\n')
+    lead = next((ln.strip() for ln in lines if ln.strip()), '')
+    if lead.startswith('<!--'):
+        return False                      # a comment line before the text starts is read as a comment
+    if not lines[-1].strip():
+        return False                      # trailing blank lines/newlines are separators on read
+    for ln in lines:
+        if ln and not ln.strip():
+            return False                  # whitespace-only line: de-indenting would empty it
+        if re.match(r'\*[ \t]', ln.lstrip()):
+            return False                  # would read as a nested bullet
+    nonblank = [ln for ln in lines if ln]
+    return not nonblank or min(len(ln) - len(ln.lstrip()) for ln in nonblank) == 0
+
+
+def _write_prop_line(out, indent: str, label: str, value, nodebase, prefixes, textrefs: list,
+                     multiline: str = 'textref') -> None:
     '''
     Write a property's ``* label: value`` line. A multi-line string value is emitted as a
     text reference (``* label:: _ltN``) with its content collected into ``textrefs`` for a
-    trailing ``:_ltN = """..."""`` definition — the only value form the parser reads back
-    across line boundaries.
+    trailing ``:_ltN = """..."""`` definition — or, with ``multiline='indent'``, as indented
+    continuation text under the bullet (SPEC § Long Text), when that reads back exactly.
     '''
+    if isinstance(value, str) and '\n' in value and multiline == 'indent' and _indent_representable(value):
+        first, _, rest = value.partition('\n')
+        out.write(f'{indent}* {label}:' + (f' {first}' if first else '') + '\n')
+        for ln in rest.split('\n'):
+            out.write(f'{indent}    {ln}\n' if ln else '\n')
+        return
     if isinstance(value, str) and '\n' in value:
         name = f'lt{len(textrefs)}'  # text-ref names must start with a letter (parser IDENT)
         textrefs.append((name, value))
@@ -121,13 +155,13 @@ def _write_prop_line(out, indent: str, label: str, value, nodebase, prefixes, te
 
 
 def _write_assertion(assertion, is_edge: bool, out, indent: str, nodebase, prefixes, bracket_curie: bool,
-                     textrefs: list):
+                     textrefs: list, multiline: str = 'textref'):
     '''Emit one assertion line, its ``@id`` / ``@as`` (if any), then recurse into its assertions.'''
     label = _format_label(assertion.label, prefixes, bracket_curie=bracket_curie)
     if is_edge:
         out.write(f'{indent}* {label} -> {shorten_node_id(assertion.target.id, nodebase)}\n')
     else:
-        _write_prop_line(out, indent, label, assertion.value, nodebase, prefixes, textrefs)
+        _write_prop_line(out, indent, label, assertion.value, nodebase, prefixes, textrefs, multiline)
     child_indent = indent + '    '
     if assertion.id is not None:
         out.write(f'{child_indent}* @id: {shorten_node_id(assertion.id, nodebase)}\n')
@@ -136,14 +170,15 @@ def _write_assertion(assertion, is_edge: bool, out, indent: str, nodebase, prefi
     if getattr(assertion, 'interp', None) is not None:
         out.write(f'{child_indent}* @as: {_format_interp(assertion.interp, prefixes)}\n')
     # Recurse so nested properties AND nested edges round-trip at any depth
-    _write_assertions(assertion, out, child_indent, nodebase, prefixes, bracket_curie, textrefs)
+    _write_assertions(assertion, out, child_indent, nodebase, prefixes, bracket_curie, textrefs, multiline)
 
 
-def _write_assertions(container, out, indent: str, nodebase, prefixes, bracket_curie: bool, textrefs: list):
+def _write_assertions(container, out, indent: str, nodebase, prefixes, bracket_curie: bool, textrefs: list,
+                      multiline: str = 'textref'):
     for prop in sorted(container.properties, key=lambda p: str(p.label)):
-        _write_assertion(prop, False, out, indent, nodebase, prefixes, bracket_curie, textrefs)
+        _write_assertion(prop, False, out, indent, nodebase, prefixes, bracket_curie, textrefs, multiline)
     for edge in sorted(container.edges, key=lambda e: str(e.label)):
-        _write_assertion(edge, True, out, indent, nodebase, prefixes, bracket_curie, textrefs)
+        _write_assertion(edge, True, out, indent, nodebase, prefixes, bracket_curie, textrefs, multiline)
 
 
 def write(
@@ -157,6 +192,7 @@ def write(
     bracket_curie: bool = False,
     bracket_types: bool = False,
     strict_namespace_bases: bool = False,
+    multiline: str = 'textref',
 ):
     '''
     Serialize an Onya graph to Onya Literate (Markdown).
@@ -169,6 +205,10 @@ def write(
     bracket_types -- if True, write types as ``[<prefix:Type>]`` with bracketed CURIEs
     strict_namespace_bases -- if True, raise ``NamespaceBaseError`` when ``schema``/``nodebase``
         lacks a trailing separator (`/`, `#`, or `?`) rather than normalizing + warning.
+    multiline -- how to write multi-line property values: ``'textref'`` (default; a ``::`` text
+        reference, robust for any content) or ``'indent'`` (indented continuation text under the
+        bullet, SPEC § Long Text, falling back to a text reference for a value that form can't
+        represent exactly: e.g. a trailing newline, or a line that would read as a bullet).
 
     Faithfulness: ``read(write(g)) == g`` holds for any namespace arguments, because bare-name
     compaction is only applied to IRIs genuinely under a declared base and everything else falls
@@ -180,6 +220,8 @@ def write(
     '''
     # Emit self-consistent, separator-terminated bases: compaction already treats the base as
     # separator-terminated (via namespace_for_curie), so the docheader directive must too.
+    if multiline not in ('textref', 'indent'):
+        raise ValueError(f"multiline must be 'textref' or 'indent', got {multiline!r}")
     schema = ensure_namespace_separator('@schema', schema, strict=strict_namespace_bases)
     nodebase = ensure_namespace_separator('@nodebase', nodebase, strict=strict_namespace_bases)
     all_prefixes = _prefixes_for_write(schema, prefixes)
@@ -208,7 +250,7 @@ def write(
             # than a `#` block (see SPEC § Document Header). The directives above are document
             # fields, not stored assertions, so there is no double-emission.
             _write_assertions(model.nodes[document_s], out, '', nodebase, all_prefixes,
-                              bracket_curie, textrefs)
+                              bracket_curie, textrefs, multiline)
         out.write('\n')
 
     for nid in sorted(model.nodes.keys(), key=str):
@@ -226,7 +268,7 @@ def write(
             out.write(f'# {header_id} [{type_str}]\n\n')
         else:
             out.write(f'# {header_id}\n\n')
-        _write_assertions(node, out, '', nodebase, all_prefixes, bracket_curie, textrefs)
+        _write_assertions(node, out, '', nodebase, all_prefixes, bracket_curie, textrefs, multiline)
         out.write('\n')
 
     # Trailing text-reference definitions for any multi-line values emitted above.
