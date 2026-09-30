@@ -13,7 +13,9 @@ Onya Literate, or Onya Lit, is a Markdown-based format.
 see: the [Onya Literate format documentation](https://github.com/OoriData/Onya/blob/main/SPEC.md#onya-literate-serialization)
 '''
 
+import contextvars
 import re
+import textwrap
 import warnings
 from dataclasses import dataclass
 from enum import Enum
@@ -388,7 +390,12 @@ class LiterateParser:
         doc.text_refs = {}  # Initialize the text references dictionary
         doc.pending_edges = []  # Edge targets are resolved after all @id declarations are seen
 
-        parsed = self._parse_string(lit_text)
+        lit_text, folded = _fold_continuations(lit_text)
+        token = _FOLDED.set(folded)
+        try:
+            parsed = self._parse_string(lit_text)
+        finally:
+            _FOLDED.reset(token)
 
         # First pass: collect all text reference definitions
         for item in parsed:
@@ -539,6 +546,9 @@ def _make_value(string, location, tokens):
         typeindic = value_type.RES_VAL
     elif isinstance(val, LITERAL):
         typeindic = value_type.TEXT_VAL
+        folded = _FOLDED.get()
+        if folded and str(val) in folded:  # an indented-continuation value (see `_fold_continuations`)
+            val = LITERAL(folded[str(val)])
     elif isinstance(val, str):
         val = _TRAILING_COMMENTS.sub('', val).strip()
         typeindic = value_type.UNKNOWN_VAL
@@ -743,37 +753,6 @@ def _make_text_ref_tree(string, location, tokens):
                         value=tokens[2] if len(tokens) > 2 else None, children=None,
                         is_text_ref=True)
 
-def parse_multiline_text(lines, start_idx, current_indent):
-    '''
-    Parse multiline text that continues after a property definition.
-    Returns (text_content, next_line_idx)
-    '''
-    if start_idx >= len(lines):
-        return '', start_idx
-
-    text_lines = []
-    i = start_idx
-
-    while i < len(lines):
-        line = lines[i]
-
-        # Skip empty lines
-        if not line.strip():
-            i += 1
-            continue
-
-        # Check if this line is indented enough to be part of the multiline text
-        # Must be indented more than the current property level
-        line_indent = len(line) - len(line.lstrip())
-        if line_indent > current_indent:
-            # This is a continuation line
-            text_lines.append(line[current_indent:])  # Remove the base indentation
-            i += 1
-        else:
-            # This line is not indented enough, stop parsing multiline text
-            break
-
-    return '\n'.join(text_lines), i
 
 def _make_text_ref_def(string, location, tokens):
     '''
@@ -787,6 +766,147 @@ prop_text_ref.set_parse_action(_make_text_ref_tree)
 edge.set_parse_action(_make_edge_tree)
 text_ref_def.set_parse_action(_make_text_ref_def)
 value_expr.set_parse_action(_make_value)
+
+
+# --- Markdown indented-text continuation (SPEC § Long Text) --------------------------------
+#
+# A property's value may continue on following lines indented at least 2 spaces past its bullet
+# (the bullet's content column, as in Markdown), blank lines optional between them. The line-based
+# grammar can't see that, so a pre-pass folds each continuation into its property line: the value
+# becomes a quoted private-use sentinel, the continuation lines become blank lines (legal between
+# bullets, and keeping line numbers exact for diagnostics), and `_make_value` swaps the sentinel for
+# the real text. Everything downstream (`@as`, `@id`, `[=id]`, defaults, provenance) is unchanged.
+
+_FOLDED: contextvars.ContextVar[dict | None] = contextvars.ContextVar('onya_folded_values', default=None)
+_SENTINEL = '\ue000'  # private-use: never produced by a valid document's own quoted values
+_BULLET_LINE = re.compile(r'^([ \t]*)\*[ \t]')
+_PROP_HEAD = Optional(White(' \t').leave_whitespace(), '') + Suppress('*' + White()) + ASSERTION_LABEL + ':'
+_ASSERTION_LINE = prop_text_ref | prop | edge
+
+
+def _indent_of(line: str) -> int:
+    return len(line) - len(line.lstrip(' \t'))
+
+
+def _continuation_error(msg: str, lineno: int, line: str) -> 'LiterateSyntaxError':
+    return LiterateSyntaxError(f'line {lineno}: {msg}', lineno=lineno, line=line, category='continuation')
+
+
+def _classify_owner(line: str):
+    '''
+    `(first_value, inline_id, prefix)` for an unquoted property line whose value may continue;
+    raises for an assertion that can't take a continuation; None if the line doesn't parse alone
+    (the grammar reports it later).
+    '''
+    try:
+        pi = _ASSERTION_LINE.parse_string(line, parse_all=True)[0]
+    except ParseBaseException:
+        return None
+    if pi.is_edge:
+        return 'an edge target is a node id, not text, so it can\'t continue on the next line'
+    if pi.is_text_ref:
+        return 'a `::` text reference already names its whole value'
+    if pi.value is not None and pi.value.typeindic != value_type.UNKNOWN_VAL:
+        return ('a quoted (or `<IRI>`) value can\'t continue on the next line; leave the first line '
+                'unquoted, or put the whole value in a `::` text reference')
+    try:
+        _, _, end = next(_PROP_HEAD.scan_string(line, max_matches=1))
+    except StopIteration:
+        return None
+    first = pi.value.verbatim if pi.value is not None else ''
+    return (first, pi.value.inline_id if pi.value is not None else None, line[:end])
+
+
+def _fold_continuations(text: str) -> tuple[str, dict]:
+    '''Fold indented continuation text into its property line (see the section comment above).'''
+    lines = text.split('\n')
+    folded: dict = {}
+    bullets: list = []           # (indent, line index) of bullets since the last header
+    in_textref = in_comment = False
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        s = line.strip()
+        if in_textref:           # inside a `:name = """..."""` definition: not ours to touch
+            in_textref = '"""' not in line
+            i += 1
+            continue
+        if in_comment:           # inside a multi-line HTML comment
+            in_comment = '-->' not in line
+            i += 1
+            continue
+        ind = _indent_of(line)
+        if not s:
+            i += 1
+            continue
+        if ind == 0 and s.startswith(':') and s.count('"""') % 2 == 1:
+            in_textref = True
+            i += 1
+            continue
+        if s.startswith('<!--') and '-->' not in s and not (bullets and ind >= bullets[-1][0] + 2):
+            in_comment = True
+            i += 1
+            continue
+        if s.startswith('#') and ind == 0:
+            bullets = []
+            i += 1
+            continue
+        if _BULLET_LINE.match(line):
+            bullets.append((ind, i))
+            i += 1
+            continue
+        if ind == 0 or (s.startswith('<!--') and s.endswith('-->')):
+            i += 1               # unindented text is the grammar's to diagnose; a comment line is a comment
+            continue
+
+        # Indented non-bullet text: continuation of the bullet immediately above, if deep enough.
+        owner = bullets[-1] if bullets else None
+        if owner is None or ind < owner[0] + 2:
+            if any(ind >= b_ind + 2 for b_ind, _ in bullets):
+                raise _continuation_error(
+                    'indented text after a nested assertion. A property\'s continuation text must come '
+                    'right after its own line, before any nested `*` assertions (move it up, or put it '
+                    'in a `::` text reference)', i + 1, line)
+            i += 1
+            continue
+        owner_ind, owner_idx = owner
+        cls = _classify_owner(lines[owner_idx])
+        if cls is None:
+            i += 1
+            continue
+        if isinstance(cls, str):
+            raise _continuation_error(f'indented text continues `{lines[owner_idx].strip()}`, but {cls}.',
+                                      i + 1, line)
+        first, inline_id, prefix = cls
+
+        # Collect the continuation: indented lines (deeper than the bullet, not bullets), blanks kept.
+        j, block = i, []
+        while j < len(lines):
+            ln = lines[j]
+            if not ln.strip():
+                block.append('')
+                j += 1
+                continue
+            if _indent_of(ln) < owner_ind + 2 or _BULLET_LINE.match(ln):
+                break
+            block.append(ln)
+            j += 1
+        while block and block[-1] == '':   # trailing blank lines separate; they aren't the value's
+            block.pop()
+            j -= 1
+        body = textwrap.dedent('\n'.join(block))
+        if first:
+            leading = sum(1 for k in range(owner_idx + 1, i) if not lines[k].strip())
+            value = first + '\n' + '\n' * leading + body
+        else:
+            value = body
+        key = f'{_SENTINEL}{len(folded)}'
+        folded[key] = value
+        lines[owner_idx] = f'{prefix} "{key}"' + (f' [={inline_id}]' if inline_id else '')
+        for k in range(owner_idx + 1, j):
+            lines[k] = ''
+        i = j
+    return '\n'.join(lines), folded
 
 
 _SCHEME_RE = re.compile(r'^[a-zA-Z][a-zA-Z0-9+\-.]*:')

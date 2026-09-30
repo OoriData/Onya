@@ -141,7 +141,22 @@ Reserved interpretation names are `number`, `datetime`, `boolean`, `iri`, `text`
 
 ### Long text
 
-A single-line value can be arbitrarily long — just write it after the `:` (quote it if it contains characters that need protecting). For **multi-line** prose, use a **text reference** (`::`): the property names a reference, and the reference is defined anywhere in the file with a triple-quoted block.
+A single-line value can be arbitrarily long — just write it after the `:` (quote it if it contains characters that need protecting). For **multi-line** prose, either continue the value on indented lines, as in a Markdown list item, or use a text reference.
+
+**Indented continuation** is the more readable form. Lines indented at least 2 spaces past the bullet (4 works too) that don't start with `* ` continue the value, with or without a blank line first:
+
+```
+# CAchebe [Person]
+* bio: Chinua Achebe (1930–2013) was a Nigerian writer.
+
+    Known for Things Fall Apart, he wrote about African life from an African perspective.
+  * @as: text
+* birthDate: "1930-11-16"
+```
+
+The value is kept exactly: newlines and blank lines as written, and indentation relative to the continuation block. Put directives and nested assertions (`@as`, `@id`, `* note: …`) *after* the text. An inline `[=id]` or a comment stays on the first line. It works for properties with an unquoted (or empty) first line; not for edges or quoted values. Unindented text never continues a value: it's a parse error, so stray prose is caught rather than swallowed.
+
+**A text reference** (`::`) suits content that indentation would mangle, such as text whose own lines start with `* `. The property names a reference, and the reference is defined anywhere in the file with a triple-quoted block.
 
 ```
 * bio:: achebe-bio
@@ -151,7 +166,7 @@ A single-line value can be arbitrarily long — just write it after the `:` (quo
 Triple-quoted content preserves whitespace and newlines exactly, across paragraphs."""
 ```
 
-The stored value is the *inner* content (the `"""` delimiters are stripped). A reference name must start with a letter, and may be reused by several properties. (There is no bare indented-continuation form — a value that spans lines must go through a `::` reference. `write()` emits multi-line values this way automatically, so they round-trip.)
+The stored value is the *inner* content (the `"""` delimiters are stripped). A reference name must start with a letter, and may be reused by several properties. `write()` emits multi-line values as text references by default; `write(..., multiline='indent')` uses indented continuation instead, falling back to a text reference for a value that form can't represent exactly.
 
 ### Comments
 
@@ -339,6 +354,7 @@ Downstream code shouldn't hand-roll "find the node the user named" or reverse-ed
 - **Treating values as typed.** Everything is a string. Don't expect `age: 28` to be a number; if order/typing matters, that's a layer above the core model.
 - **Compound labels and parenthetical values.** `ex:gdp2025`, `homePhone`, `"180 cm"`, `"1815 (approx.)"`: split into a base label or clean value plus nested qualifiers (see *Good knowledge primitives*).
 - **Inventing a node for every relationship.** Reify with a nested assertion on the edge instead, unless the relationship is a real entity.
+- **Tab characters.** Don't emit tabs in Onya Literate: indent with spaces (2 or 4 per level), and if a value genuinely contains a tab, write it as `\t` inside a quoted value (`* d: "col1\tcol2"`). The parser does handle tabs the Markdown way (a tab in leading indentation counts to the next multiple of 4 columns; a tab inside a value is kept as a tab), but tabs are invisible in review, render differently across editors, and mixing them with spaces makes nesting hard to see.
 - **Unquoted special values.** Leading-zero ISBNs, `YYYY-MM` dates, codes → quote them.
 - **Forgetting to define an edge target.** Every `-> Foo` needs a `# Foo` block.
 

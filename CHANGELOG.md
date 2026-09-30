@@ -6,17 +6,20 @@ For interim changes not yet earmarked for a particular release, can use this hea
 ## [Unreleased]
 -->
 
-## [0.5.2] — Inline assertion ids (`[=name]`) in Onya Literate. Knowledge-primitive guidance in the Onya skill.
+## [0.5.2] 2026-09-30: Inline assertion ids (`[=name]`) in Onya Literate. Knowledge-primitive guidance in the Onya skill.
 
 ### Added
 
 - **Inline assertion ids in Onya Literate: `* knows -> Ify [=chuks-ify-friendship]`** — parser-level sugar for a nested `* @id: chuks-ify-friendship`, keeping the name on the line it names (the `=` distinguishes it from a type bracket). It works on edges and properties, at any nesting depth and in the docheader, after an unquoted value, a quoted value, or an explicit `<IRI>`. Both forms parse to identical graphs (tested pairwise); `write()` still emits the normative nested form. An unquoted value that should literally end in ` [=x]` must be quoted, and an assertion carrying both an inline and a nested id is a `LiterateSyntaxError`. Id collisions are caught exactly as for nested `@id` (`AssertionIdConflict`). SPEC § Assertion Identifiers documents the form. (#18)
 
+- **Indented-text continuation for multi-line values (SPEC § Long Text).** The SPEC documented it, but the parser never implemented it: the SPEC's own example raised `LiterateSyntaxError`. Lines indented at least 2 spaces past a property's bullet (4 works too) that don't start with `* ` continue its value, with or without a blank line first, as in a Markdown list item. The value is preserved exactly: newlines and runs of blank lines as written, and indentation relative to the continuation block. The first line may be empty. Directives and nested assertions (`@as`, `@id`, `* note:`) follow the text, and an inline `[=id]` or comment stays on the first line. Indented text under an edge, a quoted or `<IRI>` value, a `::` text reference, or after a nested assertion is a `LiterateSyntaxError` (category `continuation`). Unindented stray text keeps its existing diagnostic, so it's never silently folded into a value. The form parses to the same graph as a `::` text reference. Removed the unused `parse_multiline_text` helper.
+- **`write(..., multiline='indent')`** emits multi-line values in that form instead of `::` text references (still the default). A value the indented form can't represent exactly falls back to a text reference: a trailing newline, a leading-whitespace or empty first line, a line that would read as a bullet, a whitespace-only line, uniformly indented continuation lines, or a leading comment line. Fuzz-tested: wherever the text-reference form round-trips, the indented form does too.
+
 ### Changed
 
 - **Blank lines between a node's assertions are allowed** — a Markdown "loose list", which people and LLMs write naturally. Previously a blank line ended the node block's assertion list, so the next bullet failed to parse (with a misleading message). The block now continues until the next `#` header; no document that parsed before changes meaning. That includes the docheader: a bullet after a blank line under `# @docheader`, previously an "assertion outside a node block" error, is now a document-node assertion. SPEC § Node Blocks states the rule.
 - **Requires `Amara>=4.1.0`** (was `>=4.0.1`). Amara 4.0.x raised `NameError` instead of `ValueError` for an invalid IRI, which masked Onya's own error handling.
-- **Onya skill (`onya-graph.SKILL.md`): guidance for good knowledge primitives** in generated graphs. Keep labels atomic and values clean, with qualifiers (time, unit, kind, source, certainty) as nested assertions rather than compound labels (`ex:gdp2025`) or parenthetical asides in values (`"5,000,000 (2024 est.)"`). Keep same-valued qualifier bundles from merging together by giving each an inline assertion id.
+- **Onya skill (`onya-graph.SKILL.md`): guidance for good knowledge primitives** in generated graphs. Keep labels atomic and values clean, with qualifiers (time, unit, kind, source, certainty) as nested assertions rather than compound labels (`ex:gdp2025`) or parenthetical asides in values (`"5,000,000 (2024 est.)"`). Keep same-valued qualifier bundles from merging together by giving each an inline assertion id. Also: don't emit tab characters (indent with spaces; write a real tab as `\t` in a quoted value). The parser handles tabs the Markdown way, but they're invisible in review and make nesting ambiguous when mixed with spaces.
 
 ### Fixed
 
