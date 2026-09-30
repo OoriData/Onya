@@ -354,6 +354,7 @@ Downstream code shouldn't hand-roll "find the node the user named" or reverse-ed
 - **Treating values as typed.** Everything is a string. Don't expect `age: 28` to be a number; if order/typing matters, that's a layer above the core model.
 - **Compound labels and parenthetical values.** `ex:gdp2025`, `homePhone`, `"180 cm"`, `"1815 (approx.)"`: split into a base label or clean value plus nested qualifiers (see *Good knowledge primitives*).
 - **Inventing a node for every relationship.** Reify with a nested assertion on the edge instead, unless the relationship is a real entity.
+- **Tab characters.** Don't emit tabs in Onya Literate: indent with spaces (2 or 4 per level), and if a value genuinely contains a tab, write it as `\t` inside a quoted value (`* d: "col1\tcol2"`). The parser does handle tabs the Markdown way (a tab in leading indentation counts to the next multiple of 4 columns; a tab inside a value is kept as a tab), but tabs are invisible in review, render differently across editors, and mixing them with spaces makes nesting hard to see.
 - **Unquoted special values.** Leading-zero ISBNs, `YYYY-MM` dates, codes → quote them.
 - **Forgetting to define an edge target.** Every `-> Foo` needs a `# Foo` block.
 

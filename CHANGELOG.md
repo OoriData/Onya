@@ -6,7 +6,7 @@ For interim changes not yet earmarked for a particular release, can use this hea
 ## [Unreleased]
 -->
 
-## [0.5.2] — Inline assertion ids (`[=name]`) in Onya Literate. Knowledge-primitive guidance in the Onya skill.
+## [0.5.2] 2026-09-30: Inline assertion ids (`[=name]`) in Onya Literate. Knowledge-primitive guidance in the Onya skill.
 
 ### Added
 
@@ -19,7 +19,7 @@ For interim changes not yet earmarked for a particular release, can use this hea
 
 - **Blank lines between a node's assertions are allowed** — a Markdown "loose list", which people and LLMs write naturally. Previously a blank line ended the node block's assertion list, so the next bullet failed to parse (with a misleading message). The block now continues until the next `#` header; no document that parsed before changes meaning. That includes the docheader: a bullet after a blank line under `# @docheader`, previously an "assertion outside a node block" error, is now a document-node assertion. SPEC § Node Blocks states the rule.
 - **Requires `Amara>=4.1.0`** (was `>=4.0.1`). Amara 4.0.x raised `NameError` instead of `ValueError` for an invalid IRI, which masked Onya's own error handling.
-- **Onya skill (`onya-graph.SKILL.md`): guidance for good knowledge primitives** in generated graphs. Keep labels atomic and values clean, with qualifiers (time, unit, kind, source, certainty) as nested assertions rather than compound labels (`ex:gdp2025`) or parenthetical asides in values (`"5,000,000 (2024 est.)"`). Keep same-valued qualifier bundles from merging together by giving each an inline assertion id.
+- **Onya skill (`onya-graph.SKILL.md`): guidance for good knowledge primitives** in generated graphs. Keep labels atomic and values clean, with qualifiers (time, unit, kind, source, certainty) as nested assertions rather than compound labels (`ex:gdp2025`) or parenthetical asides in values (`"5,000,000 (2024 est.)"`). Keep same-valued qualifier bundles from merging together by giving each an inline assertion id. Also: don't emit tab characters (indent with spaces; write a real tab as `\t` in a quoted value). The parser handles tabs the Markdown way, but they're invisible in review and make nesting ambiguous when mixed with spaces.
 
 ### Fixed
 
