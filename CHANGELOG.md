@@ -23,6 +23,12 @@ For interim changes not yet earmarked for a particular release, can use this hea
 
 ### Fixed
 
+- **`read(write(g))` now preserves every string value exactly** (#50). Three kinds of ordinary values used to break it:
+  - **Tabs were silently turned into spaces on read**, in every value, hand-written or written by `write()`: pyparsing expanded tabs in its input to 8-column stops. Tabs are now expanded only in a line's leading indentation, the Markdown way, to **4**-column stops. A tab anywhere else, including throughout a `"""` text-reference body, stays a tab. Mixed tab/space indentation at one depth can nest differently than before: a tab and 4 spaces are now the same depth, where under 8 the tab was deeper.
+  - **A multi-line value ending in `"`** (`'…she said:\n"Not yet."'`) produced `""""` and a `LiterateSyntaxError` on read.
+  - **A multi-line value containing `"""`** couldn't be read back at all.
+
+  `write()` now picks the first form that reads back exactly: the requested multi-line form, else a quoted single-line value with `\n`/`\t`/`\r` escapes, which holds any string. It never emits a literal tab. Single-line values starting with `'` or `<`, or containing `<!--`, are now quoted too: they used to read back as a single-quoted string, an explicit IRI, or a stripped comment. Covered by a hypothesis property test over adversarial strings, in both `multiline` modes and nested; a seeded 2,575-value fuzz that previously failed 960 times now passes. SPEC § Serialization states the guarantee and the form rules, and SPEC § Node Blocks the tab rule.
 - **Trailing HTML comments no longer leak into unquoted values.** `* name: X  <!-- note -->` stored the comment text in the value, contrary to SPEC § Comments, and `* author -> CAchebe  <!-- note -->` failed outright, because the comment became part of the target IRI. Quoted and `<IRI>` values already dropped theirs. Only *trailing* comments are stripped; quote a value to keep comment-like text in it.
 - **Comments are allowed after a node header**: `# TFA [Book]  <!-- note -->` used to be a parse error.
 - **A comment's closing `-->` is no longer reported as a stray edge arrow.** When a line failed to parse for another reason, the stray-arrow check read the comment's `-->` as an ASCII long arrow and gave a misleading `EdgeArrowError`. In `lenient_arrows` mode it could also rewrite the comment itself. Arrows inside comments are now ignored.
