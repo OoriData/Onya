@@ -82,12 +82,32 @@ def _format_value(val, nodebase: str | None, prefixes: dict[str, str]) -> str:
             return inner
         return compact_iri(str(val), prefixes)
     s = str(val)
-    if re.search(r'[\s:"\\]', s) or s == '':
-        # Quote and escape so the parser's QuotedString (esc_char='\\') recovers the value
-        # byte-for-byte. Multi-line values never reach here — they go via a text reference.
-        esc = s.replace('\\', '\\\\').replace('"', '\\"')
-        return f'"{esc}"'
+    if re.search(r'[\s:"\\]', s) or s == '' or s[0] in '\'<' or '<!--' in s:
+        return _quote(s)
     return s
+
+
+def _quote(s: str) -> str:
+    '''
+    A double-quoted value the parser's `QuotedString` (esc_char `\\`, whitespace escapes on)
+    recovers byte-for-byte, for *any* string: `\\` and `"` escaped, and newline, tab and carriage
+    return written as `\\n`, `\\t`, `\\r`, so the value fits on one line and no tab reaches the
+    file. (A leading `'` or `<` would otherwise read as a single-quoted value or an explicit IRI, and
+    an unquoted `<!--…-->` as a trailing comment.)
+    '''
+    esc = (s.replace('\\', '\\\\').replace('"', '\\"')
+           .replace('\n', '\\n').replace('\t', '\\t').replace('\r', '\\r'))
+    return f'"{esc}"'
+
+
+def _textref_representable(value: str) -> bool:
+    '''
+    Can ``value`` be a `"""` text reference body and read back exactly? Not if it holds the
+    delimiter, or ends in a quote (which would merge with the closing `"""`), or has a carriage
+    return (a line ending, not reliably content), or a tab (`write()` never emits a literal tab;
+    the quoted form spells it `\\t`).
+    '''
+    return '"""' not in value and not value.endswith('"') and '\r' not in value and '\t' not in value
 
 
 def _format_interp(interp, prefixes: dict[str, str]) -> str:
@@ -123,9 +143,13 @@ def _indent_representable(value: str) -> bool:
         return False                      # a comment line before the text starts is read as a comment
     if not lines[-1].strip():
         return False                      # trailing blank lines/newlines are separators on read
+    if '\r' in value or '\t' in value:
+        return False                      # CR is a line ending; a tab is never emitted literally
     for ln in lines:
         if ln and not ln.strip():
             return False                  # whitespace-only line: de-indenting would empty it
+        if '\t' in ln[:len(ln) - len(ln.lstrip())]:
+            return False                  # a leading tab is indentation: it expands on read
         if re.match(r'\*[ \t]', ln.lstrip()):
             return False                  # would read as a nested bullet
     nonblank = [ln for ln in lines if ln]
@@ -138,7 +162,9 @@ def _write_prop_line(out, indent: str, label: str, value, nodebase, prefixes, te
     Write a property's ``* label: value`` line. A multi-line string value is emitted as a
     text reference (``* label:: _ltN``) with its content collected into ``textrefs`` for a
     trailing ``:_ltN = """..."""`` definition — or, with ``multiline='indent'``, as indented
-    continuation text under the bullet (SPEC § Long Text), when that reads back exactly.
+    continuation text under the bullet (SPEC § Long Text), when that reads back exactly. A value
+    neither multi-line form can hold (e.g. one containing `"""`, or ending in `"`) is written as
+    a quoted single-line value with `\\n`/`\\t` escapes, which represents any string.
     '''
     if isinstance(value, str) and '\n' in value and multiline == 'indent' and _indent_representable(value):
         first, _, rest = value.partition('\n')
@@ -146,11 +172,13 @@ def _write_prop_line(out, indent: str, label: str, value, nodebase, prefixes, te
         for ln in rest.split('\n'):
             out.write(f'{indent}    {ln}\n' if ln else '\n')
         return
-    if isinstance(value, str) and '\n' in value:
+    if isinstance(value, str) and '\n' in value and _textref_representable(value):
         name = f'lt{len(textrefs)}'  # text-ref names must start with a letter (parser IDENT)
         textrefs.append((name, value))
         out.write(f'{indent}* {label}:: {name}\n')
     else:
+        # Single-line values, and multi-line ones no multi-line form can hold exactly: a quoted
+        # value with escapes represents any string.
         out.write(f'{indent}* {label}: {_format_value(value, nodebase, prefixes)}\n')
 
 

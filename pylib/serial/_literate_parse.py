@@ -390,7 +390,7 @@ class LiterateParser:
         doc.text_refs = {}  # Initialize the text references dictionary
         doc.pending_edges = []  # Edge targets are resolved after all @id declarations are seen
 
-        lit_text, folded = _fold_continuations(lit_text)
+        lit_text, folded = _fold_continuations(_expand_structural_tabs(lit_text))
         token = _FOLDED.set(folded)
         try:
             parsed = self._parse_string(lit_text)
@@ -744,6 +744,10 @@ node_seq    = OneOrMore(
                         (node_block | text_ref_def) + Optional(White('\n')).suppress() + \
                             Suppress(ZeroOrMore(blank_to_eol))
                     )
+# Keep tabs: pyparsing otherwise expands every tab in the input (to 8-column stops), silently turning
+# tabs *inside values* into spaces. Structural indentation is expanded beforehand, the Markdown way
+# (`_expand_structural_tabs`).
+node_seq.parse_with_tabs()
 
 def _make_text_ref_tree(string, location, tokens):
     '''
@@ -780,8 +784,32 @@ value_expr.set_parse_action(_make_value)
 _FOLDED: contextvars.ContextVar[dict | None] = contextvars.ContextVar('onya_folded_values', default=None)
 _SENTINEL = '\ue000'  # private-use: never produced by a valid document's own quoted values
 _BULLET_LINE = re.compile(r'^([ \t]*)\*[ \t]')
-_PROP_HEAD = Optional(White(' \t').leave_whitespace(), '') + Suppress('*' + White()) + ASSERTION_LABEL + ':'
-_ASSERTION_LINE = prop_text_ref | prop | edge
+_PROP_HEAD = (Optional(White(' \t').leave_whitespace(), '') + Suppress('*' + White()) + ASSERTION_LABEL + ':') \
+    .parse_with_tabs()  # offsets must index the raw line
+_ASSERTION_LINE = (prop_text_ref | prop | edge).parse_with_tabs()
+
+
+def _expand_structural_tabs(text: str) -> str:
+    '''
+    Expand tabs in each line's *leading* whitespace to 4-column stops, as Markdown does for block
+    structure, so indentation (and hence nesting) is measured in columns. Tabs anywhere else are
+    left alone, so a tab inside a value stays a tab, and so are the body lines of a `"""` text
+    reference, which are value, not structure.
+    '''
+    lines = text.split('\n')
+    in_textref = False
+    for i, line in enumerate(lines):
+        if in_textref:
+            in_textref = '"""' not in line
+            continue
+        s = line.lstrip(' \t')
+        if line[:1] not in (' ', '\t') and s.startswith(':') and s.count('"""') % 2 == 1:
+            in_textref = True
+            continue
+        k = len(line) - len(s)
+        if '\t' in line[:k]:
+            lines[i] = line[:k].expandtabs(4) + s
+    return '\n'.join(lines)
 
 
 def _indent_of(line: str) -> int:

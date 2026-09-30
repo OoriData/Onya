@@ -504,6 +504,10 @@ Structure:
 - Indentation indicates nested assertions
 - Blank lines between a node's assertions are allowed (a Markdown "loose list"); the block
   continues until the next `#` header
+- **Tabs follow Markdown.** In a line's leading indentation, a tab counts to the next multiple of 4
+  columns (so a tab and 4 spaces are the same depth). Anywhere else, including inside a quoted or
+  unquoted value and anywhere in a `"""` text-reference body, a tab is kept as a tab. Writers
+  should prefer spaces for indentation and `\t` in a quoted value for a tab
 
 ## Example: Things Fall Apart
 
@@ -661,6 +665,9 @@ Graphs can be written back to Onya Literate with `write()`. Supply the same base
 - `bracket_curie` — if true, non-schema labels use `<prefix:local>`; default is `prefix:local` (e.g. `acme:contactPoint`)
 - `bracket_types` — if true, types use bracketed CURIE form in headers
 - `strict_namespace_bases` — if true, raise `NamespaceBaseError` on a separator-less `schema`/`nodebase` instead of normalizing + warning (see Round-trip guarantee below)
+- `multiline` — how multi-line property values are written: `'textref'` (default, a `::` text reference) or `'indent'` (indented continuation text, see [Long Text Blocks](#long-text-blocks))
+
+**How a value is written.** `write()` picks the first form that reads back exactly: the requested multi-line form, when it can hold the value; otherwise a double-quoted value with escapes (`\\`, `\"`, `\n`, `\t`, `\r`), which can hold any string. A text reference can't hold a value containing `"""`, one ending in `"` (it would merge with the closing delimiter), or one containing a tab or carriage return. A single-line value is written bare when that is unambiguous, and quoted otherwise: whitespace, `:`, `"`, `\`, a leading `'` or `<`, or a `<!--`. `write()` never emits a literal tab.
 
 An assertion's `@id` and `@as` are emitted as nested directive lines at every depth. `@as` is currently always emitted inline on each property (no generated `@interpretations` factoring), with interpretation IRIs rendered back to reserved bare names or declared abbreviations where they apply. The writer never consults an interpretation registry: serialization is a model operation, and its output must not vary with installed plugins.
 
@@ -668,7 +675,7 @@ Document-node assertions are emitted as top-level `@docheader` bullets through t
 
 ### Round-trip guarantee
 
-`read` and `write` are inverses: `read(write(g))` yields a graph equal to `g` (nodes, types, properties, edges, nested assertions, `@id`s, and interpretations). This holds for **any** namespace arguments to `write`, because bare-name compaction is applied only to IRIs that genuinely live under a declared base, and every other IRI falls back to explicit `<full-iri>` form. Two consequences:
+`read` and `write` are inverses: `read(write(g))` yields a graph equal to `g` (nodes, types, properties, edges, nested assertions, `@id`s, and interpretations). **Every string value is preserved exactly**, in either `multiline` mode, whatever it contains: newlines and blank runs, tabs, quotes and `"""`, backslashes, comment markers, and lines that look like bullets or headers. This holds for **any** namespace arguments to `write`, because bare-name compaction is applied only to IRIs that genuinely live under a declared base, and every other IRI falls back to explicit `<full-iri>` form. Two consequences:
 
 - **The precondition is separator-terminated bases.** Bare node ids, labels, and types join `@nodebase`/`@schema`/`@typebase` by pure concatenation (see [Vocabulary prefixes](#vocabulary-prefixes-iri)), so a base must end in `/`, `#`, or `?`; otherwise reparse mints mashed IRIs (`…/vocab` + `title` → `…/vocabtitle`). `write` guarantees this on output: a separator-less `schema`/`nodebase` is normalized (append `/`) with a warning — parity with the parser's read-side check — or raises `NamespaceBaseError` under `write(..., strict_namespace_bases=True)`.
 - **Faithfulness does not require the *original* convention; readability does.** With no namespace hints, `write` emits everything in explicit `<full-iri>` form — correct, but verbose. Recovering the compact authoring convention (bare schema names, CURIE prefixes) requires the docheader namespaces the graph no longer remembers; `read` returns them on `ParseResult` (`schema`, `nodebase`, `typebase`, `prefixes`) precisely so a consumer can re-serialize with `write(..., schema=r.schema, nodebase=r.nodebase, prefixes=r.prefixes)`. A store that re-serializes on write (e.g. `put(merge=True)`) preserves an authored file's convention this way, keeping the on-disk form stable and diff-friendly across round trips.
