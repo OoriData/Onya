@@ -83,7 +83,6 @@ Indent a list item under another to attach it to that assertion rather than the 
 * name: Boston
   * stateCode: "MA"          <!-- property OF the name assertion -->
   * country -> USA
-
 * temperature: "25"          <!-- qualified value -->
   * unit: Celsius
   * measurementMethod -> InfraredThermometer
@@ -105,7 +104,18 @@ By default an assertion is **anonymous** — its identity is just its shape (ori
 * about -> chuks-knows-ify     <!-- edge target is the assertion above, not a new node -->
 ```
 
-`@id` is a directive, not a property (it names its enclosing assertion; it does not add a `@id` property). Identifiers **share the node id space** — an `@id` must not collide with a node id or another assertion's `@id` (a duplicate within one document raises `AssertionIdConflict`). References resolve regardless of order, so you can point at an `@id` defined later in the file. Reach for `@id` only when a claim is genuinely referenced; most reification stays anonymous nested assertions.
+**Inline form: prefer it.** `[=name]` at the end of the assertion line means exactly the same as a nested `* @id: name`, and keeps the name on the line it names:
+
+```
+# Chuks [Person]
+* knows -> Ify [=chuks-knows-ify]
+  * since: "2018"
+* name: Chukwuemeka Okafor [=chuks-name]     <!-- works on properties too, quoted or not -->
+```
+
+The `=` is required (a bare `[name]` would read like a type bracket). Use one form or the other on a given assertion, not both (a parse error). An unquoted value that should literally end in ` [=x]` must be quoted. `write()` emits the nested `* @id:` form, which is the normative one; the two parse to identical graphs.
+
+`@id` is a directive, not a property (it names its enclosing assertion; it does not add a `@id` property). Identifiers **share the node id space** — an `@id` must not collide with a node id or another assertion's `@id` (a duplicate within one document raises `AssertionIdConflict`). References resolve regardless of order, so you can point at an `@id` defined later in the file. Reach for `@id` when a claim is genuinely referenced, or when its nested qualifiers must stay bound together (see *Keep qualifier bundles apart* below); otherwise reification stays anonymous nested assertions.
 
 ### Data contracts: interpretations (`@as`)
 
@@ -153,11 +163,84 @@ HTML comments `<!-- … -->` are ignored by the parser (and by Markdown renderer
 2. **Set the docheader.** Choose a real, stable `@document` IRI and a `@nodebase`. Use readable, slug-style node ids (`CAchebe`, `acme-cp-main`), not opaque numbers.
 3. **One block per distinct entity.** Give each a type. Pull entities (people, orgs, places, works, events) into nodes; pull their attributes into properties; pull relationships into edges to other nodes.
 4. **Normalize references.** If two mentions are the same thing, use one node id for both. Make edge targets actual nodes you define.
-5. **Use nesting for relationship/value metadata**, not parallel scaffolding nodes.
+5. **Use nesting for relationship/value metadata**, not parallel scaffolding nodes. Keep labels atomic and values clean: no years, units, kinds or sources baked into a label name, and no parenthetical asides in a value (see *Good knowledge primitives* below).
 6. **Quote ambiguous scalars** — ISBNs, dates, codes, anything with leading zeros or special characters.
 7. **Validate by parsing** (below) before reporting done.
 
 Keep the graph faithful to the source: don't invent facts to fill out a type's expected properties. If the document doesn't state a birthDate, leave it out.
+
+## Good knowledge primitives: atomic labels, clean values
+
+Generators (LLMs especially) tend to pack qualifiers into the *label* (`ex:gdp2025`, `homePhone`) or into the *value* (`"5,000,000 (2024 est.)"`). Both hide facts where no tool can reach them. **A label names one relation; a value holds one value; every qualifier (when, where, which unit, which kind, how sure, according to whom) is its own nested assertion.** Nesting is how Onya expresses a qualified statement, so use it.
+
+**Compound labels → base label plus nested qualifiers:**
+
+| Instead of | Write |
+|---|---|
+| `ex:gdp2025: "30.5e12"` | `ex:gdp: "30.5e12"` with nested `temporalCoverage: "2025"` |
+| `ex:populationFemale: …` | `ex:population: …` with nested `ex:subgroup -> ex:Female` |
+| `ex:priceUSD: "12.50"` | `price: "12.50"` plus `priceCurrency: USD` (schema.org already has it) |
+| `homePhone`, `workPhone` | `telephone: …` with nested `ex:use -> ex:Home` / `ex:use -> ex:Work` |
+| `ex:heightCm: "180"` | `height: "180"` with nested `unitCode: CMT` |
+| `ex:currentCeo -> X`, `ex:formerCeo -> Y` | `ex:ceo -> X` with nested `startDate` (and `endDate` for Y) |
+| `ex:firstAuthor`, `ex:secondAuthor` | `author -> X` with nested `position: "1"` |
+| `ex:estimatedRevenue` | `ex:revenue` with nested `@method` / `@confidence` (the reserved provenance vocabulary) |
+
+**Parentheticals and asides in values → the same move.** The value is just the value; the aside is a qualifier or an entity:
+
+| Instead of | Write |
+|---|---|
+| `population: "5,000,000 (2024 est.)"` | `population: "5000000"` (`@as: number`) with nested `temporalCoverage: "2024"` and `ex:status -> ex:Estimate` |
+| `height: "180 cm"` | `height: "180"` with nested `unitCode: CMT` |
+| `birthDate: "1815 (approx.)"` | `birthDate: "1815"` with nested `ex:precision -> ex:Approximate` |
+| `email: "ada@example.org (preferred)"` | `email: ada@example.org` with nested `ex:use -> ex:Primary` |
+| `honorificPrefix: "Countess (by marriage)"` | `honorificPrefix: Countess` with nested `ex:basis -> ex:Marriage` |
+| `location: "Paris (France)"` | an edge to a place node: `location -> paris`, where `# paris [City]` has `containedInPlace -> france` |
+| `worksFor: "Acme Corp (until 2019)"` | `worksFor -> acme` with nested `endDate: "2019"` |
+
+A worked example:
+
+```
+# usa [Country]
+* name: United States
+* ex:gdp: "29.2e12"
+  * @as: number
+  * temporalCoverage: "2024"
+  * unitCode: USD
+* ex:gdp: "30.5e12"
+  * @as: number
+  * temporalCoverage: "2025"
+  * unitCode: USD
+  * ex:status -> ex:Estimate
+```
+
+**Why it matters, concretely:**
+
+- **Queries and lookups work on the relation.** `g.select(label=EX('gdp'))` (with `EX = I('http://example.org/vocab/')`), a store's `match(label=...)`, and `g.search(labels=[...])` find every year's GDP. With `ex:gdp2019` … `ex:gdp2025` a consumer must enumerate or string-match label names: the fragile local-name matching the rest of the toolchain avoids.
+- **Views can choose among values.** `{ label = "ex:gdp", as = "latest_gdp", order_by = "-temporalCoverage" }` shows the most recent figure; `prefer = { label = "ex:use", target = "ex:Primary" }` picks the primary email. A compound label or a parenthetical gives them nothing to rank by.
+- **Values stay typed.** `"5000000"` with `@as: number` is a number to every consumer (`onya.interp.value_of`); `"5,000,000 (2024 est.)"` is only ever a string.
+- **Vocabularies line up.** `temporalCoverage`, `priceCurrency`, `unitCode`, `startDate`, `position` already exist in schema.org, so graphs from different sources agree. A minted `ex:gdp2025` matches nothing, not even `ex:gdp2024`.
+
+**Keep qualifier bundles apart when values can coincide.** Anonymous assertions with the same label and value *merge* (Rule 2), and their nested qualifiers union. So two sources both reporting population `"5000000"`, one for 2023 from a census bureau and one for 2024 from the UN, become one assertion carrying both years and both sources, and which year goes with which source is lost. When qualifiers must stay bound to one another, give each qualified assertion an id. An identified assertion merges only with another occurrence of the *same* id, never with an anonymous or differently-identified one (Rules 1 and 3). The inline form makes this cheap:
+
+```
+# nigeria [Country]
+* ex:population: "5000000" [=nigeria-pop-2023]
+  * @as: number
+  * temporalCoverage: "2023"
+  * ex:source -> ex:CensusBureau
+* ex:population: "5000000" [=nigeria-pop-2024]
+  * @as: number
+  * temporalCoverage: "2024"
+  * ex:source -> ex:UNData
+```
+
+Choose ids that say what the bundle is (`nigeria-pop-2024`), so a second extraction of the same fact from the same source reuses the id and merges as intended, while a different year or source never does. Alternatively, model the figure as an observation node (below).
+
+**When a compound label is fine, and when to use a node instead:**
+
+- **Use established terms as they are.** `birthDate`, `foundingDate` and `priceCurrency` are atomic *in their vocabulary*; don't split them into `birth` + a date qualifier. The test: would the qualifier plausibly vary across values of the same relation (different years, units, kinds, sources)? If so, it's a qualifier, not part of the label.
+- **Use a node when the qualified thing is itself an entity** that others refer to, or whose qualifiers need their own qualifiers: a census release, a dataset, a statistical observation (`# usa-gdp-2025 [Observation]`). Its properties still follow the same rule: atomic labels, clean values.
 
 ## Validate by parsing
 
@@ -254,6 +337,7 @@ Downstream code shouldn't hand-roll "find the node the user named" or reverse-ed
 - **Trailing slash on an `@iri` CURIE base.** CURIEs (`prefix:Local`, `<prefix:local>`) expand by RDF/XML rules: Onya inserts a `/` only when the base lacks a trailing `/`, `#`, or `?`. So write `@iri` prefix bases **without** a trailing slash unless the vocabulary IRIs genuinely end in one — `acme: https://acme.example/kg/schema` with `acme:Client` yields `…/schema/Client`. (Contrast the bullet above: bare names against `@schema`/`@nodebase` are *not* separator-inserted, so those bases must carry their own trailing separator.)
 - **Confusing `@nodebase` and `@schema`.** Node ids resolve against `@nodebase`; labels and types against `@schema`. They are different bases.
 - **Treating values as typed.** Everything is a string. Don't expect `age: 28` to be a number; if order/typing matters, that's a layer above the core model.
+- **Compound labels and parenthetical values.** `ex:gdp2025`, `homePhone`, `"180 cm"`, `"1815 (approx.)"`: split into a base label or clean value plus nested qualifiers (see *Good knowledge primitives*).
 - **Inventing a node for every relationship.** Reify with a nested assertion on the edge instead, unless the relationship is a real entity.
 - **Unquoted special values.** Leading-zero ISBNs, `YYYY-MM` dates, codes → quote them.
 - **Forgetting to define an edge target.** Every `-> Foo` needs a `# Foo` block.

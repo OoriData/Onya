@@ -27,7 +27,7 @@ classifiers = [
 dynamic = ['version']
 
 dependencies = [
-    'Amara>=4.0.1',
+    'Amara>=4.1.0',  # 4.1.0: invalid IRIs raise ValueError (4.0.x raised NameError)
     # 'Amara @ git+https://github.com/OoriData/Amara.git@main',
     'pyparsing',   # Parser for Onya Literate format
     'fire',        # CLI framework (used by the onya console script)

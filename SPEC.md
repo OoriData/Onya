@@ -116,6 +116,24 @@ target:
 `@id` resolves into the same space as node IDs. It is a
 parse-time error for an `@id` to collide with a node ID, or with another assertion's `@id`.
 
+**Inline form.** An assertion line may instead end with `[=name]`, which is
+exactly equivalent to a nested `@id: name` as that assertion's first child:
+
+```
+# Chuks [Person]
+
+* knows -> Ify [=chuks-ify-friendship]
+  * startDate: 2018-03-15
+```
+
+The `=` distinguishes it from a type bracket. The suffix is recognized after
+an unquoted value (separated by whitespace), after a quoted value, and after an
+explicit `<IRI>`. An unquoted value that should literally end in ` [=name]`
+must be quoted. An assertion may not carry both an inline id and a nested
+`@id` (a parse-time error, since an assertion has at most one identifier).
+The inline form is purely syntactic: both forms produce the same graph, and
+serialization emits the nested form, which is normative.
+
 ### Identity and graph merge
 
 An assertion's **skeleton** is the triple of (origin, label, target) for an
@@ -364,6 +382,8 @@ Comments use HTML comment syntax:
 
 These are ignored by the parser and do not appear in the graph in any way. They will also be ignored by most markdown processors.
 
+A comment may follow an assertion's value or a node header on the same line (`* author -> CAchebe  <!-- the novelist -->`, `# TFA [Book]  <!-- … -->`). To keep text that looks like a comment *as part of* a value, quote the value (`* note: "see <!-- here -->"`).
+
 ## Document Header
 
 ```
@@ -482,6 +502,8 @@ Structure:
   - `label -> TargetID` - edge (label is IRI, TargetID is node ID).
     The Unicode arrow `→` (U+2192) is accepted as a synonym for `->`.
 - Indentation indicates nested assertions
+- Blank lines between a node's assertions are allowed (a Markdown "loose list"); the block
+  continues until the next `#` header
 
 ## Example: Things Fall Apart
 

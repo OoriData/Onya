@@ -284,6 +284,19 @@ def _sync_schema_prefix(doc: doc_info) -> None:
 class value_info:
     verbatim: int = None    # Literal value input text
     typeindic: int = None   # Value type indicator (from value_type enum)
+    inline_id: str = None   # `[=name]` suffix: sugar for a nested `@id: name` (see SPEC: Assertion Identifiers)
+
+
+class _InlineId(str):
+    '''The name from an inline `[=name]` assertion-id suffix (parse-time marker only).'''
+
+
+# Trailing `[=name]` on an unquoted value: the value must be non-empty and separated by whitespace,
+# so a value that is itself `[=x]` stays literal text (quote a value to keep a literal `[=x]` suffix).
+_INLINE_ID_SUFFIX = re.compile(r'^(.*\S)\s+\[=([^\]\s]+)\]$')
+# Trailing HTML comments on an unquoted value. Comments never appear in the graph (SPEC: Comments);
+# quoted and `<IRI>` values already drop theirs in the grammar, but a rest-of-line value kept them.
+_TRAILING_COMMENTS = re.compile(r'(?:\s*<!--.*?-->)+\s*$', re.DOTALL)
 
 @dataclass
 class ParseResult:
@@ -442,12 +455,12 @@ class LiterateParser:
             try:
                 return node_seq.parse_string(text, parse_all=True)
             except ParseBaseException as exc:
-                match = _BAD_ARROW_RE.search(exc.line or '')
+                match = _BAD_ARROW_RE.search(_outside_comments(exc.line or ''))
                 if match is None:
                     # Not an arrow slip — translate the raw failure into an actionable message.
                     raise _diagnose_syntax(exc) from exc
                 arrow = match.group(0)
-                corrected = _BAD_ARROW_RE.sub('->', exc.line)
+                corrected = _fix_arrows(exc.line)
                 if not self.lenient_arrows:
                     raise EdgeArrowError(
                         f'line {exc.lineno}: {_describe_bad_arrow(arrow)} is not a valid Onya '
@@ -461,7 +474,7 @@ class LiterateParser:
                     stacklevel=3,
                 )
                 lines = text.split('\n')
-                lines[exc.lineno - 1] = _BAD_ARROW_RE.sub('->', lines[exc.lineno - 1])
+                lines[exc.lineno - 1] = _fix_arrows(lines[exc.lineno - 1])
                 text = '\n'.join(lines)
         # Reached only if lenient rewrites never converge; surface a friendly diagnostic.
         try:
@@ -520,16 +533,19 @@ def _make_value(string, location, tokens):
     Parse action to make sure the right type of value is created during parse
     '''
     val = tokens[0]
+    inline_id = next((str(t) for t in tokens[1:] if isinstance(t, _InlineId)), None)
     # Must check IRI first, since it is a subclass of str
     if isinstance(val, I):
         typeindic = value_type.RES_VAL
     elif isinstance(val, LITERAL):
         typeindic = value_type.TEXT_VAL
     elif isinstance(val, str):
-        val = val.strip()
+        val = _TRAILING_COMMENTS.sub('', val).strip()
         typeindic = value_type.UNKNOWN_VAL
+        if (m := _INLINE_ID_SUFFIX.match(val)) is not None:  # unquoted value with a `[=name]` suffix
+            val, inline_id = m.group(1), m.group(2)
 
-    return value_info(verbatim=val, typeindic=typeindic)
+    return value_info(verbatim=val, typeindic=typeindic, inline_id=inline_id)
 
 
 def literal_parse_action(toks):
@@ -568,6 +584,20 @@ BAD_EDGE_ARROWS = {
 }
 # Longest tokens first so `-->` wins over any `->`-like prefix scan (matters for the sub()).
 _BAD_ARROW_RE = re.compile('|'.join(re.escape(a) for a in sorted(BAD_EDGE_ARROWS, key=len, reverse=True)))
+
+
+_COMMENT_SPAN = re.compile(r'(<!--.*?-->)', re.DOTALL)
+
+
+def _outside_comments(line: str) -> str:
+    '''`line` with its HTML comments blanked, so a comment's closing `-->` is never read as an arrow.'''
+    return _COMMENT_SPAN.sub(lambda m: ' ' * len(m.group(0)), line)
+
+
+def _fix_arrows(line: str) -> str:
+    '''Rewrite stray arrows to `->`, leaving HTML comments (and their `-->`) intact.'''
+    return ''.join(part if _COMMENT_SPAN.fullmatch(part) else _BAD_ARROW_RE.sub('->', part)
+                   for part in _COMMENT_SPAN.split(line))
 
 
 def _describe_bad_arrow(arrow: str) -> str:
@@ -668,7 +698,13 @@ ASSERTION_LABEL = MatchFirst((explicit_iriref, CURIE_LABEL, IDENT_KEY, IRIREF))
 # Text reference definition: :name = '''content'''
 text_ref_def    = Suppress(':') + IDENT + Suppress('=') + TRIPLE_QUOTED_STRING
 
-value_expr      = ( explicit_iriref + Suppress(ZeroOrMore(COMMENT)) ) | ( QUOTED_STRING + Suppress(ZeroOrMore(COMMENT)) ) | rest_of_line  # noqa: E501
+# Inline assertion id, `[=name]`, after a quoted or explicit-IRI value (same line only; an unquoted
+# value's suffix is split off in `_make_value`). Sugar for a nested `@id: name`.
+INLINE_ID       = Regex(r'\[=[^\]\s]+\]').set_whitespace_chars(' \t') \
+                    .set_parse_action(lambda tokens: _InlineId(tokens[0][2:-1]))
+value_expr      = ( explicit_iriref + Optional(INLINE_ID) + Suppress(ZeroOrMore(COMMENT)) ) \
+                  | ( QUOTED_STRING + Optional(INLINE_ID) + Suppress(ZeroOrMore(COMMENT)) ) \
+                  | rest_of_line
 prop            = Optional(White(' \t').leave_whitespace(), '') + Suppress('*' + White()) + \
                     ASSERTION_LABEL + Suppress(':') + Optional(value_expr, None)
 # Text reference property: label:: reference_name
@@ -678,8 +714,17 @@ edge            = Optional(White(' \t').leave_whitespace(), '') + Suppress('*' +
                     ASSERTION_LABEL + Suppress(RIGHT_ARROW) + Optional(value_expr, None)
 # Optional so an assertion-less ("empty") node block parses; Group keeps propset present
 # (as an empty result) for the fixed-arity unpack in process_nodeblock.
-propset         = Group(Optional(DelimitedList(prop_text_ref | prop | edge | COMMENT, delim='\n')))
-node_header = Word('#') + Optional(IRIREF, None) + Optional(QuotedString('[', end_quote_char=']'), None)
+# Assertions are separated by a newline plus any number of blank (whitespace-only) lines: a blank
+# line between bullets is an ordinary Markdown "loose list" and doesn't end the node block (the next
+# block always starts with `#`, a text-ref definition with `:`, so there's no ambiguity). The
+# delimiter stops right after a newline, leaving the next bullet's indentation for its own parse.
+ASSERTION_SEP   = Regex(r'\n(?:[ \t]*\n)*').leave_whitespace()
+propset         = Group(Optional(DelimitedList(prop_text_ref | prop | edge | COMMENT, delim=ASSERTION_SEP)))
+# Trailing comments on a header line are ignored like any comment (same line only: they must not
+# reach past the newline into the block's first assertion).
+SAME_LINE_COMMENT = COMMENT.copy().set_whitespace_chars(' \t')
+node_header = Word('#') + Optional(IRIREF, None) + Optional(QuotedString('[', end_quote_char=']'), None) \
+                + Suppress(ZeroOrMore(SAME_LINE_COMMENT))
 node_block  = Forward()
 node_block  << Group(node_header + White('\n').suppress() + Suppress(ZeroOrMore(blank_to_eol)) + propset)
 
@@ -873,6 +918,10 @@ def _create_assertion(parent, pi, assertion_label, doc, parser: LiterateParser |
     return created
 
 
+def _inline_name(a) -> str:
+    return str(a.id).rsplit('/', 1)[-1] if a.id is not None else '?'
+
+
 def _build_assertions(node, props, graph_obj, doc, parser: LiterateParser | None = None) -> bool:
     '''
     Build assertions (properties, edges, their `@id` / `@as` directives, arbitrary nesting, and
@@ -889,6 +938,22 @@ def _build_assertions(node, props, graph_obj, doc, parser: LiterateParser | None
     stack = []
     saw_assertion = False
     seen_as = set()  # id(parent) of assertions that already took an inline @as (dup -> parse error)
+    inline_named = set()  # id(assertion) of assertions named by an inline `[=name]`
+
+    def register_id(raw, target) -> None:
+        assertion_id = _resolve_node_id(str(raw), doc, parser)
+        try:
+            graph_obj.register_assertion_id(assertion_id, target)
+        except AssertionIdConflict as e:
+            # Within a single document, a repeated @id is rejected as an authoring
+            # error. This is a parser-surface constraint only: the graph *merge*
+            # model (SPEC § Identity and graph merge, Rule 1) instead treats two
+            # assertions bearing the same id as the same assertion.
+            raise AssertionIdConflict(
+                f'{e} (a repeated @id within one Onya Literate document is a '
+                f'parser-surface limitation, not the graph merge rule: under merge, '
+                f'same-id assertions are the same assertion)'
+            ) from e
 
     for pi in props:
         if isinstance(pi, str):
@@ -913,19 +978,12 @@ def _build_assertions(node, props, graph_obj, doc, parser: LiterateParser | None
             if stack:
                 raw = pi.value.verbatim if pi.value else None
                 if raw is not None:
-                    assertion_id = _resolve_node_id(str(raw), doc, parser)
-                    try:
-                        graph_obj.register_assertion_id(assertion_id, parent)
-                    except AssertionIdConflict as e:
-                        # Within a single document, a repeated @id is rejected as an authoring
-                        # error. This is a parser-surface constraint only: the graph *merge*
-                        # model (SPEC § Identity and graph merge, Rule 1) instead treats two
-                        # assertions bearing the same id as the same assertion.
-                        raise AssertionIdConflict(
-                            f'{e} (a repeated @id within one Onya Literate document is a '
-                            f'parser-surface limitation, not the graph merge rule: under merge, '
-                            f'same-id assertions are the same assertion)'
-                        ) from e
+                    if id(parent) in inline_named:
+                        raise LiterateSyntaxError(
+                            f'An assertion has both an inline `[={_inline_name(parent)}]` and a nested '
+                            f'`@id: {raw}`; an assertion has at most one id. Keep one of the two '
+                            f'(they mean the same thing).', category='inline-id')
+                    register_id(raw, parent)
             continue
 
         # `@as` is a directive, not an assertion: like `@id`, it annotates its enclosing
@@ -959,6 +1017,10 @@ def _build_assertions(node, props, graph_obj, doc, parser: LiterateParser | None
 
         assertion_label = expand_iri(pi.key, doc.schemabase, doc=doc)
         created = _create_assertion(parent, pi, assertion_label, doc, parser)
+        inline_id = getattr(pi.value, 'inline_id', None)
+        if created is not None and inline_id is not None:
+            register_id(inline_id, created)  # `[=name]` desugars to a nested `@id: name`
+            inline_named.add(id(created))
         if created is not None:
             saw_assertion = True
             # Desugar a docheader @interpretations default onto this property (any depth). Edges
