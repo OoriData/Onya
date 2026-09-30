@@ -22,7 +22,7 @@ Note: Using our provided [onya-graph.SKILL.md](onya-graph.SKILL.md) with your fa
 
 Here's a complete, valid knowledge graph, first visualized:
 
-![Onya friendship example](onya-friendship.svg)
+![Onya friendship example](https://github.com/OoriData/Onya/raw/main/onya-friendship.svg)
 
 Then in Onya Literate format:
 
@@ -280,7 +280,7 @@ onya convert test/resource/schemaorg/thingsfallapart.onya --dot > out.dot  # Gra
 
 View Mermaid output instantly at [mermaid.live](https://mermaid.live/), producing e.g.:
 
-[![Onya graph of Things Fall Apart, rendered via Mermaid](test/resource/schemaorg/thingsfallapart.png)](https://github.com/OoriData/Onya/blob/main/test/resource/schemaorg/thingsfallapart.png)
+![Onya graph of Things Fall Apart, rendered via Mermaid](https://github.com/OoriData/Onya/blob/main/test/resource/schemaorg/thingsfallapart.png)
 
 ### networkx projection + analytics round trip
 

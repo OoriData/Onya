@@ -6,6 +6,25 @@ For interim changes not yet earmarked for a particular release, can use this hea
 ## [Unreleased]
 -->
 
+## [0.5.2] — Inline assertion ids (`[=name]`) in Onya Literate. Knowledge-primitive guidance in the Onya skill.
+
+### Added
+
+- **Inline assertion ids in Onya Literate: `* knows -> Ify [=chuks-ify-friendship]`** — parser-level sugar for a nested `* @id: chuks-ify-friendship`, keeping the name on the line it names (the `=` distinguishes it from a type bracket). It works on edges and properties, at any nesting depth and in the docheader, after an unquoted value, a quoted value, or an explicit `<IRI>`. Both forms parse to identical graphs (tested pairwise); `write()` still emits the normative nested form. An unquoted value that should literally end in ` [=x]` must be quoted, and an assertion carrying both an inline and a nested id is a `LiterateSyntaxError`. Id collisions are caught exactly as for nested `@id` (`AssertionIdConflict`). SPEC § Assertion Identifiers documents the form. (#18)
+
+### Changed
+
+- **Blank lines between a node's assertions are allowed** — a Markdown "loose list", which people and LLMs write naturally. Previously a blank line ended the node block's assertion list, so the next bullet failed to parse (with a misleading message). The block now continues until the next `#` header; no document that parsed before changes meaning. That includes the docheader: a bullet after a blank line under `# @docheader`, previously an "assertion outside a node block" error, is now a document-node assertion. SPEC § Node Blocks states the rule.
+- **Requires `Amara>=4.1.0`** (was `>=4.0.1`). Amara 4.0.x raised `NameError` instead of `ValueError` for an invalid IRI, which masked Onya's own error handling.
+- **Onya skill (`onya-graph.SKILL.md`): guidance for good knowledge primitives** in generated graphs. Keep labels atomic and values clean, with qualifiers (time, unit, kind, source, certainty) as nested assertions rather than compound labels (`ex:gdp2025`) or parenthetical asides in values (`"5,000,000 (2024 est.)"`). Keep same-valued qualifier bundles from merging together by giving each an inline assertion id.
+
+### Fixed
+
+- **Trailing HTML comments no longer leak into unquoted values.** `* name: X  <!-- note -->` stored the comment text in the value, contrary to SPEC § Comments, and `* author -> CAchebe  <!-- note -->` failed outright, because the comment became part of the target IRI. Quoted and `<IRI>` values already dropped theirs. Only *trailing* comments are stripped; quote a value to keep comment-like text in it.
+- **Comments are allowed after a node header**: `# TFA [Book]  <!-- note -->` used to be a parse error.
+- **A comment's closing `-->` is no longer reported as a stray edge arrow.** When a line failed to parse for another reason, the stray-arrow check read the comment's `-->` as an ASCII long arrow and gave a misleading `EdgeArrowError`. In `lenient_arrows` mode it could also rewrite the comment itself. Arrows inside comments are now ignored.
+- **Onya skill examples that didn't parse**: the nested-assertions example had a blank line between a node's assertions (a parse error until this release; see Changed), and the docheader example put comments after node headers. `test/test_skill_examples.py` now parses every Literate example in the skill.
+
 ## [0.5.1] 2026-09-29: Curator-controlled ranking in views: `prefer` and `order_by`. `title` replaces the display `label`.
 
 ### Added

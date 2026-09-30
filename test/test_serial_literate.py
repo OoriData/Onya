@@ -571,8 +571,9 @@ _SYNTAX_HDR = ('# @docheader\n* @document: https://example.org/books/x\n'
     # Unclosed [Type] bracket.
     (_SYNTAX_HDR + '# A [Person\n* name: A\n',
      'type-bracket', ['closing `]`', '# A [Person']),
-    # Assertion outside / before a node block.
-    (_SYNTAX_HDR + '* orphan: value\n\n# A [Person]\n* name: A\n',
+    # Assertion outside / before any block (before the docheader). A bullet after a blank line
+    # *under* the docheader is no longer orphaned: blank lines don't end a block (0.5.2).
+    ('* orphan: value\n\n' + _SYNTAX_HDR + '# A [Person]\n* name: A\n',
      'assertion', ['* orphan: value', 'NodeID']),
     # Markdown code fence wrapping the graph.
     ('```markdown\n' + _SYNTAX_HDR + '# A [Person]\n* name: A\n```\n',
