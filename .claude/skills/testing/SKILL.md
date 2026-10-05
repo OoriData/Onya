@@ -1,6 +1,6 @@
 ---
 name: testing
-description: Fast, cheap, deterministic test suites — the unit/integration split, marking and excluding tests that hit unowned code or services, and the "don't mock what you don't own" alternative-implementations pattern. Use when writing, organizing, or speeding up tests for Python libraries or webapp back ends.
+description: Use when writing, organizing, or speeding up tests for Python libraries or web app back ends. Covers the unit/integration split, marking and excluding tests that hit unowned code or live services, and the "don't mock what you don't own" alternative-implementations pattern.
 applies-to: [python, webapp]
 ---
 

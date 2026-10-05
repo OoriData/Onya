@@ -7,7 +7,8 @@
 - Validate changes with the fast unit-test run before reporting completion. Add test cases if needed. Tests that hit unowned code or live services (DB, HTTP, browser) are integration tests — mark them and keep them out of the default run. See the `testing` skill.
 - Ask before making destructive or hard-to-reverse changes.
 - When creating directories to be populated with files, e.g. documents or tests, prefer the singular, e.g. `doc` and `test`. Similar for DB entity names.
-- If a `CHANGELOG.md` exists, keep it current: add an entry under the appropriate `[Unreleased]` subsection (Added/Changed/Removed/Fixed) for any user-visible change. If unsure which version stanza an entry belongs in (e.g. a change spanning a release boundary), ask.
+- If a `CHANGELOG.md` exists, keep it current: add an entry under the appropriate `[Unreleased]` subsection (per [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/): Added/Changed/Deprecated/Removed/Fixed/Security) for any user-visible change. If unsure which version stanza an entry belongs in (e.g. a change spanning a release boundary), ask.
+- `AGENTS.md` and `CLAUDE.md` are companions. `oori-sync-repo` keeps the managed blocks aligned, but the non-managed sections are **not** mirrored — when you edit a non-managed section here (e.g. Local context), make the equivalent edit in `CLAUDE.md` (and vice versa).
 <!-- END MANAGED:agent-preamble -->
 
 ## Project type: python

@@ -1,12 +1,12 @@
 ---
-name: python-backend
-description: Python 3.12+ backend and library development — packaging, testing, pyproject.toml, uv, hatchling, asyncio, and repo hygiene. Use when working on Python services, CLIs, or libraries.
+name: python
+description: Use before editing, testing, or packaging any Python code — libraries, CLIs, services, or scripts. Covers Python 3.12+ style, pyproject.toml with hatchling, the uv non-editable install loop, preferred libraries, and repo layout. For long-running services also load python-backend; for native extensions, python-c; for LLM prompts, python-prompting.
 ---
 
-# Python Backend Development
+# Python Development
 
 ## Purpose
-Follow this skill for Python 3.12+ backend and library work: packaging, project structure, testing, and repository hygiene.
+Follow this skill for all Python 3.12+ work: style, packaging, project structure, testing, and repository hygiene.
 
 ## Default rules
 - Single quotes throughout, including triple-quoted strings.
@@ -26,6 +26,11 @@ Also follow [python-prompting](../python-prompting/SKILL.md): WordLoom for all p
 ## When writing or organizing tests
 Also follow [testing](../testing/SKILL.md): keep the default run fast and unit-only; mark anything hitting unowned code or live services `@pytest.mark.integration` and exclude it by default; own the boundary instead of mocking third-party internals.
 
+## When building a long-running service
+Also follow [python-backend](../python-backend/SKILL.md): retain fire-and-forget asyncio
+tasks, keep secrets out of rendered tracebacks, and open read-only stores so a missing mount
+fails loudly instead of looking empty.
+
 ## When adding native (C/C++/Rust) acceleration
 Also follow [python-c](../python-c/SKILL.md): profile before porting; pick the interface
 deliberately (cffi/Cython/nanobind/PyO3); ship an *observable* pure-Python fallback; and
@@ -44,38 +49,6 @@ the accelerator silently ships as a dead symbol.
 - Use `[tool.hatch.build.targets.wheel]` with `only-include = ['pylib']`.
 - Map `pylib` to the package name in `[tool.hatch.build.sources]`.
 - Export CLIs through `[project.scripts]` with a `main()` entry point in each module.
-
-## Service & async hardening
-Recurring, easy-to-miss correctness/security gotchas in long-running services and CLIs:
-
-- **Retain fire-and-forget tasks.** `asyncio.create_task(coro())` returns a task the
-  event loop holds only *weakly* — under GC pressure it can be collected mid-`await`,
-  silently dropping the work (a webhook enqueue, a deferred Slack post). Keep a strong
-  reference until it finishes:
-  ```python
-  _tasks: set[asyncio.Task] = set()
-
-  def spawn_background(coro):
-      t = asyncio.create_task(coro)
-      _tasks.add(t)
-      t.add_done_callback(_tasks.discard)
-      return t
-  ```
-- **Secret-safe tracebacks.** `structlog.dev.ConsoleRenderer()` (Rich) renders local
-  variables in tracebacks — which leaks secrets, since API keys live in headers dicts,
-  settings objects, etc. Always pass `exception_formatter=structlog.dev.plain_traceback`,
-  and define a single `configure_logging()` so the policy can't drift between entry
-  points — one copy that forgets it leaks in that service's logs.
-- **Read-only SQLite over a read-only mount.** Open with a `file:` URI in `mode=ro` so the
-  connection can never write and won't auto-create a missing file:
-  ```python
-  dsn = Path(path).resolve().as_uri() + '?mode=ro'   # as_uri() percent-encodes the path
-  await aiosqlite.connect(dsn, uri=True)
-  ```
-  Build the URI with `Path.as_uri()`, not an f-string: a raw `file:{path}?mode=ro`
-  truncates the path at a literal `?` and opens the wrong file. And `aiosqlite.connect`
-  on a bare path *auto-creates* an empty DB — so a missing mount silently looks like an
-  empty store; `mode=ro` makes it fail loudly instead.
 
 ## If the task is unclear
 Ask for the repo type (library vs service), runtime target, and whether strict installability or editable installs are acceptable. This axis decides `[tool.uv] package`: a library with the `pylib` prefix rewrite must stay a package (install real wheels, `--no-editable`); only a genuine non-library app/service run from source is a candidate for `package = false`.

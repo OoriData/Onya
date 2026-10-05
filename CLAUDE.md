@@ -6,7 +6,8 @@
 - Load only the skills and snippets needed for the task at hand.
 - Prefer small, deterministic changes; validate with the fast unit-test run before reporting done. Tests hitting unowned code or live services (DB, HTTP, browser) are integration tests — mark them and keep them out of the default run. See the `testing` skill.
 - Ask before making destructive or hard-to-reverse changes.
-- If a `CHANGELOG.md` exists, add an entry under the appropriate `[Unreleased]` subsection (Added/Changed/Removed/Fixed) for any user-visible change. If unsure which version stanza an entry belongs in, ask.
+- If a `CHANGELOG.md` exists, add an entry under the appropriate `[Unreleased]` subsection (per [Keep a Changelog 1.1.0](https://keepachangelog.com/en/1.1.0/): Added/Changed/Deprecated/Removed/Fixed/Security) for any user-visible change. If unsure which version stanza an entry belongs in, ask.
+- `CLAUDE.md` and `AGENTS.md` are companions. `oori-sync-repo` keeps the managed blocks aligned, but the non-managed sections are **not** mirrored — when you edit a non-managed section here (e.g. Local overrides), make the equivalent edit in `AGENTS.md` (and vice versa).
 <!-- END MANAGED:agent-preamble -->
 
 ## Project type: python
