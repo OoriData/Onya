@@ -25,7 +25,7 @@ ONYA_INTERP = ONYA('interp/')
 
 # The reserved bare interpretation names (see SPEC: @as). `none` is special — it names no
 # interpretation and only cancels a docheader default; it is never stored as an IRI.
-RESERVED_INTERP_NAMES = frozenset({'number', 'datetime', 'boolean', 'iri', 'text'})
+RESERVED_INTERP_NAMES = frozenset({'number', 'integer', 'datetime', 'boolean', 'iri', 'text'})
 INTERP_NONE = 'none'
 
 # RDF

@@ -137,7 +137,7 @@ Or declare defaults once in the docheader with an `@interpretations:` stanza (no
     * birthDate: datetime
 ```
 
-Reserved interpretation names are `number`, `datetime`, `boolean`, `iri`, `text` (these resolve into the Onya interpretation vocabulary); `none` cancels a docheader default on one property; anything else is treated as an IRI (absolute IRIs and `@iri` CURIEs work). An **unknown interpretation is not an error** — the IRI simply travels with the data. Precedence: an inline `@as` overrides a docheader default overrides nothing. `@as` on an edge is ignored with a warning (an edge target is a node, not a string). Use `text` to positively assert prose (so `0042` is not "helpfully" read as a number downstream).
+Reserved interpretation names are `number`, `integer`, `datetime`, `boolean`, `iri`, `text` (these resolve into the Onya interpretation vocabulary); `none` cancels a docheader default on one property; anything else is treated as an IRI (absolute IRIs and `@iri` CURIEs work). An **unknown interpretation is not an error** — the IRI simply travels with the data. Precedence: an inline `@as` overrides a docheader default overrides nothing. `@as` on an edge is ignored with a warning (an edge target is a node, not a string). `integer` is the strict whole-number contract (`3`, `-3`, and `3_000_000`, where a single `_` between digits is an ignorable group separator; `3.0` and `3e3` are not integers); `number` stays the permissive one. Use `text` to positively assert prose (so `0042` is not "helpfully" read as a number downstream).
 
 ### Long text
 
@@ -333,7 +333,7 @@ Onya has a precise notion of when two assertions are "the same", which matters w
 - **An identified assertion never merges with an anonymous one** (Rule 3), even with an identical skeleton — the `@id` marks a deliberately distinct, addressable occurrence.
 - **Interpretations ride along**: equal-or-one-absent `interp` merges (the present one is adopted); two *different* non-absent interps on the same anonymous skeleton stay distinct (two parties making different contracts about the same words — not an error); a differing interp on same-`@id` assertions is an error.
 
-Authoring implications: to make two documents' claims **coalesce**, give the shared entities the **same node ids** and write structurally identical assertions. To keep a claim **separate and referenceable**, give it an `@id`. Don't rely on merge to dedupe things you spelled differently — normalize ids and values yourself.
+Authoring implications: to make two documents' claims **coalesce**, give the shared entities the **same node ids** and write structurally identical assertions. To keep a claim **separate and referenceable**, give it an `@id`. Don't rely on merge to dedupe things you spelled differently — normalize ids and values yourself. `union` consumes its argument; use `g.copy()` (deep) or `g.subgraph(ids, hops=1)` (a neighborhood) when you need to keep the original or want a throwaway working copy.
 
 ## Persistence — storing graphs with `onya.store`
 

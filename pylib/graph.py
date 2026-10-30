@@ -759,6 +759,78 @@ class graph(MutableMapping):
         other.touch()  # hollowed out; make sure a stale index there can't be served
         return self
 
+    def copy(self) -> 'graph':
+        '''
+        A deep copy: new node and assertion objects with the same ids, types, values, interpretations,
+        explicit assertion ids and prefixes. Mutating the copy never touches the original (nor the
+        reverse), and, unlike `union`, copying consumes nothing. The cheap route to a dry run, or to
+        a staged rewrite you may discard.
+        '''
+        return self._extract(set(self.nodes))
+
+    def subgraph(self, roots, hops: int = 1) -> 'graph':
+        '''
+        A deep copy of just the neighborhood of the node ids in `roots`, out to `hops` edges
+        (default 1; 0 is the roots alone). Same semantics as `GraphStore.subgraph`:
+
+        - expansion follows each node's own (top-level) edges, outward only; edges nested under
+          assertions are copied but not followed;
+        - an edge leaving the neighborhood keeps its target as a bare, untyped node;
+        - roots that aren't in this graph are ignored.
+
+        An edge to an identified assertion is kept pointing at the copy of that assertion when the
+        assertion is in the neighborhood, and at a bare node carrying its id otherwise; expansion
+        never follows it.
+        '''
+        included = {r for r in roots if r in self.nodes}
+        frontier = set(included)
+        for _ in range(max(hops, 0)):
+            reached = {e.target.id for nid in frontier for e in self.nodes[nid].edges
+                       if isinstance(e.target, node) and e.target.id in self.nodes} - included
+            included |= reached
+            frontier = reached
+        return self._extract(included)
+
+    def _extract(self, included: set) -> 'graph':
+        '''Copy the nodes in `included` (and everything nested under them) into a fresh graph.'''
+        out = graph(prefixes=self.prefixes)
+        for nid in self.nodes:  # keep the original's node order
+            if nid in included:
+                out.node(nid, types=set(self.nodes[nid].types))
+        copies: dict[int, assertion] = {}  # id(original assertion) -> its copy
+        late: list[tuple[edge, assertion]] = []  # edges aimed at an assertion: resolved once all exist
+
+        def copy_into(src, dst) -> None:
+            for p in src.properties:
+                np_ = dst.add_property(p.label, p.value, interp=p.interp)
+                register(p, np_)
+                copy_into(p, np_)
+            for e in src.edges:
+                if isinstance(e.target, node):
+                    target = out.nodes.get(e.target.id)
+                    ne = dst.add_edge(e.label, target if target is not None else out.node(e.target.id))
+                else:
+                    ne = dst.add_edge(e.label, None)  # placeholder, bound below
+                    late.append((e, ne))
+                register(e, ne)
+                copy_into(e, ne)
+
+        def register(old, new) -> None:
+            copies[id(old)] = new
+            if old.id is not None:
+                out.register_assertion_id(old.id, new)
+            new.interp = old.interp
+
+        for nid in included:
+            copy_into(self.nodes[nid], out.nodes[nid])
+        for old, new in late:
+            hit = copies.get(id(old.target))
+            if hit is None:  # outside the neighborhood: a bare node (shared by every edge that needs it)
+                hit = out.nodes.get(old.target.id) or out.node(old.target.id)
+            new.target = hit
+        out.touch()
+        return out
+
     def typematch(self, types: I | str | set[I | str]) -> Iterator[node]:
         '''Find nodes with matching types (each a full IRI, CURIE, or bare name)'''
         if isinstance(types, (str, I)):

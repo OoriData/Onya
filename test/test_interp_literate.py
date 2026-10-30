@@ -324,6 +324,25 @@ def test_reserved_names_roundtrip_as_bare_names():
     assert age.interp == NUMBER
 
 
+def test_integer_is_a_reserved_name_inline_and_in_interpretations_stanza():
+    '''`@as: integer` and an `@interpretations` entry both resolve to onya:interp/integer, and write back bare.'''
+    g = _parse(DOCHEADER.replace('* @schema: https://schema.org/\n', '* @schema: https://schema.org/\n'
+                                 '* @interpretations:\n    * population: integer\n') + '''
+# Chuks [Person]
+
+* age: 28
+  * @as: integer
+* population: 3_000
+''')
+    chuks = _chuks(g)
+    assert _one(chuks.getprop('https://schema.org/age')).interp == ONYA_INTERP('integer')
+    assert _one(chuks.getprop('https://schema.org/population')).interp == ONYA_INTERP('integer')
+    serialized, g2 = _roundtrip(g)
+    assert '@as: integer' in serialized and 'onya:interp' not in serialized and '/interp/integer' not in serialized
+    assert _one(_chuks(g2).getprop('https://schema.org/age')).interp == ONYA_INTERP('integer')
+    assert _one(_chuks(g2).getprop('https://schema.org/population')).value == '3_000'  # stored as written
+
+
 def test_interp_roundtrips_on_nested_assertions():
     '''`interp` survives write -> read on nested assertions, not only at node level.'''
     g = _parse(DOCHEADER + '''

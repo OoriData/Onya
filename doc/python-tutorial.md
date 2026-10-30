@@ -280,6 +280,8 @@ interp.value_of(one('https://schema.org/longitude'))  # Decimal('-105.2705')
 interp.value_of(one('https://schema.org/customCode')) # '0042' — text, leading zero kept
 ```
 
+Where a value must be a whole number, `integer` is the strict contract: `3`, `-3` and `3_000_000` pass (a single `_` between digits is an ignorable group separator, handy for long figures and unambiguous across locales), while `3.0`, `3e3` and `1,000` don't. `number` is the permissive one.
+
 `number` never passes through a binary `float`: an integer literal becomes an
 `int`, anything with a decimal point or exponent becomes a `decimal.Decimal`.
 That is what makes the round-trip exact (a `float` would turn `-105.2705` into
@@ -329,6 +331,20 @@ interp.set_value(chuks, 'https://schema.org/height', Decimal('1.85'),
                  ONYA_INTERP('number'))
 # same as: chuks.add_property('https://schema.org/height', '1.85', interp=ONYA_INTERP('number'))
 ```
+
+# Copies and neighborhoods
+
+`graph.union(other)` *consumes* `other`: its nodes are adopted, and it must not be used afterwards. When you need to keep a graph, or want to try a rewrite you may throw away, work on a copy:
+
+```python
+dup = g.copy()                     # deep: new node and assertion objects; same ids, values, interps, @ids, prefixes
+dup['http://example.org/people/Chuks'].one('name')   # edits to dup never touch g, and vice versa
+g.union(other.copy())              # keeps `other` intact
+
+near = g.subgraph({chuks_iri}, hops=1)   # just a neighborhood, copied; hops=0 is the roots alone
+```
+
+`subgraph` follows each node's own edges outward (not edges nested under assertions). An edge that leaves the neighborhood keeps its target as a bare, untyped node, and unknown roots are ignored. It's the in-memory twin of `store.subgraph(name, roots, hops)`, and the two agree.
 
 # Persistence: the store layer
 

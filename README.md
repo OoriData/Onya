@@ -125,7 +125,7 @@ print(report)           # a reported finding, never a parse error or rejection
 
 An interpretation your software doesn't recognize is data, not an error: it
 parses, merges, and round-trips untouched. The built-in starter set (`number`,
-`datetime`, `boolean`, `iri`, `text`) is deliberately modest, and the plugin
+`integer`, `datetime`, `boolean`, `iri`, `text`) is deliberately modest, and the plugin
 registry lets any community define its own. If you're arriving from data
 engineering, note that this is the *value-level* slice of "data contract" —
 shape, ownership, and SLAs would be further layers, deliberately not this one.

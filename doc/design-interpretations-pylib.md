@@ -81,6 +81,7 @@ never define an interpretation, not that this set covers everything.
 | name | accepts (check) | to_python | from_python canonical form |
 |---|---|---|---|
 | `number` | optional sign; decimal integer or fraction; optional exponent | `int` when integral, else `decimal.Decimal` (never binary float — round-trip law) | shortest exact decimal form |
+| `integer` | optional sign; ASCII digits; single `_` between digits ignored as a group separator (`3_000_000`); no fraction, exponent, space or comma | `int` | plain digits (no separator) |
 | `datetime` | ISO 8601 date (`2018-03-15`) or datetime, optional zone | `datetime.date` / `datetime.datetime` | ISO 8601 |
 | `boolean` | `true` / `false`, exactly (case-sensitive) | `bool` | `true` / `false` |
 | `iri` | matches IRI-reference syntax (via `amara.iri`) | `amara.iri.I` | the IRI string |
