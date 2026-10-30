@@ -31,6 +31,7 @@ from onya.interp import (
 
 
 NUMBER = ONYA_INTERP('number')
+INTEGER = ONYA_INTERP('integer')
 DATETIME = ONYA_INTERP('datetime')
 BOOLEAN = ONYA_INTERP('boolean')
 IRI = ONYA_INTERP('iri')
@@ -94,6 +95,62 @@ def test_number_from_python_refuses_bool():
     num = DEFAULT.get(NUMBER)
     with pytest.raises(TypeError):
         num.from_python(True)
+
+
+# --- integer ------------------------------------------------------------------------
+
+@pytest.mark.parametrize('s, n', [('3', 3), ('-3', -3), ('+3', 3), ('0', 0), ('-0', 0), ('007', 7),
+                                  ('3_000_000', 3000000), ('-1_0', -10),
+                                  ('12345678901234567890123', 12345678901234567890123)])
+def test_integer_accepts(s, n):
+    integer = DEFAULT.get(INTEGER)
+    assert integer.check(s)
+    assert integer.to_python(s) == n and isinstance(integer.to_python(s), int)
+
+
+@pytest.mark.parametrize('s', ['3.0', '3.', '.5', '3e3', '1,000', '1 000', ' 3', '3 ', '', '-', '+', 'three',
+                               '_3', '3_', '3__000', '-_3', '+_3', '3_.0', '1_e3', '٣'])
+def test_integer_rejects(s):
+    '''No fraction or exponent (that's `number`), no grouping but a single `_` between digits, no non-ASCII digits.'''
+    integer = DEFAULT.get(INTEGER)
+    assert not integer.check(s)
+    with pytest.raises(InterpretationError):
+        integer.to_python(s)
+
+
+@pytest.mark.parametrize('s', ['3', '-3', '0', '3_000_000', '007', '+7'])
+def test_integer_roundtrip_law(s):
+    integer = DEFAULT.get(INTEGER)
+    once = integer.to_python(s)
+    assert integer.to_python(integer.from_python(once)) == once
+
+
+def test_integer_canonical_form_has_no_separator():
+    integer = DEFAULT.get(INTEGER)
+    assert integer.from_python(integer.to_python('3_000_000')) == '3000000'
+    assert integer.from_python(-42) == '-42'
+
+
+@pytest.mark.parametrize('bad', [True, 3.0, '3', None])
+def test_integer_from_python_refuses_non_ints(bad):
+    with pytest.raises(TypeError):
+        DEFAULT.get(INTEGER).from_python(bad)
+
+
+def test_integer_through_value_of_and_validate():
+    g = graph()  # kept alive here: nodes hold their graph weakly
+    n = g.node(I('http://e.o/N'))
+    ok = n.add_property(I('https://schema.org/p'), '3_000', interp=INTEGER)
+    bad = n.add_property(I('https://schema.org/q'), 'a year', interp=INTEGER)
+    assert value_of(ok) == 3000
+    with pytest.raises(InterpretationError):
+        value_of(bad)
+    assert [f.assertion for f in validate(g).findings] == [bad]
+
+
+def test_integer_is_stricter_than_number():
+    assert DEFAULT.get(NUMBER).check('3.0') and not DEFAULT.get(INTEGER).check('3.0')
+    assert not DEFAULT.get(NUMBER).check('3_000')  # `_` is an integer-only convenience
 
 
 # --- datetime -----------------------------------------------------------------------

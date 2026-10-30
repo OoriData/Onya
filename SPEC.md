@@ -233,7 +233,7 @@ Rules:
   value is still exactly the string `28`, with `interp` set.
 
 Interpretation names resolve in this order: the reserved bare names `number`,
-`datetime`, `boolean`, `iri`, `text` name the **Onya Lightweight Types** in the
+`integer`, `datetime`, `boolean`, `iri`, `text` name the **Onya Lightweight Types** in the
 Onya interpretation vocabulary; `none` names *no* interpretation (its only role
 is to cancel a document-level default — see below — and it is never stored);
 anything else is an IRI reference resolved through the document's existing IRI

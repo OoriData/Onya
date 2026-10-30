@@ -125,7 +125,7 @@ print(report)           # a reported finding, never a parse error or rejection
 
 An interpretation your software doesn't recognize is data, not an error: it
 parses, merges, and round-trips untouched. The built-in starter set (`number`,
-`datetime`, `boolean`, `iri`, `text`) is deliberately modest, and the plugin
+`integer`, `datetime`, `boolean`, `iri`, `text`) is deliberately modest, and the plugin
 registry lets any community define its own. If you're arriving from data
 engineering, note that this is the *value-level* slice of "data contract" —
 shape, ownership, and SLAs would be further layers, deliberately not this one.
@@ -200,6 +200,8 @@ answers "what points here?" from a reverse index instead of a scan:
 
 ```python
 chuks.any_prop_value('name')             # -> 'Chukwuemeka Okafor' (same as 'schema:name')
+chuks.values('telephone')                # -> all values, as a sorted list
+chuks.one('name')                        # -> the value, or None; CardinalityError if several
 
 hits = g.search('chukwuemka', types=['Person'])   # tiers: exact > prefix > word > fuzzy
 hits[0].node_id, hits[0].tier, hits[0].score      # ranked list; ambiguity is the caller's call

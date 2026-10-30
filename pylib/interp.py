@@ -5,7 +5,7 @@
 Interpretation (data-contract) plugin layer for Onya.
 
 An *interpretation* is a recorded promise about how a string value is meant to be read —
-a number, a datetime, a boolean, an IRI, prose. The Onya graph always stores the string,
+a number, an integer, a datetime, a boolean, an IRI, prose. The Onya graph always stores the string,
 and the string layer is unconditionally valid; this module honors contracts *at
 boundaries, on demand*, and never ambiently. Parsing a graph never invokes anything here,
 and a graph parses, merges, and round-trips identically regardless of which plugins are
@@ -151,6 +151,36 @@ class _Number:
         return _canonical_number(Decimal(str(obj)))
 
 
+# integer: optional sign, then ASCII digits, optionally grouped by single underscores *between*
+# digits (`3_000_000`, as in Python source). No point, exponent, space or comma.
+_INTEGER_RE = re.compile(r'^[+-]?[0-9]+(_[0-9]+)*$')
+
+
+class _Integer:
+    '''
+    integer — a whole number, strictly. `3`, `-3`, `+3` and `007` are integers; `3.0`, `3e3`, `1,000`
+    and `1 000` are not (use `number` for those). A single `_` between digits is an ignorable
+    digit-group separator, so `3_000_000` reads as 3000000: it makes long figures legible without
+    the ambiguity of `,` and `.`, which mean opposite things across locales. `to_python` yields
+    `int`; canonical `from_python` is plain digits, with no separator, so the string is
+    *equivalent* through the Python value rather than byte-identical (the round-trip law).
+    '''
+    iri = ONYA_INTERP('integer')
+
+    def check(self, value: str) -> bool:
+        return bool(_INTEGER_RE.match(value))
+
+    def to_python(self, value: str) -> int:
+        if not self.check(value):
+            raise InterpretationError(value, self.iri, message=f'{value!r} is not an integer')
+        return int(value.replace('_', ''))
+
+    def from_python(self, obj) -> str:
+        if isinstance(obj, bool) or not isinstance(obj, int):  # bool is an int subclass; floats aren't integers
+            raise TypeError(f'{obj!r} is not an int')
+        return str(obj)
+
+
 class _Datetime:
     '''
     datetime — ISO 8601 date (`2018-03-15`) or datetime, optional zone. `to_python` yields
@@ -274,7 +304,7 @@ class InterpretationRegistry:
 
 def _default_registry() -> InterpretationRegistry:
     reg = InterpretationRegistry()
-    for interp in (_Number(), _Datetime(), _Boolean(), _Iri(), _Text()):
+    for interp in (_Number(), _Integer(), _Datetime(), _Boolean(), _Iri(), _Text()):
         reg.register(interp)
     return reg
 

@@ -58,6 +58,19 @@ class UnknownPrefixError(ValueError):
     '''
 
 
+class CardinalityError(ValueError):
+    '''
+    Raised by `one()` / `one_target()` when a label has more than one value or target where the
+    caller expected at most one. Carries what was found, so the message (and the handler) can say
+    exactly which claims disagree: `origin` (the node or assertion), `label` (resolved) and `found`
+    (the values, or the target ids, sorted).
+    '''
+    def __init__(self, origin, label, found: list):
+        self.origin, self.label, self.found = origin, label, found
+        who = getattr(origin, 'id', None) or origin
+        super().__init__(f'{who}: expected at most one {label}, found {len(found)}: {found}')
+
+
 # Schemes treated as absolute IRIs (never CURIE prefixes) even without a `//` authority.
 _ABSOLUTE_SCHEMES = frozenset({'urn', 'tag', 'mailto', 'did', 'data', 'file'})
 _CURIE_RE = re.compile(r'^([A-Za-z_][A-Za-z0-9_.\-]*):(.*)$')
@@ -122,6 +135,11 @@ def warn_prefix_clashes(clashes: list, *, stacklevel: int = 2) -> None:
     for k, kept, ignored in clashes:
         warnings.warn(f'Prefix {k!r} clash on merge: keeping {kept!r}, ignoring {ignored!r}',
                       stacklevel=stacklevel + 1)
+
+
+def _target_key(target) -> str:
+    '''Sort key for edge targets: the node's (or identified assertion's) id.'''
+    return str(getattr(target, 'id', '') or '')
 
 
 class assertions_mixin:
@@ -223,6 +241,37 @@ class assertions_mixin:
         '''
         label = self._resolve(label)
         return next((e.target for e in self.edges if e.label == label), default)
+
+    def values(self, label: I | str) -> list[str]:
+        '''
+        All property values for `label`, as a list of strings. Assertions are a set, so the order
+        carries no meaning: values are sorted only so results are deterministic. (An explicit
+        ordering is a separate, opt-in layer.) `label` takes the same forms as `getprop`.
+        '''
+        return sorted(p.value for p in self.getprop(label))
+
+    def targets(self, label: I | str) -> list:
+        '''All edge targets for `label` (nodes), sorted by id for determinism; see `values`.'''
+        return sorted((e.target for e in self.getedge(label)), key=_target_key)
+
+    def one(self, label: I | str, default=None) -> str | None:
+        '''
+        The single property value for `label`, `default` if there is none, or `CardinalityError`
+        if there are several. The strict counterpart to `any_prop_value`, which silently picks
+        one: use this where the data is meant to be single-valued and a second value is a finding.
+        Two *identical* values are one claim (they merge), so only distinct values conflict.
+        '''
+        found = sorted({p.value for p in self.getprop(label)})
+        if len(found) > 1:
+            raise CardinalityError(self, self._resolve(label), found)
+        return found[0] if found else default
+
+    def one_target(self, label: I | str, default=None):
+        '''The single edge target (node) for `label`, `default` if none, `CardinalityError` if several.'''
+        found = {id(e.target): e.target for e in self.getedge(label)}.values()
+        if len(found) > 1:
+            raise CardinalityError(self, self._resolve(label), sorted(str(_target_key(t)) for t in found))
+        return next(iter(found), default)
 
 
 class node(assertions_mixin):
@@ -709,6 +758,78 @@ class graph(MutableMapping):
         self.touch()
         other.touch()  # hollowed out; make sure a stale index there can't be served
         return self
+
+    def copy(self) -> 'graph':
+        '''
+        A deep copy: new node and assertion objects with the same ids, types, values, interpretations,
+        explicit assertion ids and prefixes. Mutating the copy never touches the original (nor the
+        reverse), and, unlike `union`, copying consumes nothing. The cheap route to a dry run, or to
+        a staged rewrite you may discard.
+        '''
+        return self._extract(set(self.nodes))
+
+    def subgraph(self, roots, hops: int = 1) -> 'graph':
+        '''
+        A deep copy of just the neighborhood of the node ids in `roots`, out to `hops` edges
+        (default 1; 0 is the roots alone). Same semantics as `GraphStore.subgraph`:
+
+        - expansion follows each node's own (top-level) edges, outward only; edges nested under
+          assertions are copied but not followed;
+        - an edge leaving the neighborhood keeps its target as a bare, untyped node;
+        - roots that aren't in this graph are ignored.
+
+        An edge to an identified assertion is kept pointing at the copy of that assertion when the
+        assertion is in the neighborhood, and at a bare node carrying its id otherwise; expansion
+        never follows it.
+        '''
+        included = {r for r in roots if r in self.nodes}
+        frontier = set(included)
+        for _ in range(max(hops, 0)):
+            reached = {e.target.id for nid in frontier for e in self.nodes[nid].edges
+                       if isinstance(e.target, node) and e.target.id in self.nodes} - included
+            included |= reached
+            frontier = reached
+        return self._extract(included)
+
+    def _extract(self, included: set) -> 'graph':
+        '''Copy the nodes in `included` (and everything nested under them) into a fresh graph.'''
+        out = graph(prefixes=self.prefixes)
+        for nid in self.nodes:  # keep the original's node order
+            if nid in included:
+                out.node(nid, types=set(self.nodes[nid].types))
+        copies: dict[int, assertion] = {}  # id(original assertion) -> its copy
+        late: list[tuple[edge, assertion]] = []  # edges aimed at an assertion: resolved once all exist
+
+        def copy_into(src, dst) -> None:
+            for p in src.properties:
+                np_ = dst.add_property(p.label, p.value, interp=p.interp)
+                register(p, np_)
+                copy_into(p, np_)
+            for e in src.edges:
+                if isinstance(e.target, node):
+                    target = out.nodes.get(e.target.id)
+                    ne = dst.add_edge(e.label, target if target is not None else out.node(e.target.id))
+                else:
+                    ne = dst.add_edge(e.label, None)  # placeholder, bound below
+                    late.append((e, ne))
+                register(e, ne)
+                copy_into(e, ne)
+
+        def register(old, new) -> None:
+            copies[id(old)] = new
+            if old.id is not None:
+                out.register_assertion_id(old.id, new)
+            new.interp = old.interp
+
+        for nid in included:
+            copy_into(self.nodes[nid], out.nodes[nid])
+        for old, new in late:
+            hit = copies.get(id(old.target))
+            if hit is None:  # outside the neighborhood: a bare node (shared by every edge that needs it)
+                hit = out.nodes.get(old.target.id) or out.node(old.target.id)
+            new.target = hit
+        out.touch()
+        return out
 
     def typematch(self, types: I | str | set[I | str]) -> Iterator[node]:
         '''Find nodes with matching types (each a full IRI, CURIE, or bare name)'''

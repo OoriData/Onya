@@ -118,11 +118,9 @@ friendship.add_property('https://schema.org/description', 'Met at university')
 # Add a new property to Ify
 ify.add_property('https://schema.org/jobTitle', 'Software Engineer')
 
-# Modify a property by removing the old one and adding a new one
-age_props = list(chuks.getprop('https://schema.org/age'))
-for prop in age_props:
-    chuks.remove_property(prop)
-chuks.add_property('https://schema.org/age', '29')
+# Modify a property in place: nested assertions and the @id stay attached
+for prop in chuks.getprop('https://schema.org/age'):
+    prop.value = '29'
 
 # Traverse edges
 for edge in chuks.traverse('https://schema.org/knows'):
@@ -148,9 +146,24 @@ This example demonstrates:
 - Parsing Onya Literate format
 - Accessing nodes and properties
 - Adding edges with nested properties (reified relationships)
-- Modifying properties
+- Modifying properties in place
 - Traversing the graph
 - Querying by type
+
+# Reading values and targets
+
+`getprop()`/`getedge()` give you assertion objects. When you only want what they say, the accessors return plain data, and `label` takes any of the forms above (an `I`, a full IRI string, a CURIE or a bare name):
+
+```python
+chuks.values('telephone')          # ['+1 555 0100', '+1 555 0101']   all values, as a list of strings
+chuks.targets('knows')             # [<node Ify>, ...]                all edge targets
+chuks.one('name')                  # 'Chukwuemeka Okafor' | None      CardinalityError if several
+chuks.one_target('employer')       # <node> | None                    CardinalityError if several
+```
+
+Assertions are a set, so `values()` and `targets()` are sorted only to be deterministic; the order carries no meaning. `one()` is the strict sibling of `any_prop_value()`, which quietly picks one of several: use `one()` where the data should be single-valued and a second value is a problem worth hearing about. `CardinalityError` carries the node, the label and everything it found. Two identical values are one claim (they merge), so only *distinct* values conflict. The same accessors work on nested assertions (an edge's own properties).
+
+Editing: `prop.value = 'x'` changes a value in place, keeping the property's nested assertions and `@id`, so you don't need remove-then-add. Edits to an edge's `.target` or `.edges` set directly need `g.touch()` so the reverse-edge index (`g.inbound`) is rebuilt; the `add_*`/`remove_*` methods do that for you.
 
 # Merging graphs
 
@@ -267,6 +280,8 @@ interp.value_of(one('https://schema.org/longitude'))  # Decimal('-105.2705')
 interp.value_of(one('https://schema.org/customCode')) # '0042' — text, leading zero kept
 ```
 
+Where a value must be a whole number, `integer` is the strict contract: `3`, `-3` and `3_000_000` pass (a single `_` between digits is an ignorable group separator, handy for long figures and unambiguous across locales), while `3.0`, `3e3` and `1,000` don't. `number` is the permissive one.
+
 `number` never passes through a binary `float`: an integer literal becomes an
 `int`, anything with a decimal point or exponent becomes a `decimal.Decimal`.
 That is what makes the round-trip exact (a `float` would turn `-105.2705` into
@@ -316,6 +331,20 @@ interp.set_value(chuks, 'https://schema.org/height', Decimal('1.85'),
                  ONYA_INTERP('number'))
 # same as: chuks.add_property('https://schema.org/height', '1.85', interp=ONYA_INTERP('number'))
 ```
+
+# Copies and neighborhoods
+
+`graph.union(other)` *consumes* `other`: its nodes are adopted, and it must not be used afterwards. When you need to keep a graph, or want to try a rewrite you may throw away, work on a copy:
+
+```python
+dup = g.copy()                     # deep: new node and assertion objects; same ids, values, interps, @ids, prefixes
+dup['http://example.org/people/Chuks'].one('name')   # edits to dup never touch g, and vice versa
+g.union(other.copy())              # keeps `other` intact
+
+near = g.subgraph({chuks_iri}, hops=1)   # just a neighborhood, copied; hops=0 is the roots alone
+```
+
+`subgraph` follows each node's own edges outward (not edges nested under assertions). An edge that leaves the neighborhood keeps its target as a bare, untyped node, and unknown roots are ignored. It's the in-memory twin of `store.subgraph(name, roots, hops)`, and the two agree.
 
 # Persistence: the store layer
 

@@ -25,7 +25,9 @@ S = 'https://schema.org/'
 
 
 def value(body, label='bio', node='A'):
-    return literate.read(H + body).graph['http://e.o/' + node].any_prop_value(label)
+    # Keep the graph alive: nodes hold it weakly, and a bare label resolves through its prefixes
+    g = literate.read(H + body).graph
+    return g['http://e.o/' + node].any_prop_value(label)
 
 
 def test_spec_example():

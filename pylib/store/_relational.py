@@ -650,56 +650,14 @@ def build_union(idents, nodes, node_types, assertions) -> graph:
 def extract_subgraph(g: graph, root_ids: set[str], hops: int) -> graph:
     '''
     ``subgraph_across``'s extraction step, over an already-materialized union graph (see
-    ``build_union``): BFS by top-level (node-origin) edges only, matching the scope of the
-    single-graph ``onya_edge_hop`` companion table, then copy just that neighborhood into a
-    fresh graph -- edges leaving the neighborhood become bare (dangling) nodes, exactly as
-    the single-graph ``subgraph()`` behaves.
-
-    Simplification (documented, not shared by the single-graph ``subgraph()``): an edge
-    target that is an *identified assertion* rather than a plain node is treated as a bare
-    node keyed by its id when resolved from a union-graph copy. This is a narrow first-pass
-    scope reduction for the cross-graph case; the ordinary node-to-node case (the common
-    one) is unaffected.
+    ``build_union``): ``graph.subgraph`` -- BFS by top-level (node-origin) edges only, matching the
+    scope of the single-graph ``onya_edge_hop`` companion table, copying just that neighborhood
+    into a fresh graph, with edges leaving it left as bare (dangling) nodes, exactly as the
+    single-graph ``subgraph()`` behaves. (This used to be a separate implementation that treated an
+    edge target that is an *identified assertion* as a bare node, and could fail on one; they now
+    share the one definition.)
     '''
-    included: set[str] = {r for r in root_ids if r in g.nodes}
-    frontier = set(included)
-    for _ in range(max(hops, 0)):
-        if not frontier:
-            break
-        next_frontier: set[str] = set()
-        for nid in frontier:
-            for e in g[nid].edges:
-                tid = e.target.id if e.target is not None else None
-                if tid is not None and tid not in included:
-                    next_frontier.add(tid)
-        included |= next_frontier
-        frontier = next_frontier
-
-    out = graph()
-    for nid in included:
-        out.node(I(nid), types=set(g[nid].types))
-
-    def _resolve_target(tid):
-        if tid is None:
-            return None
-        return out[tid] if tid in included else (out[tid] if tid in out.nodes else out.node(I(tid)))
-
-    def _copy(src_container, dst_container):
-        for p in src_container.properties:
-            np = dst_container.add_property(p.label, p.value, interp=p.interp)
-            if p.id is not None:
-                out.register_assertion_id(p.id, np)
-            _copy(p, np)
-        for e in src_container.edges:
-            tid = e.target.id if e.target is not None else None
-            ne = dst_container.add_edge(e.label, _resolve_target(tid))
-            if e.id is not None:
-                out.register_assertion_id(e.id, ne)
-            _copy(e, ne)
-
-    for nid in included:
-        _copy(g[nid], out[nid])
-    return out
+    return g.subgraph(root_ids, hops)
 
 
 # --- overlay(): precedence-based conflict resolution across named graphs (issue #38) ---

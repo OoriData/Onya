@@ -73,7 +73,7 @@ Rules:
 The value of `@as` (and of docheader declarations) names an interpretation.
 Resolution, in order:
 
-1. **Reserved bare names.** The tokens `number`, `datetime`, `boolean`,
+1. **Reserved bare names.** The tokens `number`, `integer`, `datetime`, `boolean`,
    `iri`, `text`, and `none` resolve to IRIs in the Onya interpretation
    vocabulary (managed with the rest of the Onya vocabulary via purl.org;
    the Python constant is `ONYA_INTERP(name)`). These correspond to the
