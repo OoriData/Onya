@@ -16,7 +16,7 @@ Implementation notes:
 from __future__ import annotations
 
 import sys
-from pathlib import Path
+# from pathlib import Path
 from typing import TextIO
 
 from onya.__about__ import __version__
@@ -176,4 +176,3 @@ def main():
     import fire
 
     fire.Fire(_CLI)
-
