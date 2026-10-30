@@ -58,6 +58,19 @@ class UnknownPrefixError(ValueError):
     '''
 
 
+class CardinalityError(ValueError):
+    '''
+    Raised by `one()` / `one_target()` when a label has more than one value or target where the
+    caller expected at most one. Carries what was found, so the message (and the handler) can say
+    exactly which claims disagree: `origin` (the node or assertion), `label` (resolved) and `found`
+    (the values, or the target ids, sorted).
+    '''
+    def __init__(self, origin, label, found: list):
+        self.origin, self.label, self.found = origin, label, found
+        who = getattr(origin, 'id', None) or origin
+        super().__init__(f'{who}: expected at most one {label}, found {len(found)}: {found}')
+
+
 # Schemes treated as absolute IRIs (never CURIE prefixes) even without a `//` authority.
 _ABSOLUTE_SCHEMES = frozenset({'urn', 'tag', 'mailto', 'did', 'data', 'file'})
 _CURIE_RE = re.compile(r'^([A-Za-z_][A-Za-z0-9_.\-]*):(.*)$')
@@ -122,6 +135,11 @@ def warn_prefix_clashes(clashes: list, *, stacklevel: int = 2) -> None:
     for k, kept, ignored in clashes:
         warnings.warn(f'Prefix {k!r} clash on merge: keeping {kept!r}, ignoring {ignored!r}',
                       stacklevel=stacklevel + 1)
+
+
+def _target_key(target) -> str:
+    '''Sort key for edge targets: the node's (or identified assertion's) id.'''
+    return str(getattr(target, 'id', '') or '')
 
 
 class assertions_mixin:
@@ -223,6 +241,37 @@ class assertions_mixin:
         '''
         label = self._resolve(label)
         return next((e.target for e in self.edges if e.label == label), default)
+
+    def values(self, label: I | str) -> list[str]:
+        '''
+        All property values for `label`, as a list of strings. Assertions are a set, so the order
+        carries no meaning: values are sorted only so results are deterministic. (An explicit
+        ordering is a separate, opt-in layer.) `label` takes the same forms as `getprop`.
+        '''
+        return sorted(p.value for p in self.getprop(label))
+
+    def targets(self, label: I | str) -> list:
+        '''All edge targets for `label` (nodes), sorted by id for determinism; see `values`.'''
+        return sorted((e.target for e in self.getedge(label)), key=_target_key)
+
+    def one(self, label: I | str, default=None) -> str | None:
+        '''
+        The single property value for `label`, `default` if there is none, or `CardinalityError`
+        if there are several. The strict counterpart to `any_prop_value`, which silently picks
+        one: use this where the data is meant to be single-valued and a second value is a finding.
+        Two *identical* values are one claim (they merge), so only distinct values conflict.
+        '''
+        found = sorted({p.value for p in self.getprop(label)})
+        if len(found) > 1:
+            raise CardinalityError(self, self._resolve(label), found)
+        return found[0] if found else default
+
+    def one_target(self, label: I | str, default=None):
+        '''The single edge target (node) for `label`, `default` if none, `CardinalityError` if several.'''
+        found = {id(e.target): e.target for e in self.getedge(label)}.values()
+        if len(found) > 1:
+            raise CardinalityError(self, self._resolve(label), sorted(str(_target_key(t)) for t in found))
+        return next(iter(found), default)
 
 
 class node(assertions_mixin):

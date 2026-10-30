@@ -69,7 +69,8 @@ def test_ticket_examples(v, mode):
 
 
 def value(body, label='d'):
-    return literate.read(H + body).graph['http://e.o/A'].any_prop_value(label)
+    g = literate.read(H + body).graph  # keep it alive: nodes hold their graph weakly, bare labels need its prefixes
+    return g['http://e.o/A'].any_prop_value(label)
 
 
 @pytest.mark.parametrize('body,expected', [

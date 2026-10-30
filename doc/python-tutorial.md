@@ -118,11 +118,9 @@ friendship.add_property('https://schema.org/description', 'Met at university')
 # Add a new property to Ify
 ify.add_property('https://schema.org/jobTitle', 'Software Engineer')
 
-# Modify a property by removing the old one and adding a new one
-age_props = list(chuks.getprop('https://schema.org/age'))
-for prop in age_props:
-    chuks.remove_property(prop)
-chuks.add_property('https://schema.org/age', '29')
+# Modify a property in place: nested assertions and the @id stay attached
+for prop in chuks.getprop('https://schema.org/age'):
+    prop.value = '29'
 
 # Traverse edges
 for edge in chuks.traverse('https://schema.org/knows'):
@@ -148,9 +146,24 @@ This example demonstrates:
 - Parsing Onya Literate format
 - Accessing nodes and properties
 - Adding edges with nested properties (reified relationships)
-- Modifying properties
+- Modifying properties in place
 - Traversing the graph
 - Querying by type
+
+# Reading values and targets
+
+`getprop()`/`getedge()` give you assertion objects. When you only want what they say, the accessors return plain data, and `label` takes any of the forms above (an `I`, a full IRI string, a CURIE or a bare name):
+
+```python
+chuks.values('telephone')          # ['+1 555 0100', '+1 555 0101']   all values, as a list of strings
+chuks.targets('knows')             # [<node Ify>, ...]                all edge targets
+chuks.one('name')                  # 'Chukwuemeka Okafor' | None      CardinalityError if several
+chuks.one_target('employer')       # <node> | None                    CardinalityError if several
+```
+
+Assertions are a set, so `values()` and `targets()` are sorted only to be deterministic; the order carries no meaning. `one()` is the strict sibling of `any_prop_value()`, which quietly picks one of several: use `one()` where the data should be single-valued and a second value is a problem worth hearing about. `CardinalityError` carries the node, the label and everything it found. Two identical values are one claim (they merge), so only *distinct* values conflict. The same accessors work on nested assertions (an edge's own properties).
+
+Editing: `prop.value = 'x'` changes a value in place, keeping the property's nested assertions and `@id`, so you don't need remove-then-add. Edits to an edge's `.target` or `.edges` set directly need `g.touch()` so the reverse-edge index (`g.inbound`) is rebuilt; the `add_*`/`remove_*` methods do that for you.
 
 # Merging graphs
 
