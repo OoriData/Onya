@@ -179,8 +179,9 @@ HTML comments `<!-- … -->` are ignored by the parser (and by Markdown renderer
 3. **One block per distinct entity.** Give each a type. Pull entities (people, orgs, places, works, events) into nodes; pull their attributes into properties; pull relationships into edges to other nodes.
 4. **Normalize references.** If two mentions are the same thing, use one node id for both. Make edge targets actual nodes you define.
 5. **Use nesting for relationship/value metadata**, not parallel scaffolding nodes. Keep labels atomic and values clean: no years, units, kinds or sources baked into a label name, and no parenthetical asides in a value (see *Good knowledge primitives* below).
-6. **Quote ambiguous scalars** — ISBNs, dates, codes, anything with leading zeros or special characters.
-7. **Validate by parsing** (below) before reporting done.
+6. **Keep records out of the graph.** Amounts, readings, dated events and narratives go to a sidecar, not node properties (see *Graph vs sidecar*).
+7. **Quote ambiguous scalars** — ISBNs, dates, codes, anything with leading zeros or special characters.
+8. **Validate by parsing** (below) before reporting done.
 
 Keep the graph faithful to the source: don't invent facts to fill out a type's expected properties. If the document doesn't state a birthDate, leave it out.
 
@@ -256,6 +257,26 @@ Choose ids that say what the bundle is (`nigeria-pop-2024`), so a second extract
 
 - **Use established terms as they are.** `birthDate`, `foundingDate` and `priceCurrency` are atomic *in their vocabulary*; don't split them into `birth` + a date qualifier. The test: would the qualifier plausibly vary across values of the same relation (different years, units, kinds, sources)? If so, it's a qualifier, not part of the label.
 - **Use a node when the qualified thing is itself an entity** that others refer to, or whose qualifiers need their own qualifiers: a census release, a dataset, a statistical observation (`# usa-gdp-2025 [Observation]`). Its properties still follow the same rule: atomic labels, clean values.
+
+## Graph vs sidecar: what doesn't belong in the graph
+
+Keep the graph to concepts: entities, relationships, rules, current state and short provenance pointers. Put records in a **sidecar** (a table or key/value store beside the graph) when they accumulate per event, are numeric detail you compute over, need stricter access, are history or audit trail, or cache a third-party system. Rule of thumb: whiteboard → graph; spreadsheet → sidecar.
+
+- **Leave the shape in the graph.** A closed-set value (`status: active`, `feeModel: retainer`) with any prose in a nested `note`; a figure in prose replaced by a marker such as `[amount on file]`; a short pointer (`source: decision log, 2026-05-02`) to where the detail went.
+- **Sidecar rows key on the node's full IRI** (or an assertion `@id` when the row is about one claim). The graph never points back per row.
+- **Catalog each sidecar with one node**, so a reader of the graph alone knows the data exists:
+
+```
+# dataset/billing-terms [Dataset]
+* name: Billing terms
+* <ex:table>: billing_terms
+* <ex:holds>: fee
+* <ex:sensitivity>: internal
+```
+
+- **When extracting a KG from a document**, route ledger-like content (amounts, dated events, logs) to sidecar rows instead of node properties, and put anything you can't classify on a review list rather than guessing.
+
+Design, a worked transform, and the write-path ordering (sidecar first, idempotent) are in [doc/design-sidecars.md](https://github.com/OoriData/Onya/blob/main/doc/design-sidecars.md).
 
 ## Validate by parsing
 

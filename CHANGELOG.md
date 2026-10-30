@@ -6,6 +6,18 @@ For interim changes not yet earmarked for a particular release, can use this hea
 ## [Unreleased]
 -->
 
+## [Unreleased]
+
+### Added
+
+- **`read_many(specs, g=None, *, merge=False, …)`: read a multi-file knowledge base into one graph** (#54). Accepts files, directories (recursive, `.onya` and `.onya.md`) and globs; reads in a deterministic order, each file once; merges once at the end when asked. Returns `ManyResult(graph, results)`, where `results` maps each `Path` to its `ParseResult` (per-file prefixes and nodebase). A spec matching no files raises `FileNotFoundError`, and a parse error carries a note naming its file. Supporting pieces are public too: `expand_paths(spec)` and `LITERATE_SUFFIXES`, now shared by the CLI and the filesystem store instead of repeated literals.
+- **Design doc: [Graph for concepts, sidecars for records](doc/design-sidecars.md).** A usage pattern for keeping the graph small and conceptual: records that accumulate per event, numeric detail, restricted data, audit history and third-party caches go to "sidecar" tables keyed by node IRI, with one catalog node per sidecar. Includes an idempotent, dry-runnable transform and a sidecar-first write path, both tested (`test/test_design_sidecars.py`). No model or API change.
+- **Onya skill (`onya-graph.SKILL.md`): "Graph vs sidecar" section** with a matching extraction-workflow step, so generated graphs leave amounts, readings and narratives out of node properties.
+
+### Fixed
+
+- **`onya convert <directory>` skipped `*.onya.md` files** (#54). Directory expansion matched only `**/*.onya`, though `.onya.md` is the recommended extension. It now picks up both, via the same `expand_paths` as `read_many`.
+
 ## [0.5.2] 2026-09-30: Inline assertion ids (`[=name]`) in Onya Literate. Knowledge-primitive guidance in the Onya skill.
 
 ### Added

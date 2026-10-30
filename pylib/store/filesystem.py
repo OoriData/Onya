@@ -37,7 +37,7 @@ from amara.iri import I
 from onya.graph import fold_prefixes, graph, warn_prefix_clashes
 from onya.util import namespace_for_curie
 from onya.query import DEFAULT_MIN_SCORE, normalize as query_normalize, search as query_search
-from onya.serial.literate import LiterateParser, write as literate_write
+from onya.serial.literate import LITERATE_SUFFIXES, LiterateParser, write as literate_write
 from onya.store.exceptions import StoreError
 
 # Deterministic slug: safe characters from the IRI, truncated, plus a short digest of the
@@ -103,7 +103,7 @@ class FileStore:
 
     def _existing_path(self, name: str) -> Path | None:
         slug = _slug(name)
-        for suffix in ('.onya', '.onya.md'):
+        for suffix in LITERATE_SUFFIXES:
             p = self.root / f'{slug}{suffix}'
             if p.exists():
                 return p
@@ -258,7 +258,7 @@ class FileStore:
         def _drop() -> None:
             slug = _slug(name)
             removed = False
-            for suffix in ('.onya', '.onya.md'):
+            for suffix in LITERATE_SUFFIXES:
                 p = self.root / f'{slug}{suffix}'
                 if p.exists():
                     p.unlink()
@@ -272,8 +272,8 @@ class FileStore:
         def _scan() -> list[str]:
             found: list[str] = []
             seen: set[str] = set()
-            for pattern in ('*.onya', '*.onya.md'):
-                for p in sorted(self.root.glob(pattern)):
+            for suffix in LITERATE_SUFFIXES:
+                for p in sorted(self.root.glob(f'*{suffix}')):
                     try:
                         text = p.read_text(encoding='utf-8')
                     except OSError:  # pragma: no cover - race with a concurrent drop

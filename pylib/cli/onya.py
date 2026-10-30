@@ -15,39 +15,12 @@ Implementation notes:
 
 from __future__ import annotations
 
-import glob
 import sys
-from pathlib import Path
+# from pathlib import Path
 from typing import TextIO
 
 from onya.__about__ import __version__
-from onya.serial.literate import LiterateParser, LiterateParseError
-
-
-def _looks_like_glob(filespec: str) -> bool:
-    return any(ch in filespec for ch in ('*', '?', '[', ']'))
-
-
-def _expand_filespec(filespec: str) -> list[Path]:
-    '''
-    Expand a filespec into concrete file paths.
-
-    - `-` means stdin.
-    - Globs are expanded using Python's glob module.
-    - A directory is expanded to `**/*.onya`.
-    '''
-    if filespec == '-':
-        return []
-
-    p = Path(filespec)
-    if p.exists() and p.is_dir():
-        matches = glob.glob(str(p / '**' / '*.onya'), recursive=True)
-        return [Path(x) for x in sorted(matches) if Path(x).is_file()]
-
-    if _looks_like_glob(filespec):
-        return [Path(x) for x in sorted(glob.glob(filespec, recursive=True)) if Path(x).is_file()]
-
-    return [p]
+from onya.serial.literate import LiterateParser, LiterateParseError, expand_paths
 
 
 def _infer_format(*, mermaid: bool, dot: bool, out: str | None) -> str:
@@ -93,7 +66,7 @@ def convert(filespec: str,
     Convert Onya Literate input to another format.
 
     Args:
-        filespec: Path, directory, glob, or '-' for stdin.
+        filespec: Path, directory (recursive; `.onya` and `.onya.md`), glob, or '-' for stdin.
         mermaid: Emit Mermaid flowchart markup (`.mmd`-style text).
         dot: Emit Graphviz DOT.
         out: Output file path, or '-' for stdout.
@@ -110,7 +83,7 @@ def convert(filespec: str,
         cat file.onya | onya convert - --mermaid
     '''
     fmt = _infer_format(mermaid=mermaid, dot=dot, out=out)
-    paths = _expand_filespec(filespec)
+    paths = [] if filespec == '-' else expand_paths(filespec)
 
     parser = LiterateParser(document_source_assertions=document_source_assertions, encoding=encoding,
                             lenient_arrows=lenient_arrows)
@@ -203,4 +176,3 @@ def main():
     import fire
 
     fire.Fire(_CLI)
-
