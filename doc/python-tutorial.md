@@ -201,6 +201,20 @@ from onya.serial.literate import read
 read(text, g, merge=True)   # equivalent to read(text, g) followed by g.merge()
 ```
 
+### Reading a knowledge base kept in many files
+
+A KG split across files (say `kg/*.onya.md`) reads into one graph with `read_many`. It takes files, directories (searched recursively for `.onya` and `.onya.md`) or globs, reads in a deterministic order, and merges once at the end if you ask:
+
+```python
+from onya.serial.literate import read_many
+
+r = read_many(['kg/', 'extra/*.onya'], merge=True)
+r.graph      # the combined graph
+r.results    # {Path: ParseResult}: each file's own doc IRI, prefixes and nodebase
+```
+
+A spec that matches nothing raises `FileNotFoundError` instead of silently reading nothing, and a parse error names its file. `onya convert` expands directories the same way.
+
 # Data contracts: interpretations
 
 Every Onya value is a string. An **interpretation** is a recorded promise about

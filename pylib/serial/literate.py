@@ -8,12 +8,15 @@ Serialize and deserialize between an Onya model and Onya Literate (Markdown)
 see: SPEC.md (Onya Literate serialization)
 """
 
+import glob
 import re
 import sys
+from dataclasses import dataclass, field
+from pathlib import Path
 
 from onya import I
 from onya.util import compact_iri, namespace_for_curie, shorten_node_id
-from onya.graph import AssertionIdConflict
+from onya.graph import AssertionIdConflict, graph
 from onya.terms import ONYA_INTERP, RESERVED_INTERP_NAMES
 from onya.serial._literate_parse import (
     EdgeArrowError,
@@ -29,6 +32,10 @@ from onya.serial._literate_parse import (
 
 __all__ = [
     'read',
+    'read_many',
+    'expand_paths',
+    'ManyResult',
+    'LITERATE_SUFFIXES',
     'write',
     'longtext',
     'LiterateParser',
@@ -328,3 +335,72 @@ def read(fp, g=None, *, document_source_assertions: bool = False, encoding: str 
         lenient_arrows=lenient_arrows,
     )
     return parser.parse(text, g, encoding=encoding, merge=merge)
+
+
+# File suffixes that hold Onya Literate. `.onya.md` is preferred for authoring (Markdown tools render
+# it); `.onya` is what the stores and `write` emit. One list, shared by read_many, the CLI and the stores.
+LITERATE_SUFFIXES = ('.onya', '.onya.md')
+
+
+def expand_paths(spec) -> list[Path]:
+    '''
+    Expand one filespec into concrete file paths, sorted for determinism.
+
+    - a directory expands, recursively, to every file ending in a `LITERATE_SUFFIXES` suffix
+    - a glob (`*`, `?`, `[`) expands to the files it matches (`**` is recursive)
+    - anything else is returned as given (a missing file is the reader's error, naming the path)
+    '''
+    spec = str(spec)
+    p = Path(spec)
+    if p.is_dir():
+        return sorted(f for f in p.rglob('*') if f.is_file() and f.name.endswith(LITERATE_SUFFIXES))
+    if any(ch in spec for ch in '*?[]'):
+        return [Path(x) for x in sorted(glob.glob(spec, recursive=True)) if Path(x).is_file()]
+    return [p]
+
+
+@dataclass
+class ManyResult:
+    '''Result of `read_many`: the combined graph, and each file's own `ParseResult` (prefixes, nodebase, ...).'''
+    graph: object
+    results: dict[Path, ParseResult] = field(default_factory=dict)
+
+
+def read_many(specs, g=None, *, merge: bool = False, document_source_assertions: bool = False,
+              encoding: str = 'utf-8', lenient_arrows: bool = False) -> ManyResult:
+    '''
+    Read several Onya Literate files into one graph.
+
+    specs -- a filespec or a list of them: files, directories (recursive, `.onya` and `.onya.md`)
+        or globs. Files are read in the order given, sorted within each spec, each file once.
+    g -- graph to populate; if None, a new one is created
+    merge -- call ``graph.merge()`` once, after every file is read (not per file)
+
+    A spec that matches no files raises ``FileNotFoundError`` rather than quietly reading nothing,
+    and a parse error names the file it came from (as a note on the original exception).
+    The remaining keywords are those of ``read``.
+
+    Returns: ``ManyResult(graph, results)`` where ``results`` maps each ``Path`` to its ``ParseResult``
+    '''
+    if isinstance(specs, (str, Path)):
+        specs = [specs]
+    parser = LiterateParser(document_source_assertions=document_source_assertions, encoding=encoding,
+                            lenient_arrows=lenient_arrows)
+    g = graph() if g is None else g
+    results: dict[Path, ParseResult] = {}
+    for spec in specs:
+        paths = expand_paths(spec)
+        if not paths:
+            raise FileNotFoundError(f'No files matched filespec: {str(spec)!r}')
+        for path in paths:
+            if path in results:
+                continue
+            text = path.read_text(encoding=encoding)  # a missing file raises FileNotFoundError naming it
+            try:
+                results[path] = parser.parse(text, g, encoding=encoding)
+            except Exception as exc:
+                exc.add_note(f'while reading {path}')
+                raise
+    if merge:
+        g.merge()
+    return ManyResult(g, results)
