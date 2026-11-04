@@ -6,7 +6,7 @@ For interim changes not yet earmarked for a particular release, can use this hea
 ## [Unreleased]
 -->
 
-## [Unreleased]
+## [0.5.3] 2026-11-04: "Multi-file reads, value accessors, copy/subgraph, integer, dangling-target checks.
 
 ### Added
 
