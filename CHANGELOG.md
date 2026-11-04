@@ -6,7 +6,18 @@ For interim changes not yet earmarked for a particular release, can use this hea
 ## [Unreleased]
 -->
 
-## [0.5.3] 2026-11-04: "Multi-file reads, value accessors, copy/subgraph, integer, dangling-target checks.
+## [0.5.4] 2026-11-04: Parsing tweaks.
+
+### Added
+
+- **Reserved `@` vocabulary: `onya.terms.RESERVED`, `reserve()`, `unknown_reserved_terms(g)`** (#62). SPEC gains a "Reserved vocabulary" section: every `@x` is `onya:x`; core defines a fixed table of terms (the docheader directives, `@id`, `@as`, `@source`/`@method`/`@confidence`, and the implicit `@Document` and `@Assertion` types); a layer defines further terms in its own spec, must not reuse a core or other layer's term, and an implementation without that layer treats them as ordinary assertions and types (what it does with them is undefined; it must not reject the document). `onya.terms` gets a constant per term, `RESERVED` (term to defining layer) and `reserve(layer, *names)` for layers to extend it, refusing a redefinition. `unknown_reserved_terms(g)` reports terms in the Onya vocabulary that nothing reserves (`@Calss`, `@sourcee`) with their uses. It is an audit only: parsing still accepts every `@x`. A test checks the registry and SPEC's table agree.
+- **Source locations: `read(..., track_locations=True)`, `ParseResult.locations`, `graph.locate(obj)`, `onya.locations.Location`** (#62). An opt-in side table (keyed by object, held by the graph) says which line each node and assertion was written on: `Location(doc_iri, lineno, line, source)`; off by default, when it costs nothing. Also on `read_many` (each `Location.source` names its file; `ManyResult.locations` combines them) and `LiterateParser(track_locations=True)`. Diagnostics use it when available: `Dangling.location` / `.lineno`, `Finding.location`, `InterpretationError.location`; and say `(location not tracked)` otherwise. Parse errors for a repeated `@id`, a duplicate `@as` and an inline plus nested `@id` now name their line without tracking. Copies (`graph.copy()`, `subgraph`) and API-built objects have no location; `union` carries them over.
+
+### Changed
+
+- Diagnostic text now ends with the location or `(location not tracked)`: `str(Dangling)`, and each line of `str(ValidationReport)`. `InterpretationError`'s message gains `(at <location>)` when the read tracked locations. Matching on these strings by exact equality will need updating; `.message`, `.value` and the other fields are unchanged.
+
+## [0.5.3] 2026-11-04: Multi-file reads, value accessors, copy/subgraph, integer, dangling-target checks.
 
 ### Added
 

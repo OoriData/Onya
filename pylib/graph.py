@@ -28,6 +28,7 @@ from abc import ABC
 from amara.iri import I
 
 from onya import ONYA_BASEIRI
+from onya.locations import Location, Locations
 from onya.terms import ONYA_ASSERTION
 from onya.util import join_namespace, namespace_for_curie
 
@@ -272,6 +273,13 @@ class assertions_mixin:
         if len(found) > 1:
             raise CardinalityError(self, self._resolve(label), sorted(str(_target_key(t)) for t in found))
         return next(iter(found), default)
+
+
+def graph_of(obj) -> 'graph | None':
+    '''The graph holding a node or assertion (found through its owning node), or None if detached.'''
+    while hasattr(obj, 'origin'):  # an assertion: climb to the node it hangs off
+        obj = obj.origin
+    return getattr(obj, '_graph', None)
 
 
 def allowed(allow):
@@ -581,6 +589,9 @@ class graph(MutableMapping):
         # label resolution in accessors and queries; the graph's data holds full IRIs, and two
         # graphs differing only in prefixes are the same graph.
         self.prefixes: dict[str, str] = dict(prefixes or {})
+        # Opt-in side table of where nodes and assertions were written (see `locate`); None until a
+        # read is asked to track locations, so a graph that never is pays nothing for it.
+        self._locations: Locations | None = None
         for n in nodes:
             self[n.id] = n
 
@@ -650,6 +661,20 @@ class graph(MutableMapping):
         n = node(nid, types)
         self[nid] = n
         return n
+
+    def locate(self, obj) -> Location | None:
+        '''
+        Where `obj` (a node or assertion) was written, as a `Location`, or None. Only reads made with
+        `track_locations=True` record this, and only for what they created: a copy, or an object made
+        by the API, has no location. A node declared by several blocks is located at the first.
+        '''
+        return self._locations.get(obj) if self._locations is not None else None
+
+    def _track_locations(self, table: Locations) -> None:
+        '''Fold a read's location table into this graph's.'''
+        if self._locations is None:
+            self._locations = Locations()
+        self._locations.update(table)
 
     def dangling(self, allow=None) -> set:
         '''
@@ -775,6 +800,8 @@ class graph(MutableMapping):
         store backends do exactly this so a caller's graph is never mutated.
         '''
         self.add_prefixes(other.prefixes)
+        if other._locations is not None:  # adopted objects keep their identity, so their locations stay valid
+            self._track_locations(other._locations)
         for nid, onode in other.nodes.items():
             keeper = self.nodes.get(nid)
             if keeper is None:

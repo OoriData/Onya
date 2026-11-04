@@ -248,6 +248,27 @@ read_many(['kg/'], on_dangling='error')     # judged once, after every file is r
 
 Two limits. The flag lives on the in-memory graph, so a graph that has been through a store, or `write` then `read`, no longer remembers which nodes were only referenced. `write` still emits a bare block for them (output unchanged), but will tell you which: pass a set, `write(g, out, placeholders=seen)`, and each placeholder id is added to it, so you can warn, or filter them out of the graph first. And `g.subgraph()` copies a neighborhood, so a node just outside it becomes a bare neighbor, undeclared *in the copy* even if the original declares it. `subgraph(['Ada'], hops=1).dangling()` lists Ada's friend-of-friend until you widen `hops`.
 
+### Finding the line a diagnostic is about
+
+The graph doesn't remember where in a document anything was written (a slot per assertion would cost every graph, diagnosed or not). Ask for it when you want it:
+
+```python
+r = read(text, g, track_locations=True)       # also on read_many and LiterateParser
+r.locations[assertion]                        # Location(doc_iri, lineno, line, source)
+g.locate(assertion)                           # the same, across every tracked read into g (None if unknown)
+```
+
+Nodes and assertions at every depth are located; a multi-line value at its first line; a node declared by several blocks at the first. With locations on, diagnostics name the line: `Dangling.lineno`, `Finding.location` (so `str(validate(g))` reads `age on A: 'old' is not a number (at http://e.o/doc:9)`), and the `InterpretationError` that `value_of` raises. Without them they say `(location not tracked)`. `read_many` fills `Location.source` with each file's path. Parse errors about `@id` and `@as` give the line regardless. Locations belong to the objects the read created, so `g.copy()` and anything built through the API have none.
+
+### Reserved vocabulary, and catching `@` typos
+
+Every `@x` in Onya Literate is the IRI `onya:x`, and core reserves a fixed set (the table in SPEC § Reserved vocabulary). Layers add their own terms and register them with `onya.terms.reserve('layer', 'name', ...)`; the registry is `onya.terms.RESERVED`. Parsing accepts any `@x`, because a layer you haven't loaded may define it. To catch typos, audit:
+
+```python
+from onya.terms import unknown_reserved_terms
+unknown_reserved_terms(g)    # {onya:Calss: [node, ...], onya:sourcee: [assertion, ...]}
+```
+
 # Data contracts: interpretations
 
 Every Onya value is a string. An **interpretation** is a recorded promise about

@@ -15,6 +15,7 @@ see: the [Onya Literate format documentation](https://github.com/OoriData/Onya/b
 
 import contextvars
 import re
+from bisect import bisect_right
 import textwrap
 import warnings
 from dataclasses import dataclass, field
@@ -25,6 +26,7 @@ from amara import iri  # for absolutize & matches_uri_syntax
 from onya import I, ONYA_BASEIRI, ONYA_NULL, LITERAL
 from onya.graph import AssertionIdConflict, allowed, edge as edge_cls, node as node_cls
 from onya.terms import ONYA_DOCUMENT, ONYA_SOURCE_REL, ONYA_INTERP, RESERVED_INTERP_NAMES, INTERP_NONE
+from onya.locations import Location, Locations, describe
 from onya.util import join_namespace, namespace_for_curie
 
 from pyparsing import (
@@ -63,6 +65,7 @@ class prop_info:
     is_text_ref: bool = False  # True if this is a text reference (uses ::)
     is_edge: bool = False   # True if this is an edge (uses ->)
     multiline_text: str = None  # For storing multiline text content
+    loc: int = None         # character offset in the parsed text where the bullet starts (for locations)
 
 
 @dataclass
@@ -77,6 +80,8 @@ class doc_info:
     pending_edges: list = None  # deferred (edge, target_id) links resolved after all @ids are known
     interp_defaults: dict = None  # docheader @interpretations: resolved label IRI -> interp IRI/_CANCEL
     interp_defaults_raw: list = None  # raw (label_str, interp_raw) pairs, resolved after header parse
+    text: str = None        # the text the grammar saw: same line numbering as the source
+    track: object = None    # a `_Tracker` when locations are being recorded, else None
 
 
 class SchemaPrefixConflict(ValueError):
@@ -289,6 +294,52 @@ class value_info:
     inline_id: str = None   # `[=name]` suffix: sugar for a nested `@id: name` (see SPEC: Assertion Identifiers)
 
 
+class _Header(str):
+    '''A node header's `#` marks, remembering the character offset where the header starts.'''
+    loc: int = None
+
+
+def _make_header(string, location, tokens):
+    h = _Header(tokens[0])
+    h.loc = location
+    return h
+
+
+class _Tracker:
+    '''
+    Records where each node and assertion of one parse was written, into a `Locations` table.
+    `text` is what the grammar parsed (tab-expanded and continuation-folded, which keeps its line
+    numbering identical to the source); `lines` are the source's own lines, for `Location.line`.
+    '''
+    def __init__(self, source_text: str, parsed_text: str, source: str | None):
+        self.lines = source_text.split('\n')
+        self.starts = [0]  # character offset where each line starts
+        for ln in parsed_text.split('\n')[:-1]:
+            self.starts.append(self.starts[-1] + len(ln) + 1)
+        self.source = source
+        self.table = Locations()
+
+    def add(self, obj, loc: int | None, doc: 'doc_info', *, first: bool = False) -> None:
+        if loc is None:
+            return
+        lineno = bisect_right(self.starts, loc)
+        line = self.lines[lineno - 1] if lineno <= len(self.lines) else ''
+        self.table.add(obj, Location(doc.iri, lineno, line, self.source), first=first)
+
+
+def _lineno_of(doc: 'doc_info', loc: int | None) -> int | None:
+    '''The line number of character offset `loc` in the text being parsed, or None when unknown.'''
+    if loc is None or doc.text is None:
+        return None
+    return doc.text.count('\n', 0, loc) + 1
+
+
+def _line_note(doc: 'doc_info', loc: int | None) -> str:
+    '''` (line N)` for offset `loc`, or '' when unknown.'''
+    n = _lineno_of(doc, loc)
+    return f' (line {n})' if n is not None else ''
+
+
 class _InlineId(str):
     '''The name from an inline `[=name]` assertion-id suffix (parse-time marker only).'''
 
@@ -321,6 +372,9 @@ class ParseResult:
     prefixes: dict | None = None
     # References this read made to nodes that nothing has declared (see `Dangling`)
     dangling: list = field(default_factory=list)
+    # Where each node and assertion this read created was written; None unless the read was made with
+    # `track_locations=True`. Index it with the object: `r.locations[assertion]`.
+    locations: object = None
 
 
 @dataclass
@@ -332,6 +386,11 @@ class Dangling:
     '''
     target: object
     edge: object
+    location: Location | None = None  # where the edge was written, when the read tracked locations
+
+    @property
+    def lineno(self) -> int | None:
+        return self.location.lineno if self.location is not None else None
 
     @property
     def label(self):
@@ -345,13 +404,16 @@ class Dangling:
         return o.id
 
     def __str__(self):
-        return f'{self.source} --{self.label}--> {self.target}'
+        return f'{self.source} --{self.label}--> {self.target} {describe(self.location)}'
 
 
-def undeclared_refs(refs, allow=None) -> list[Dangling]:
-    '''The `Dangling` entries among edges `refs` whose targets are still undeclared and not in `allow`.'''
+def undeclared_refs(refs, allow=None, locations=None) -> list[Dangling]:
+    '''
+    The `Dangling` entries among edges `refs` whose targets are still undeclared and not in `allow`.
+    `locations` (a `Locations`, or anything with `.get`) supplies where each edge was written.
+    '''
     ok = allowed(allow)
-    return [Dangling(e.target.id, e) for e in refs
+    return [Dangling(e.target.id, e, locations.get(e) if locations is not None else None) for e in refs
             if isinstance(e.target, node_cls) and not e.target.declared and not ok(e.target.id)]
 
 
@@ -366,7 +428,8 @@ class LiterateParser:
                  strict_namespace_bases: bool = False,
                  warn_implicit_doc_ids: bool = False,
                  warn_empty_blocks: bool = True,
-                 lenient_arrows: bool = False):
+                 lenient_arrows: bool = False,
+                 track_locations: bool = False):
         '''
         document_source_assertions -- if set, add @source sub-properties on created assertions,
             including nested assertions but excluding document header declarations
@@ -388,7 +451,10 @@ class LiterateParser:
             such a line raises `EdgeArrowError`, naming the character and showing the
             corrected line. If set, the stray arrow is accepted as an edge, a warning is
             emitted, and parsing continues. Valid edge arrows remain only `->` and `→`.
+        track_locations -- if set, record where each node and assertion was written: the parse
+            result's `locations`, and `graph.locate()`. Off by default, when it costs nothing.
         '''
+        self.track_locations = track_locations
         self.document_source_assertions = document_source_assertions
         self.encoding = encoding
         self.strict_namespace_bases = strict_namespace_bases
@@ -397,7 +463,7 @@ class LiterateParser:
         self.lenient_arrows = lenient_arrows
 
     def parse(self, lit_text, graph_obj=None, *, encoding: str | None = None,
-              merge: bool = False) -> ParseResult:
+              merge: bool = False, source: str | None = None) -> ParseResult:
         '''
         Parse Onya Literate source text
 
@@ -409,6 +475,7 @@ class LiterateParser:
           (collapsing duplicate assertions per the SPEC identity rules). Defaults to False,
           preserving the on-demand, never-ambient default; it is purely a one-call
           shorthand for the common parse-then-merge workflow.
+        - `source` -- a name for the text (e.g. its file path), recorded in tracked locations
 
         Returns: `ParseResult(doc_iri, graph, nodes_added)`
         '''
@@ -424,7 +491,11 @@ class LiterateParser:
         doc.text_refs = {}  # Initialize the text references dictionary
         doc.pending_edges = []  # Edge targets are resolved after all @id declarations are seen
 
+        source_text = lit_text
         lit_text, folded = _fold_continuations(_expand_structural_tabs(lit_text))
+        doc.text = lit_text  # same line numbering as the source (folding blanks lines, never removes them)
+        if self.track_locations:
+            doc.track = _Tracker(source_text, lit_text, source)
         token = _FOLDED.set(folded)
         try:
             parsed = self._parse_string(lit_text)
@@ -447,7 +518,8 @@ class LiterateParser:
         # node id (an existing node, else a freshly-minted one).
         _resolve_pending_edges(graph_obj, doc)
         # Taken before any merge: each reference in the text counts, even ones merge later collapses
-        dangling = undeclared_refs(e for e, _ in (doc.pending_edges or ()))
+        locations = doc.track.table if doc.track else None
+        dangling = undeclared_refs((e for e, _ in (doc.pending_edges or ())), locations=locations)
 
         # Parse-time collision: an @id shares the node id space, so it must not equal any node id.
         assertion_ids = getattr(graph_obj, 'assertion_ids', {})
@@ -477,10 +549,12 @@ class LiterateParser:
         # folds them in with the same clash rule as `graph.union` (existing binding wins).
         if hasattr(graph_obj, 'add_prefixes'):
             graph_obj.add_prefixes(doc.iris)
+        if locations is not None and hasattr(graph_obj, '_track_locations'):
+            graph_obj._track_locations(locations)
         return ParseResult(doc.iri, graph_obj, nodes_added,
                            schema=doc.schemabase, nodebase=doc.nodebase,
                            typebase=doc.typebase, prefixes=prefixes,
-                           dangling=dangling)
+                           dangling=dangling, locations=locations)
 
     def _parse_string(self, lit_text):
         '''
@@ -561,7 +635,7 @@ def _make_tree(string, location, tokens):
     Parse action to return a parsed tree node from tokens
     '''
     return prop_info(indent=len(tokens[0]), key=tokens[1],
-                        value=tokens[2], children=None)
+                        value=tokens[2], children=None, loc=location)
 
 
 def _make_edge_tree(string, location, tokens):
@@ -569,7 +643,7 @@ def _make_edge_tree(string, location, tokens):
     Parse action to return a parsed tree node for edges (->)
     '''
     return prop_info(indent=len(tokens[0]), key=tokens[1],
-                        value=tokens[2], children=None, is_edge=True)
+                        value=tokens[2], children=None, is_edge=True, loc=location)
 
 
 def _make_value(string, location, tokens):
@@ -609,6 +683,7 @@ def iriref_parse_action(toks):
     return I(toks[0])
 
 RIGHT_ARROW     = Literal('->') | Literal('→')  # U+2192
+HEADER_MARK     = Word('#').set_parse_action(_make_header)
 DOUBLE_COLON    = Literal('::')  # For text references
 
 # Rightward arrows commonly typed by mistake in place of the edge connector. The only valid
@@ -770,7 +845,7 @@ propset         = Group(Optional(DelimitedList(prop_text_ref | prop | edge | COM
 # Trailing comments on a header line are ignored like any comment (same line only: they must not
 # reach past the newline into the block's first assertion).
 SAME_LINE_COMMENT = COMMENT.copy().set_whitespace_chars(' \t')
-node_header = Word('#') + Optional(IRIREF, None) + Optional(QuotedString('[', end_quote_char=']'), None) \
+node_header = HEADER_MARK + Optional(IRIREF, None) + Optional(QuotedString('[', end_quote_char=']'), None) \
                 + Suppress(ZeroOrMore(SAME_LINE_COMMENT))
 node_block  = Forward()
 node_block  << Group(node_header + White('\n').suppress() + Suppress(ZeroOrMore(blank_to_eol)) + propset)
@@ -792,7 +867,7 @@ def _make_text_ref_tree(string, location, tokens):
     '''
     return prop_info(indent=len(tokens[0]), key=tokens[1],
                         value=tokens[2] if len(tokens) > 2 else None, children=None,
-                        is_text_ref=True)
+                        is_text_ref=True, loc=location)
 
 
 def _make_text_ref_def(string, location, tokens):
@@ -1102,6 +1177,8 @@ def _create_assertion(parent, pi, assertion_label, doc, parser: LiterateParser |
             created = parent.add_property(assertion_label, str(val))
     if created is not None and parser:
         parser._maybe_add_source(created, doc)
+    if created is not None and doc.track:
+        doc.track.add(created, pi.loc, doc)
     return created
 
 
@@ -1127,7 +1204,7 @@ def _build_assertions(node, props, graph_obj, doc, parser: LiterateParser | None
     seen_as = set()  # id(parent) of assertions that already took an inline @as (dup -> parse error)
     inline_named = set()  # id(assertion) of assertions named by an inline `[=name]`
 
-    def register_id(raw, target) -> None:
+    def register_id(raw, target, loc=None) -> None:
         assertion_id = _resolve_node_id(str(raw), doc, parser)
         try:
             graph_obj.register_assertion_id(assertion_id, target)
@@ -1139,7 +1216,7 @@ def _build_assertions(node, props, graph_obj, doc, parser: LiterateParser | None
             raise AssertionIdConflict(
                 f'{e} (a repeated @id within one Onya Literate document is a '
                 f'parser-surface limitation, not the graph merge rule: under merge, '
-                f'same-id assertions are the same assertion)'
+                f'same-id assertions are the same assertion){_line_note(doc, loc)}'
             ) from e
 
     for pi in props:
@@ -1169,8 +1246,9 @@ def _build_assertions(node, props, graph_obj, doc, parser: LiterateParser | None
                         raise LiterateSyntaxError(
                             f'An assertion has both an inline `[={_inline_name(parent)}]` and a nested '
                             f'`@id: {raw}`; an assertion has at most one id. Keep one of the two '
-                            f'(they mean the same thing).', category='inline-id')
-                    register_id(raw, parent)
+                            f'(they mean the same thing).{_line_note(doc, pi.loc)}',
+                            lineno=_lineno_of(doc, pi.loc), category='inline-id')
+                    register_id(raw, parent, pi.loc)
             continue
 
         # `@as` is a directive, not an assertion: like `@id`, it annotates its enclosing
@@ -1190,7 +1268,8 @@ def _build_assertions(node, props, graph_obj, doc, parser: LiterateParser | None
                 continue
             if id(parent) in seen_as:
                 raise InterpretationParseError(
-                    'Duplicate @as on one property: a property has at most one interpretation'
+                    f'Duplicate @as on one property: a property has at most one interpretation'
+                    f'{_line_note(doc, pi.loc)}'
                 )
             seen_as.add(id(parent))
             raw = pi.value.verbatim if pi.value else None
@@ -1206,7 +1285,7 @@ def _build_assertions(node, props, graph_obj, doc, parser: LiterateParser | None
         created = _create_assertion(parent, pi, assertion_label, doc, parser)
         inline_id = getattr(pi.value, 'inline_id', None)
         if created is not None and inline_id is not None:
-            register_id(inline_id, created)  # `[=name]` desugars to a nested `@id: name`
+            register_id(inline_id, created, pi.loc)  # `[=name]` desugars to a nested `@id: name`
             inline_named.add(id(created))
         if created is not None:
             saw_assertion = True
@@ -1236,6 +1315,8 @@ def process_nodeblock(nodeblock, graph_obj, doc, parser: LiterateParser | None =
         n = graph_obj.node(nid)
     else:
         n = graph_obj[nid]
+    if doc.track:
+        doc.track.add(n, headermarks.loc, doc, first=True)  # a node with several blocks is located at the first
     n._stub = False  # a node block, even an empty one, declares the node (an earlier edge may have named it)
 
     # Add types if specified. A node may carry a *set* of types, written

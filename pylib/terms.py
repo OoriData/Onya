@@ -17,6 +17,76 @@ ONYA_CONFIDENCE_REL = ONYA('confidence')  # @confidence provenance sub-property,
 ONYA_DOCUMENT = ONYA('Document')  # Type for document nodes created from @document directive
 ONYA_ASSERTION = ONYA('Assertion')  # Implicit type carried by every assertion (edge/property)
 
+# The remaining core reserved terms, one constant each (see RESERVED, and SPEC: Reserved vocabulary).
+# Docheader directives:
+ONYA_DOCUMENT_REL = ONYA('document')  # @document
+ONYA_NODEBASE = ONYA('nodebase')  # @nodebase
+ONYA_BASE = ONYA('base')  # @base (alias of @nodebase)
+ONYA_SCHEMA = ONYA('schema')  # @schema
+ONYA_TYPEBASE = ONYA('typebase')  # @typebase
+ONYA_LANGUAGE = ONYA('language')  # @language
+ONYA_IRI = ONYA('iri')  # @iri (prefix stanza)
+ONYA_INTERPRETATIONS = ONYA('interpretations')  # @interpretations (default-interpretation stanza)
+# Assertion directives (consumed by the parser; they set `id` / `interp`, and are not stored as assertions):
+ONYA_ID = ONYA('id')  # @id
+ONYA_AS = ONYA('as')  # @as
+
+# Reserved vocabulary. Every `@x` in Onya Literate is the IRI `onya:x` (http://purl.org/onya/vocab/x).
+# RESERVED maps each reserved local name to the layer that defines it: 'core' for the terms above, and
+# the layer's own name for terms a layer adds (via `reserve`, from that layer's module). Layers extend the
+# core vocabulary without a registry edit here, but may not reuse a name another layer already holds.
+RESERVED: dict[str, str] = {}
+
+
+def reserve(layer: str, *names: str) -> None:
+    '''
+    Register `names` (local names, without the `@`) as reserved vocabulary defined by `layer`.
+    Idempotent for the same layer; raises ValueError if a name is already reserved by a different
+    layer (a layer must not reuse a term another layer, or core, defines).
+    '''
+    for name in names:
+        held = RESERVED.setdefault(name, layer)
+        if held != layer:
+            raise ValueError(f'@{name} is already reserved by {held!r}; layer {layer!r} cannot redefine it')
+
+
+reserve('core',
+        'document', 'nodebase', 'base', 'schema', 'typebase', 'language', 'iri', 'interpretations',  # directives
+        'id', 'as',  # assertion directives
+        'source', 'method', 'confidence',  # provenance
+        'Document', 'Assertion',  # implicit types
+        'type')  # the type relation: reserved, with no behavior defined yet
+
+
+def unknown_reserved_terms(g) -> dict:
+    '''
+    Terms in `g` that live in the Onya vocabulary (`@x`, i.e. `onya:x`) but that neither core nor
+    any loaded layer reserves: almost always a typo (`@Calss`). Maps each such IRI to its uses: the
+    assertions it labels, and the nodes it types. Findings are data, never errors; parsing accepts
+    any `@x`, since a layer you haven't loaded may define it (SPEC: Reserved vocabulary).
+
+    Interpretation IRIs (`onya:interp/...`) are a separate namespace, audited by
+    `onya.interp.unknown_interps`.
+    '''
+    found: dict = {}
+    base = str(ONYA)
+
+    def check(term, use) -> None:
+        local = str(term)[len(base):] if str(term).startswith(base) else None
+        if local and '/' not in local and '#' not in local and local not in RESERVED:
+            found.setdefault(I(str(term)), []).append(use)
+
+    def walk(container) -> None:
+        for a in (*container.properties, *container.edges):
+            check(a.label, a)
+            walk(a)
+
+    for n in g.nodes.values():
+        for t in n.types:
+            check(t, n)
+        walk(n)
+    return found
+
 # Onya interpretation vocabulary (the data-contract "interpretation" names). `@as: number`
 # and the reserved docheader interpretation names resolve here: e.g.
 # ONYA_INTERP('number') -> http://purl.org/onya/vocab/interp/number. These IRIs name the

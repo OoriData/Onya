@@ -30,6 +30,8 @@ Collective term for edges and properties. Like a node, an assertion is an instan
 
 An assertion MAY be given an explicit identifier, making it addressable. See [Assertion Identifiers](#assertion-identifiers). A property MAY additionally carry an interpretation, a recorded contract about how its string value is meant to be read. See [Interpretations](#interpretations-data-contract-layers).
 
+Every assertion carries the implicit type `onya:Assertion` (`@Assertion`). It is not stored or serialized: it is what distinguishes an assertion from a node when both are selected or targeted by type.
+
 ### Edge
 
 An **edge** connects an origin to a target node via an IRI label.
@@ -273,6 +275,29 @@ carries only per-assertion interpretations: queries, merge, and the
 interpretation layer never consult document context, and two documents with
 different `@interpretations` defaults merge with no rule for reconciling headers
 (there are no headers to reconcile).
+
+## Reserved vocabulary
+
+Onya reserves one namespace, `http://purl.org/onya/vocab/` (`onya:`), for its own terms. In Onya Literate, **every `@x` is the IRI `onya:x`**: `@source` is `onya:source`, `@Document` is `onya:Document`. The same IRI written out in full (`<http://purl.org/onya/vocab/source>`) is the same term.
+
+Core defines the terms in the table below, and nothing else is core. A **layer** (a separately specified extension, such as an ordering, shape or provenance layer) may define further terms in the same namespace, each in that layer's own specification. Two rules keep this orderly:
+
+- A layer must not reuse a term that core or another layer defines, nor give one a different meaning.
+- An implementation that does not include a layer treats that layer's terms like any other `@x`: they parse and merge as ordinary assertions and types. What such an implementation *does* with them is undefined by Onya; in particular it must not reject the document for containing them.
+
+So an `@x` that no loaded specification defines is not an error, since some layer you haven't loaded may define it. It is, however, usually a typo (`@Calss`), and an implementation may offer an audit that lists such terms. Vocabulary for interpretations lives in a separate sub-namespace (`onya:interp/`; see [`@as`](#as)).
+
+| Term | Kind | Defined in |
+|---|---|---|
+| `@document`, `@nodebase`, `@base`, `@schema`, `@typebase`, `@language` | docheader directive (`@base` is an alias of `@nodebase`) | [Document Header](#document-header) |
+| `@iri` | docheader stanza: vocabulary prefixes | [Vocabulary prefixes](#vocabulary-prefixes-iri) |
+| `@interpretations` | docheader stanza: default interpretations | [`@interpretations`](#interpretations) |
+| `@id` | assertion directive: names its enclosing assertion | [Assertion Identifiers](#assertion-identifiers) |
+| `@as` | assertion directive: sets its enclosing assertion's interpretation | [`@as`](#as) |
+| `@source`, `@method`, `@confidence` | provenance sub-assertions | [Optional assertion provenance](#optional-assertion-provenance-source-method-confidence) |
+| `@Document` | implicit type of the document node | [Document Header](#document-header) |
+| `@Assertion` | implicit type carried by every assertion | [Assertions](#assertions) |
+| `@type` | the type relation; reserved, with no behavior defined yet | (this section) |
 
 ## Selecting assertions
 
