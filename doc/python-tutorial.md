@@ -228,6 +228,26 @@ r.results    # {Path: ParseResult}: each file's own doc IRI, prefixes and nodeba
 
 A spec that matches nothing raises `FileNotFoundError` instead of silently reading nothing, and a parse error names its file. `onya convert` expands directories the same way.
 
+### Catching typo'd edge targets
+
+An edge to an id that has no node block of its own still parses: Onya Literate allows forward references, and external resources such as an ORCID URL are normal. But a typo (`-> public.unrestriced`) fails the same way, quietly, by minting an empty node. Onya tells the two cases apart by recording which nodes were *declared* (given a block, a type or an assertion, or created with `graph.node()`) and which exist only because an edge named them:
+
+```python
+r = read(text, g)
+r.dangling                 # [Dangling(target, edge)], one per reference this read left undeclared
+str(r.dangling[0])         # 'http://e.o/A --https://schema.org/knows--> http://e.o/Typo'
+g.dangling()               # {ids}, graph-wide: a node declared by a later read isn't listed
+g['http://e.o/Typo'].declared   # False
+
+# Opt in to a check; allow= lists the targets that are expected to be external
+read(text, g, on_dangling='error', allow=['https://orcid.org/'])   # 'ignore' (default) | 'warn' | 'error'
+read_many(['kg/'], on_dangling='error')     # judged once, after every file is read
+```
+
+`allow` is an IRI prefix, a list of prefixes, or a function of the id, and works the same in `g.dangling(allow=...)`. `on_dangling='error'` raises `DanglingTargetError` (a `ValueError`) listing every offender; the graph is already populated by then. An edge to an assertion `@id` is never dangling. `onya convert` takes the same two options (`--on_dangling=error --allow=https://orcid.org/,https://ror.org/`) and exits non-zero on an error.
+
+Two limits. The flag lives on the in-memory graph, so a graph that has been through a store, or `write` then `read`, no longer remembers which nodes were only referenced. `write` still emits a bare block for them (output unchanged), but will tell you which: pass a set, `write(g, out, placeholders=seen)`, and each placeholder id is added to it, so you can warn, or filter them out of the graph first. And `g.subgraph()` copies a neighborhood, so a node just outside it becomes a bare neighbor, undeclared *in the copy* even if the original declares it. `subgraph(['Ada'], hops=1).dangling()` lists Ada's friend-of-friend until you widen `hops`.
+
 # Data contracts: interpretations
 
 Every Onya value is a string. An **interpretation** is a recorded promise about

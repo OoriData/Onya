@@ -20,7 +20,9 @@ import sys
 from typing import TextIO
 
 from onya.__about__ import __version__
-from onya.serial.literate import LiterateParser, LiterateParseError, expand_paths
+from onya.serial.literate import (
+    DanglingTargetError, LiterateParser, LiterateParseError, expand_paths, report_dangling, undeclared_refs,
+)
 
 
 def _infer_format(*, mermaid: bool, dot: bool, out: str | None) -> str:
@@ -61,7 +63,9 @@ def convert(filespec: str,
             show_edge_annotations: bool = True,
             document_source_assertions: bool = False,
             encoding: str = 'utf-8',
-            lenient_arrows: bool = False):
+            lenient_arrows: bool = False,
+            on_dangling: str = 'ignore',
+            allow: str | list | tuple | None = None):
     '''
     Convert Onya Literate input to another format.
 
@@ -75,14 +79,20 @@ def convert(filespec: str,
         encoding: Text encoding used to read input files (ignored for stdin).
         lenient_arrows: If set, accept a stray edge arrow (e.g. `➡`, `=>`), warn, and
             continue instead of erroring with EdgeArrowError.
+        on_dangling: What to do about edge targets no node block declares (often typos):
+            'ignore' (default), 'warn', or 'error' (exit non-zero). Judged after all files are read.
+        allow: Targets that may stay undeclared: an IRI prefix, or several separated by commas.
 
     Examples:
         onya convert test/resource/schemaorg/thingsfallapart.onya --mermaid
         onya convert test/resource/schemaorg/thingsfallapart.onya --dot --out /tmp/out.dot
+        onya convert kg/ --mermaid --on_dangling=error --allow=https://orcid.org/
         onya convert 'test/resource/schemaorg/*.onya' --dot > merged.dot
         cat file.onya | onya convert - --mermaid
     '''
     fmt = _infer_format(mermaid=mermaid, dot=dot, out=out)
+    if on_dangling not in ('ignore', 'warn', 'error'):
+        raise ValueError(f"on_dangling must be 'ignore', 'warn' or 'error', not {on_dangling!r}")
     paths = [] if filespec == '-' else expand_paths(filespec)
 
     parser = LiterateParser(document_source_assertions=document_source_assertions, encoding=encoding,
@@ -90,6 +100,7 @@ def convert(filespec: str,
 
     graph_obj = None
     doc_iris: list[str] = []
+    dangling_edges: list = []  # edges to nodes undeclared when their file was read; re-judged at the end
 
     def _parse(text: str, source: str):
         # A friendly parse diagnostic (stray arrow, bad node id, unclosed [Type], preamble
@@ -105,6 +116,7 @@ def convert(filespec: str,
         lit_text = sys.stdin.read()
         result = _parse(lit_text, '<stdin>')
         graph_obj = result.graph
+        dangling_edges += [d.edge for d in result.dangling]
         if result.doc_iri:
             doc_iris.append(result.doc_iri)
     else:
@@ -117,11 +129,21 @@ def convert(filespec: str,
             lit_text = p.read_text(encoding=encoding)
             result = _parse(lit_text, str(p))
             graph_obj = result.graph
+            dangling_edges += [d.edge for d in result.dangling]
             if result.doc_iri:
                 doc_iris.append(result.doc_iri)
 
     if graph_obj is None:
         raise RuntimeError('No input was read')
+
+    if on_dangling != 'ignore':
+        if isinstance(allow, str):
+            allow = [a.strip() for a in allow.split(',') if a.strip()]
+        try:
+            report_dangling(undeclared_refs(dangling_edges, allow), on_dangling)
+        except DanglingTargetError as exc:
+            sys.stderr.write(f'{exc}\n')
+            raise SystemExit(2)
 
     # Serializer selection is intentionally explicit (keeps CLI help obvious).
     emit_kwargs = dict(

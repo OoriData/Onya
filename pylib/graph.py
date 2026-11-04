@@ -274,6 +274,19 @@ class assertions_mixin:
         return next(iter(found), default)
 
 
+def allowed(allow):
+    '''
+    Turn an `allow` argument into a predicate on node ids: None allows nothing, a string is an IRI
+    prefix, a callable is used as is, and any other iterable is a collection of prefixes.
+    '''
+    if allow is None:
+        return lambda nid: False
+    if callable(allow):
+        return allow
+    prefixes = (allow,) if isinstance(allow, str) else tuple(map(str, allow))
+    return lambda nid: str(nid).startswith(prefixes)
+
+
 class node(assertions_mixin):
     '''
     A node in the Onya graph.
@@ -282,10 +295,12 @@ class node(assertions_mixin):
     (edges and properties). Both edges and properties are sets, not sequences,
     because pervasive ordering is not a core requirement of the model.
     '''
-    __slots__ = ['id', 'types', 'properties', 'edges', '_graph_ref']
+    __slots__ = ['id', 'types', 'properties', 'edges', '_graph_ref', '_stub']
 
     def __init__(self, id_: I | str, types: I | str | set[I | str] | None = None):
         self.id = id_
+        # True only for a placeholder the parser minted because an edge named this id (see `declared`)
+        self._stub = False
         # Weak back-reference to the graph holding this node, set when it is added to one. Used
         # only to find `prefixes` for CURIE-keyed accessors and to invalidate that graph's
         # reverse-edge index on mutation; the model itself never depends on it. Weak, so a node
@@ -299,6 +314,16 @@ class node(assertions_mixin):
         self.properties: set['property_'] = set()
         self.edges: set['edge'] = set()
     
+    @property
+    def declared(self) -> bool:
+        '''
+        False for a node that exists only because an edge named it (a forward reference nobody ever
+        declared: the typo'd target, or a legitimately external IRI), True otherwise. A node stops
+        being such a placeholder as soon as it gets a type or an assertion, or a block of its own
+        in a later read; nodes you create with `graph.node()` are declared from the start.
+        '''
+        return not (self._stub and not self.types and not self.properties and not self.edges)
+
     @property
     def _graph(self) -> 'graph | None':
         return self._graph_ref() if self._graph_ref is not None else None
@@ -626,6 +651,20 @@ class graph(MutableMapping):
         self[nid] = n
         return n
 
+    def dangling(self, allow=None) -> set:
+        '''
+        Ids of nodes that are referenced but were never declared: the targets of edges that nothing
+        in any read so far (or any `graph.node()` call) ever gave a node of its own. These are the
+        forward references that stayed forward, usually a typo, occasionally a legitimately
+        external resource. Computed over the whole graph, so a node declared by a later read isn't
+        reported, and an edge to an assertion `@id` never is.
+
+        allow -- ids that are expected to be undeclared, as an IRI prefix, a list of prefixes or a
+            predicate taking the id; matching ids are left out of the result
+        '''
+        ok = allowed(allow)
+        return {nid for nid, n in self.nodes.items() if not n.declared and not ok(nid)}
+
     def register_assertion_id(self, id_: I | str, assertion_obj: assertion) -> assertion:
         '''
         Bind an explicit identifier to an assertion, enforcing uniqueness among
@@ -742,6 +781,7 @@ class graph(MutableMapping):
                 onode._graph = None  # an explicit handoff: `other` is consumed (see docstring)
                 self[nid] = onode
                 continue
+            keeper._stub = keeper._stub and onode._stub  # declared on either side is declared
             keeper.types |= set(onode.types)
             for p in list(onode.properties):
                 p.origin = keeper
@@ -796,7 +836,7 @@ class graph(MutableMapping):
         out = graph(prefixes=self.prefixes)
         for nid in self.nodes:  # keep the original's node order
             if nid in included:
-                out.node(nid, types=set(self.nodes[nid].types))
+                out.node(nid, types=set(self.nodes[nid].types))._stub = self.nodes[nid]._stub
         copies: dict[int, assertion] = {}  # id(original assertion) -> its copy
         late: list[tuple[edge, assertion]] = []  # edges aimed at an assertion: resolved once all exist
 
@@ -808,7 +848,10 @@ class graph(MutableMapping):
             for e in src.edges:
                 if isinstance(e.target, node):
                     target = out.nodes.get(e.target.id)
-                    ne = dst.add_edge(e.label, target if target is not None else out.node(e.target.id))
+                    if target is None:  # outside the neighborhood: bare, and so undeclared in this copy
+                        target = out.node(e.target.id)
+                        target._stub = True
+                    ne = dst.add_edge(e.label, target)
                 else:
                     ne = dst.add_edge(e.label, None)  # placeholder, bound below
                     late.append((e, ne))
@@ -826,7 +869,10 @@ class graph(MutableMapping):
         for old, new in late:
             hit = copies.get(id(old.target))
             if hit is None:  # outside the neighborhood: a bare node (shared by every edge that needs it)
-                hit = out.nodes.get(old.target.id) or out.node(old.target.id)
+                hit = out.nodes.get(old.target.id)
+                if hit is None:
+                    hit = out.node(old.target.id)
+                    hit._stub = True  # named by an edge here, declared nowhere in this graph
             new.target = hit
         out.touch()
         return out
