@@ -11,6 +11,7 @@ see: SPEC.md (Onya Literate serialization)
 import glob
 import re
 import sys
+import warnings
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -19,6 +20,7 @@ from onya.util import compact_iri, namespace_for_curie, shorten_node_id
 from onya.graph import AssertionIdConflict, graph
 from onya.terms import ONYA_INTERP, RESERVED_INTERP_NAMES
 from onya.serial._literate_parse import (
+    Dangling,
     EdgeArrowError,
     InterpretationParseError,
     LiterateParseError,
@@ -28,6 +30,7 @@ from onya.serial._literate_parse import (
     ParseResult,
     SchemaPrefixConflict,
     ensure_namespace_separator,
+    undeclared_refs,
 )
 
 __all__ = [
@@ -35,6 +38,10 @@ __all__ = [
     'read_many',
     'expand_paths',
     'ManyResult',
+    'Dangling',
+    'DanglingTargetError',
+    'report_dangling',
+    'undeclared_refs',
     'LITERATE_SUFFIXES',
     'write',
     'longtext',
@@ -228,6 +235,7 @@ def write(
     bracket_types: bool = False,
     strict_namespace_bases: bool = False,
     multiline: str = 'textref',
+    placeholders: set | None = None,
 ):
     '''
     Serialize an Onya graph to Onya Literate (Markdown).
@@ -244,6 +252,10 @@ def write(
         reference, robust for any content) or ``'indent'`` (indented continuation text under the
         bullet, SPEC § Long Text, falling back to a text reference for a value that form can't
         represent exactly: e.g. a trailing newline, or a line that would read as a bullet).
+    placeholders -- if a ``set`` is passed, the id of every placeholder node written is added to it:
+        a node that exists only because an edge named it (see ``node.declared``). They are still
+        written, as bare blocks, so the output is unchanged; the set lets you decide what to do about
+        them (warn, or filter the graph first) and reminds you that reading the output back declares them.
 
     Faithfulness: ``read(write(g)) == g`` holds for any namespace arguments, because bare-name
     compaction is only applied to IRIs genuinely under a declared base and everything else falls
@@ -292,6 +304,8 @@ def write(
         if document_s and str(nid) == document_s:
             continue
         node = model[nid]
+        if placeholders is not None and not node.declared:
+            placeholders.add(nid)
         header_id = shorten_node_id(nid, nodebase)
         if node.types:
             types = sorted(node.types, key=str)
@@ -312,8 +326,40 @@ def write(
     return
 
 
+class DanglingTargetError(LiterateParseError):
+    '''
+    Raised by `read` / `read_many` with `on_dangling='error'` when an edge targets a node that
+    nothing declared. `dangling` lists the offending `Dangling` entries; the graph has already been
+    populated by then, as with any error that surfaces after parsing.
+    '''
+    def __init__(self, message, dangling):
+        super().__init__(message)
+        self.dangling = dangling
+
+
+_ON_DANGLING = ('ignore', 'warn', 'error')
+
+
+def _check_on_dangling(on_dangling):
+    if on_dangling not in _ON_DANGLING:
+        raise ValueError(f'on_dangling must be one of {_ON_DANGLING}, not {on_dangling!r}')
+
+
+def report_dangling(dangling, on_dangling) -> None:
+    '''Act on `on_dangling` for a final list of `Dangling` entries.'''
+    if not dangling or on_dangling == 'ignore':
+        return
+    shown = '; '.join(str(d) for d in dangling[:5])
+    more = f' (and {len(dangling) - 5} more)' if len(dangling) > 5 else ''
+    msg = (f'{len(dangling)} edge target(s) never declared: {shown}{more}. '
+           f'A typo? If a target is meant to be external, pass allow=[<IRI prefix>, ...]')
+    if on_dangling == 'error':
+        raise DanglingTargetError(msg, dangling)
+    warnings.warn(msg, stacklevel=3)
+
+
 def read(fp, g=None, *, document_source_assertions: bool = False, encoding: str = 'utf-8',
-         merge: bool = False, lenient_arrows: bool = False):
+         merge: bool = False, lenient_arrows: bool = False, on_dangling: str = 'ignore', allow=None):
     '''
     Read Onya Literate format from a file-like object (or text string) into a graph.
 
@@ -325,16 +371,25 @@ def read(fp, g=None, *, document_source_assertions: bool = False, encoding: str 
         False (parsing accumulates distinct occurrences; merge stays on-demand).
     lenient_arrows -- if True, accept a stray rightward arrow (e.g. ``➡``, ``=>``) used as an
         edge connector, warn, and continue. Default False raises ``EdgeArrowError``.
+    on_dangling -- what to do about edge targets this read leaves undeclared (never given a node
+        block, here or earlier in ``g``): 'ignore' (default; SPEC allows forward and external
+        references), 'warn' or 'error' (``DanglingTargetError``)
+    allow -- targets that are expected to be undeclared: an IRI prefix, a list of prefixes, or a
+        predicate on the id. Left out of ``on_dangling`` and of ``ParseResult.dangling``.
 
-    Returns: ``ParseResult(doc_iri, graph, nodes_added)``
+    Returns: ``ParseResult(doc_iri, graph, nodes_added, ..., dangling)``
     '''
+    _check_on_dangling(on_dangling)
     text = fp if isinstance(fp, str) else fp.read()
     parser = LiterateParser(
         document_source_assertions=document_source_assertions,
         encoding=encoding,
         lenient_arrows=lenient_arrows,
     )
-    return parser.parse(text, g, encoding=encoding, merge=merge)
+    result = parser.parse(text, g, encoding=encoding, merge=merge)
+    result.dangling = undeclared_refs((d.edge for d in result.dangling), allow)
+    report_dangling(result.dangling, on_dangling)
+    return result
 
 
 # File suffixes that hold Onya Literate. `.onya.md` is preferred for authoring (Markdown tools render
@@ -364,10 +419,12 @@ class ManyResult:
     '''Result of `read_many`: the combined graph, and each file's own `ParseResult` (prefixes, nodebase, ...).'''
     graph: object
     results: dict[Path, ParseResult] = field(default_factory=dict)
+    dangling: list = field(default_factory=list)  # references still undeclared once every file is read
 
 
 def read_many(specs, g=None, *, merge: bool = False, document_source_assertions: bool = False,
-              encoding: str = 'utf-8', lenient_arrows: bool = False) -> ManyResult:
+              encoding: str = 'utf-8', lenient_arrows: bool = False, on_dangling: str = 'ignore',
+              allow=None) -> ManyResult:
     '''
     Read several Onya Literate files into one graph.
 
@@ -378,10 +435,15 @@ def read_many(specs, g=None, *, merge: bool = False, document_source_assertions:
 
     A spec that matches no files raises ``FileNotFoundError`` rather than quietly reading nothing,
     and a parse error names the file it came from (as a note on the original exception).
-    The remaining keywords are those of ``read``.
+    ``on_dangling`` and ``allow`` are as for ``read``, but checked once, after every file is read: a
+    target declared in a later file is not dangling. Each file's ``ParseResult.dangling`` is trimmed
+    the same way, so it lists only references still undeclared at the end. The remaining keywords
+    are those of ``read``.
 
-    Returns: ``ManyResult(graph, results)`` where ``results`` maps each ``Path`` to its ``ParseResult``
+    Returns: ``ManyResult(graph, results, dangling)`` where ``results`` maps each ``Path`` to its
+    ``ParseResult``
     '''
+    _check_on_dangling(on_dangling)
     if isinstance(specs, (str, Path)):
         specs = [specs]
     parser = LiterateParser(document_source_assertions=document_source_assertions, encoding=encoding,
@@ -401,6 +463,10 @@ def read_many(specs, g=None, *, merge: bool = False, document_source_assertions:
             except Exception as exc:
                 exc.add_note(f'while reading {path}')
                 raise
+    for r in results.values():  # judge every reference by what the whole set declared
+        r.dangling = undeclared_refs((d.edge for d in r.dangling), allow)
+    dangling = [d for r in results.values() for d in r.dangling]
+    report_dangling(dangling, on_dangling)
     if merge:
         g.merge()
-    return ManyResult(g, results)
+    return ManyResult(g, results, dangling)

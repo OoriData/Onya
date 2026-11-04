@@ -17,13 +17,13 @@ import contextvars
 import re
 import textwrap
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import Enum
 
 from amara import iri  # for absolutize & matches_uri_syntax
 
 from onya import I, ONYA_BASEIRI, ONYA_NULL, LITERAL
-from onya.graph import AssertionIdConflict, edge as edge_cls
+from onya.graph import AssertionIdConflict, allowed, edge as edge_cls, node as node_cls
 from onya.terms import ONYA_DOCUMENT, ONYA_SOURCE_REL, ONYA_INTERP, RESERVED_INTERP_NAMES, INTERP_NONE
 from onya.util import join_namespace, namespace_for_curie
 
@@ -319,6 +319,40 @@ class ParseResult:
     nodebase: str | None = None
     typebase: str | None = None
     prefixes: dict | None = None
+    # References this read made to nodes that nothing has declared (see `Dangling`)
+    dangling: list = field(default_factory=list)
+
+
+@dataclass
+class Dangling:
+    '''
+    An edge whose target no one declared: the id appears only as a target, never as a node block
+    (nor via `graph.node()`). `target` is the id, `edge` the offending edge (so `edge.label` and its
+    origin are at hand), and `source` the id of the node it hangs off, however deeply nested.
+    '''
+    target: object
+    edge: object
+
+    @property
+    def label(self):
+        return self.edge.label
+
+    @property
+    def source(self):
+        o = self.edge.origin
+        while hasattr(o, 'origin'):  # nested under assertions: climb to the owning node
+            o = o.origin
+        return o.id
+
+    def __str__(self):
+        return f'{self.source} --{self.label}--> {self.target}'
+
+
+def undeclared_refs(refs, allow=None) -> list[Dangling]:
+    '''The `Dangling` entries among edges `refs` whose targets are still undeclared and not in `allow`.'''
+    ok = allowed(allow)
+    return [Dangling(e.target.id, e) for e in refs
+            if isinstance(e.target, node_cls) and not e.target.declared and not ok(e.target.id)]
 
 
 class LiterateParser:
@@ -412,6 +446,8 @@ class LiterateParser:
         # id matching a registered assertion @id links to that assertion; otherwise it is a
         # node id (an existing node, else a freshly-minted one).
         _resolve_pending_edges(graph_obj, doc)
+        # Taken before any merge: each reference in the text counts, even ones merge later collapses
+        dangling = undeclared_refs(e for e, _ in (doc.pending_edges or ()))
 
         # Parse-time collision: an @id shares the node id space, so it must not equal any node id.
         assertion_ids = getattr(graph_obj, 'assertion_ids', {})
@@ -443,7 +479,8 @@ class LiterateParser:
             graph_obj.add_prefixes(doc.iris)
         return ParseResult(doc.iri, graph_obj, nodes_added,
                            schema=doc.schemabase, nodebase=doc.nodebase,
-                           typebase=doc.typebase, prefixes=prefixes)
+                           typebase=doc.typebase, prefixes=prefixes,
+                           dangling=dangling)
 
     def _parse_string(self, lit_text):
         '''
@@ -1037,7 +1074,9 @@ def _resolve_pending_edges(graph_obj, doc: doc_info):
         elif target_id in graph_obj:
             edge_obj.target = graph_obj[target_id]
         else:
+            # Named by an edge but declared nowhere (yet): a placeholder, tracked as undeclared
             edge_obj.target = graph_obj.node(target_id)
+            edge_obj.target._stub = True
 
 
 def _create_assertion(parent, pi, assertion_label, doc, parser: LiterateParser | None):
@@ -1197,6 +1236,7 @@ def process_nodeblock(nodeblock, graph_obj, doc, parser: LiterateParser | None =
         n = graph_obj.node(nid)
     else:
         n = graph_obj[nid]
+    n._stub = False  # a node block, even an empty one, declares the node (an earlier edge may have named it)
 
     # Add types if specified. A node may carry a *set* of types, written
     # whitespace-separated inside the header brackets (e.g. `[Organization lv:Client]`).

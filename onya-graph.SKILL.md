@@ -295,6 +295,7 @@ from onya.serial.literate import read
 
 g = graph()
 result = read(open('file.onya').read(), g)   # accepts a str or a file-like; returns a ParseResult
+# result.dangling / g.dangling(): edge targets nobody declared (typos); read(..., on_dangling='error', allow=['https://orcid.org/']) to enforce
 print(result.doc_iri, len(g), 'nodes')
 ```
 
