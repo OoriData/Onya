@@ -46,7 +46,7 @@ def test_dangling_entry_names_source_label_target():
     r = read(TEXT, graph())
     d = next(d for d in r.dangling if str(d.target) == TYPO)
     assert (str(d.source), str(d.label)) == ('http://e.o/A', 'https://schema.org/knows')
-    assert str(d) == 'http://e.o/A --https://schema.org/knows--> http://e.o/Typo'
+    assert str(d) == 'http://e.o/A --https://schema.org/knows--> http://e.o/Typo (location not tracked)'
 
 
 def test_forward_reference_within_one_document_is_declared():

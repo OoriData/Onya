@@ -18,6 +18,7 @@ from pathlib import Path
 from onya import I
 from onya.util import compact_iri, namespace_for_curie, shorten_node_id
 from onya.graph import AssertionIdConflict, graph
+from onya.locations import Location, Locations
 from onya.terms import ONYA_INTERP, RESERVED_INTERP_NAMES
 from onya.serial._literate_parse import (
     Dangling,
@@ -38,6 +39,7 @@ __all__ = [
     'read_many',
     'expand_paths',
     'ManyResult',
+    'Location',
     'Dangling',
     'DanglingTargetError',
     'report_dangling',
@@ -359,7 +361,8 @@ def report_dangling(dangling, on_dangling) -> None:
 
 
 def read(fp, g=None, *, document_source_assertions: bool = False, encoding: str = 'utf-8',
-         merge: bool = False, lenient_arrows: bool = False, on_dangling: str = 'ignore', allow=None):
+         merge: bool = False, lenient_arrows: bool = False, on_dangling: str = 'ignore', allow=None,
+         track_locations: bool = False):
     '''
     Read Onya Literate format from a file-like object (or text string) into a graph.
 
@@ -376,6 +379,10 @@ def read(fp, g=None, *, document_source_assertions: bool = False, encoding: str 
         references), 'warn' or 'error' (``DanglingTargetError``)
     allow -- targets that are expected to be undeclared: an IRI prefix, a list of prefixes, or a
         predicate on the id. Left out of ``on_dangling`` and of ``ParseResult.dangling``.
+    track_locations -- if True, record where each node and assertion was written: ``ParseResult.locations``
+        (index it with the object) and ``g.locate(obj)`` give a ``Location(doc_iri, lineno, line)``, and
+        diagnostics (dangling targets, validation findings, interpretation errors) name the line. Off by
+        default, when it costs nothing.
 
     Returns: ``ParseResult(doc_iri, graph, nodes_added, ..., dangling)``
     '''
@@ -385,9 +392,10 @@ def read(fp, g=None, *, document_source_assertions: bool = False, encoding: str 
         document_source_assertions=document_source_assertions,
         encoding=encoding,
         lenient_arrows=lenient_arrows,
+        track_locations=track_locations,
     )
     result = parser.parse(text, g, encoding=encoding, merge=merge)
-    result.dangling = undeclared_refs((d.edge for d in result.dangling), allow)
+    result.dangling = undeclared_refs((d.edge for d in result.dangling), allow, result.locations)
     report_dangling(result.dangling, on_dangling)
     return result
 
@@ -420,11 +428,12 @@ class ManyResult:
     graph: object
     results: dict[Path, ParseResult] = field(default_factory=dict)
     dangling: list = field(default_factory=list)  # references still undeclared once every file is read
+    locations: object = None  # every file's locations, combined (None unless track_locations)
 
 
 def read_many(specs, g=None, *, merge: bool = False, document_source_assertions: bool = False,
               encoding: str = 'utf-8', lenient_arrows: bool = False, on_dangling: str = 'ignore',
-              allow=None) -> ManyResult:
+              allow=None, track_locations: bool = False) -> ManyResult:
     '''
     Read several Onya Literate files into one graph.
 
@@ -441,13 +450,14 @@ def read_many(specs, g=None, *, merge: bool = False, document_source_assertions:
     are those of ``read``.
 
     Returns: ``ManyResult(graph, results, dangling)`` where ``results`` maps each ``Path`` to its
-    ``ParseResult``
+    ``ParseResult``. With ``track_locations``, each file's ``ParseResult.locations`` and the combined
+    ``ManyResult.locations`` record where things were written, naming the file in each ``Location.source``.
     '''
     _check_on_dangling(on_dangling)
     if isinstance(specs, (str, Path)):
         specs = [specs]
     parser = LiterateParser(document_source_assertions=document_source_assertions, encoding=encoding,
-                            lenient_arrows=lenient_arrows)
+                            lenient_arrows=lenient_arrows, track_locations=track_locations)
     g = graph() if g is None else g
     results: dict[Path, ParseResult] = {}
     for spec in specs:
@@ -459,14 +469,19 @@ def read_many(specs, g=None, *, merge: bool = False, document_source_assertions:
                 continue
             text = path.read_text(encoding=encoding)  # a missing file raises FileNotFoundError naming it
             try:
-                results[path] = parser.parse(text, g, encoding=encoding)
+                results[path] = parser.parse(text, g, encoding=encoding, source=str(path))
             except Exception as exc:
                 exc.add_note(f'while reading {path}')
                 raise
     for r in results.values():  # judge every reference by what the whole set declared
-        r.dangling = undeclared_refs((d.edge for d in r.dangling), allow)
+        r.dangling = undeclared_refs((d.edge for d in r.dangling), allow, r.locations)
     dangling = [d for r in results.values() for d in r.dangling]
     report_dangling(dangling, on_dangling)
     if merge:
         g.merge()
-    return ManyResult(g, results, dangling)
+    combined = None
+    if track_locations:
+        combined = Locations()
+        for r in results.values():
+            combined.update(r.locations)
+    return ManyResult(g, results, dangling, combined)

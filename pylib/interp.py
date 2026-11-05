@@ -27,6 +27,8 @@ from typing import Protocol, runtime_checkable
 from amara import iri as _iri
 from amara.iri import I
 
+from onya.graph import graph_of
+from onya.locations import describe
 from onya.terms import ONYA_INTERP
 
 
@@ -59,7 +61,12 @@ class InterpretationError(ValueError):
         self.value = value
         self.interp_iri = interp_iri
         self.assertion = assertion
+        self.location = None  # where the assertion was written, when `value_of` finds it was tracked
         super().__init__(message or f'{value!r} is not a valid {interp_iri}')
+
+    def __str__(self) -> str:
+        msg = super().__str__()
+        return f'{msg} (at {self.location})' if self.location is not None else msg
 
 
 class UnknownInterpretation(ValueError):
@@ -324,6 +331,7 @@ class Finding:
     interp_iri: I
     value: str
     message: str
+    location: object = None  # where the assertion was written (a `Location`), if the read tracked locations
 
 
 @dataclass
@@ -342,7 +350,7 @@ class ValidationReport:
         if not self.findings:
             return 'ValidationReport: ok (no findings)'
         return '\n'.join(
-            f'{f.assertion.label} on {_origin_id(f.assertion)}: {f.message}'
+            f'{f.assertion.label} on {_origin_id(f.assertion)}: {f.message} {describe(f.location)}'
             for f in self.findings
         )
 
@@ -391,6 +399,9 @@ def value_of(prop, *, registry: InterpretationRegistry = DEFAULT, strict: bool =
     except InterpretationError as e:
         if e.assertion is None:
             e.assertion = prop
+        g = graph_of(prop)
+        if e.location is None and g is not None:
+            e.location = g.locate(prop)
         raise
 
 
@@ -432,7 +443,7 @@ def validate(graph, *, registry: InterpretationRegistry = DEFAULT) -> Validation
             message = f'{value!r} is not a valid {interp_iri}'
         except InterpretationError as e:
             message = str(e)
-        findings.append(Finding(assertion, I(str(interp_iri)), value, message))
+        findings.append(Finding(assertion, I(str(interp_iri)), value, message, graph.locate(assertion)))
     return ValidationReport(findings)
 
 
