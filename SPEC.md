@@ -185,6 +185,8 @@ about a graph's contents changes ambiently as a side effect of reading a file.
 The distinct-occurrence rule holds within a single document too — two identical
 assertion lines in one document are two occurrences until a union collapses them.
 
+Two graphs are **equivalent** when they have the same union-normalized content: after the identity rules above are applied, the same nodes, with the same types and the same assertions (skeleton, interpretation, identifier and nested assertions), irrespective of the order of anything, of the vocabulary prefixes or serialization used to write them, and of whether duplicates had yet been merged. Equivalence is a property of content, not of provenance, so how a graph was split across documents is no part of it. (The Python library's `onya.digest` is a hash of exactly this; see [doc/design-digest.md](doc/design-digest.md).)
+
 ## Interpretations (data contract layers)
 
 Every Onya value is a string, and the string layer is unconditionally valid:

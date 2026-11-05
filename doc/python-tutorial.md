@@ -301,6 +301,18 @@ write(g, out, ordered=r.ordered, ...)   # an @ordered stanza and values in order
 
 Without `ordered=` every stamp is written out; both forms read back in the same order. One limitation: repeating a value under an ordered label merges into one assertion, so only one position survives (the stanza warns). Give each occurrence an id to keep both: `* reading -> sicp [=r3]`. The layer is specified in [doc/design-ordering.md](https://github.com/OoriData/Onya/blob/main/doc/design-ordering.md).
 
+### Did the knowledge graph change? The content digest
+
+```python
+from onya.digest import digest, node_digests
+
+digest(g)                          # 'sha256:9f2c...'
+digest(g, nodes=[iri1, iri2])      # just those nodes
+node_digests(g)                    # {iri: 'sha256:...'}; compare two versions to see which nodes changed
+```
+
+The digest hashes what the graph *says*: equal for one file or three, any order, any prefixes, merged or not, and after a store round trip; different if any value, interpretation, type, edge target, assertion `@id` or `@ordering` changes. `onya:Document` nodes and `@source` assertions are left out by default. `exclude=` *replaces* that default, so to leave out more, extend it: `exclude=DEFAULT_EXCLUDE | {'ex:internalNote'}`. Details in [doc/design-digest.md](https://github.com/OoriData/Onya/blob/main/doc/design-digest.md).
+
 # Data contracts: interpretations
 
 Every Onya value is a string. An **interpretation** is a recorded promise about
