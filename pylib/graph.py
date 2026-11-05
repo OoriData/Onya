@@ -247,13 +247,28 @@ class assertions_mixin:
         '''
         All property values for `label`, as a list of strings. Assertions are a set, so the order
         carries no meaning: values are sorted only so results are deterministic. (An explicit
-        ordering is a separate, opt-in layer.) `label` takes the same forms as `getprop`.
+        ordering is a separate, opt-in layer: see `ordered_values`.) `label` takes the same forms as
+        `getprop`.
         '''
         return sorted(p.value for p in self.getprop(label))
 
     def targets(self, label: I | str) -> list:
         '''All edge targets for `label` (nodes), sorted by id for determinism; see `values`.'''
         return sorted((e.target for e in self.getedge(label)), key=_target_key)
+
+    def ordered_values(self, label: I | str) -> list[str]:
+        '''
+        The property values for `label` in the order their nested `@ordering` stamps give (the
+        ordering layer, `onya.ordering`). Strict: `OrderingError` if any occurrence has no stamp or a
+        non-integer one, `OrderingConflict` if stamps disagree. A label with no values gives `[]`.
+        '''
+        from onya.ordering import ordered
+        return [p.value for p in ordered(self, self._resolve(label), self.getprop(label))]
+
+    def ordered_targets(self, label: I | str) -> list:
+        '''The edge targets (nodes) for `label` in `@ordering` order; strict, as `ordered_values`.'''
+        from onya.ordering import ordered
+        return [e.target for e in ordered(self, self._resolve(label), self.getedge(label))]
 
     def one(self, label: I | str, default=None) -> str | None:
         '''

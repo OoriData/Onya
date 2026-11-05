@@ -66,17 +66,19 @@ def test_everything_the_parser_treats_as_a_directive_is_reserved():
 
 
 def test_a_layer_adds_terms_without_touching_core(registry):
-    reserve('ordering', 'ordering')
-    assert registry['ordering'] == 'ordering'
-    reserve('ordering', 'ordering')  # idempotent for the same layer
+    reserve('shape', 'closed')
+    assert registry['closed'] == 'shape'
+    reserve('shape', 'closed')  # idempotent for the same layer
 
 
 def test_a_layer_cannot_redefine_a_term(registry):
     with pytest.raises(ValueError, match='already reserved by'):
         reserve('shape', 'source')  # core's
-    reserve('ordering', 'ordering')
+    reserve('shape', 'closed')
+    with pytest.raises(ValueError, match="reserved by 'shape'"):
+        reserve('other', 'closed')  # another layer's
     with pytest.raises(ValueError, match="'ordering'"):
-        reserve('shape', 'ordering')  # another layer's
+        reserve('shape', 'ordering')  # the ordering layer's, which ships with Onya
 
 
 def test_typos_are_reported_and_still_parse():
@@ -104,9 +106,9 @@ def test_known_terms_other_vocabularies_and_interps_are_not_reported():
 
 def test_a_term_a_layer_reserves_stops_being_unknown(registry):
     g = graph()
-    read(DOC + '# A\n\n* @ordering: x\n', g)
-    assert [str(t) for t in unknown_reserved_terms(g)] == [str(ONYA('ordering'))]
-    reserve('ordering', 'ordering')
+    read(DOC + '# A\n\n* @closed: x\n', g)
+    assert [str(t) for t in unknown_reserved_terms(g)] == [str(ONYA('closed'))]
+    reserve('shape', 'closed')
     assert unknown_reserved_terms(g) == {}
 
 

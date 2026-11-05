@@ -78,6 +78,8 @@ from amara.iri import I
 
 from onya.graph import assertion, graph, node
 from onya.interp import DEFAULT, InterpretationError, InterpretationRegistry, value_of
+from onya.ordering import stamp_of
+from onya.terms import ONYA_ORDERING
 from onya.util import compact_iri
 
 __all__ = ['View', 'Field', 'Follow', 'Pattern', 'load', 'project', 'project_from_store', 'jsonable', 'to_text',
@@ -496,6 +498,9 @@ class _Projector:
 
     def nested_key(self, a, label: str, desc: bool) -> tuple:
         '''Sort key for a field's `order_by`: the value's least nested `label` value; missing last.'''
+        if self.res(label) == ONYA_ORDERING:  # stamps are integers whether or not they carry `@as`
+            n = stamp_of(a)
+            return (1,) if n is None else (0, _Desc(n) if desc else n)
         vals = [self.typed(p) for p in a.properties if p.label == self.res(label)]
         if not vals:
             return (1,)
@@ -505,12 +510,19 @@ class _Projector:
     def ranked(self, container, label: str, f: Field | None = None) -> list:
         '''The values of `label`, ranked: `prefer`, then `order_by`, then least value.'''
         cands = self.candidates(container, label, f.raw if f else False)
+        # A label whose every occurrence carries a usable `@ordering` (the ordering layer) is ranked by
+        # it, unless the field says otherwise: one stamp missing or in conflict and it's an ordinary label
+        stamped = bool(cands) and all(stamp_of(a) is not None for _, a in cands)
         if f is not None and (f.prefer or f.order_by):
             def key(c):
                 v, a = c
                 return (self.prefer_rank(a, f.prefer) if f.prefer else 0,
                         self.nested_key(a, f.order_by, f.desc) if f.order_by else (0,),
+                        (0, stamp_of(a)) if stamped and not f.order_by else (0, 0),
                         _sort_key(v))
+        elif stamped:
+            def key(c):
+                return (stamp_of(c[1]), _sort_key(c[0]))
         else:
             def key(c):
                 return _sort_key(c[0])

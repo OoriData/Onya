@@ -199,7 +199,7 @@ Generators (LLMs especially) tend to pack qualifiers into the *label* (`ex:gdp20
 | `homePhone`, `workPhone` | `telephone: …` with nested `ex:use -> ex:Home` / `ex:use -> ex:Work` |
 | `ex:heightCm: "180"` | `height: "180"` with nested `unitCode: CMT` |
 | `ex:currentCeo -> X`, `ex:formerCeo -> Y` | `ex:ceo -> X` with nested `startDate` (and `endDate` for Y) |
-| `ex:firstAuthor`, `ex:secondAuthor` | `author -> X` with nested `position: "1"` |
+| `ex:firstAuthor`, `ex:secondAuthor` | `author -> X` with nested `@ordering: 1` (or declare `* @ordered: author` in the docheader and let document order number them) |
 | `ex:estimatedRevenue` | `ex:revenue` with nested `@method` / `@confidence` (the reserved provenance vocabulary) |
 
 **Parentheticals and asides in values → the same move.** The value is just the value; the aside is a qualifier or an entity:
