@@ -269,6 +269,38 @@ from onya.terms import unknown_reserved_terms
 unknown_reserved_terms(g)    # {onya:Calss: [node, ...], onya:sourcee: [assertion, ...]}
 ```
 
+### Ordered values
+
+Assertions are a set, so the values of a label have no order. When the sequence is the point (address lines, authors, steps), declare the label in the docheader and the parser numbers the occurrences from document order:
+
+```
+# @docheader
+* @schema: https://levver.io/regkg/
+* @ordered: sourceField
+
+# map-co-principalAddress [FieldMapping]
+* sourceField: principaladdress1
+* sourceField: principaladdress2
+* sourceField: principalcity
+```
+
+```python
+n = read(text).graph['map-co-principalAddress']   # (with the docheader's @document/@nodebase in place)
+n.ordered_values('sourceField')   # ['principaladdress1', 'principaladdress2', 'principalcity']
+n.ordered_targets('author')       # edges too: nodes, in order
+```
+
+The parser stamps a nested `@ordering: 1, 2, 3`; you can also write `@ordering` by hand (gaps are fine, `10, 20, 30`) with no stanza at all. The accessors are strict. A missing or non-integer stamp raises `OrderingError`, and a claim stamped two ways, which is what a `union` of two files that disagree leaves behind, raises `OrderingConflict`. Settle those on purpose with `onya.ordering.resolve(g, 'first')` (or `'last'`, or your own `(assertion, stamps) -> stamp`).
+
+To write the graph back compactly, hand `write` the labels the document declared:
+
+```python
+r = read(text, g)
+write(g, out, ordered=r.ordered, ...)   # an @ordered stanza and values in order; 1..n stamps left out
+```
+
+Without `ordered=` every stamp is written out; both forms read back in the same order. One limitation: repeating a value under an ordered label merges into one assertion, so only one position survives (the stanza warns). Give each occurrence an id to keep both: `* reading -> sicp [=r3]`. The layer is specified in [doc/design-ordering.md](https://github.com/OoriData/Onya/blob/main/doc/design-ordering.md).
+
 # Data contracts: interpretations
 
 Every Onya value is a string. An **interpretation** is a recorded promise about

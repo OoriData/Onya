@@ -18,7 +18,7 @@ Fundamental unit of information in Onya. Each node has:
 - **types**: A set of IRIs that classify the node
 - **assertions**: A set of edges and properties
 
-Nodes use **sets** (not sequences) for assertions because pervasive ordering is not a core requirement of the model. Other layers can add ordering as needed.
+Nodes use **sets** (not sequences) for assertions because pervasive ordering is not a core requirement of the model. Other layers can add ordering as needed; the [ordering layer](doc/design-ordering.md) does.
 
 ## Assertions
 

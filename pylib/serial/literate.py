@@ -19,6 +19,7 @@ from onya import I
 from onya.util import compact_iri, namespace_for_curie, shorten_node_id
 from onya.graph import AssertionIdConflict, graph
 from onya.locations import Location, Locations
+from onya.ordering import stamp_of, stamps
 from onya.terms import ONYA_INTERP, RESERVED_INTERP_NAMES
 from onya.serial._literate_parse import (
     Dangling,
@@ -199,7 +200,7 @@ def _write_prop_line(out, indent: str, label: str, value, nodebase, prefixes, te
 
 
 def _write_assertion(assertion, is_edge: bool, out, indent: str, nodebase, prefixes, bracket_curie: bool,
-                     textrefs: list, multiline: str = 'textref'):
+                     textrefs: list, multiline: str = 'textref', ordered=frozenset(), skip=frozenset()):
     '''Emit one assertion line, its ``@id`` / ``@as`` (if any), then recurse into its assertions.'''
     label = _format_label(assertion.label, prefixes, bracket_curie=bracket_curie)
     if is_edge:
@@ -214,15 +215,48 @@ def _write_assertion(assertion, is_edge: bool, out, indent: str, nodebase, prefi
     if getattr(assertion, 'interp', None) is not None:
         out.write(f'{child_indent}* @as: {_format_interp(assertion.interp, prefixes)}\n')
     # Recurse so nested properties AND nested edges round-trip at any depth
-    _write_assertions(assertion, out, child_indent, nodebase, prefixes, bracket_curie, textrefs, multiline)
+    _write_assertions(assertion, out, child_indent, nodebase, prefixes, bracket_curie, textrefs, multiline,
+                      ordered, skip)
+
+
+def _position_key(a) -> tuple:
+    '''Sort key within a label: by `@ordering` where there is exactly one, unstamped ones after.'''
+    n = stamp_of(a)
+    return (0, n) if n is not None else (1, 0)
+
+
+def _elidable(items) -> set:
+    '''
+    Ids of the `@ordering` stamps that can be left out of `items` (one label's occurrences under one
+    parent) because re-reading under the `@ordered` stanza would stamp them identically: every
+    occurrence has a single stamp and the stamps are exactly 1..n.
+    '''
+    if sorted(stamp_of(a) or 0 for a in items) != list(range(1, len(items) + 1)):
+        return set()
+    found = [p for a in items for p in stamps(a)]
+    if any(p.properties or p.edges or p.id is not None or p.interp is not None for p in found):
+        return set()  # a stamp that says more than its number can't be dropped faithfully
+    return {id(p) for p in found}
 
 
 def _write_assertions(container, out, indent: str, nodebase, prefixes, bracket_curie: bool, textrefs: list,
-                      multiline: str = 'textref'):
-    for prop in sorted(container.properties, key=lambda p: str(p.label)):
-        _write_assertion(prop, False, out, indent, nodebase, prefixes, bracket_curie, textrefs, multiline)
-    for edge in sorted(container.edges, key=lambda e: str(e.label)):
-        _write_assertion(edge, True, out, indent, nodebase, prefixes, bracket_curie, textrefs, multiline)
+                      multiline: str = 'textref', ordered=frozenset(), skip=frozenset()):
+    # `skip` holds ids of stamps an ancestor decided to elide; `ordered` the labels declared in the stanza
+    skip = set(skip)
+    for kind in (container.properties, container.edges):
+        by_label: dict = {}
+        for a in kind:
+            by_label.setdefault(a.label, []).append(a)
+        for label in by_label:
+            if label in ordered:
+                skip |= _elidable(by_label[label])
+    for prop in sorted((p for p in container.properties if id(p) not in skip),
+                       key=lambda p: (str(p.label), _position_key(p))):
+        _write_assertion(prop, False, out, indent, nodebase, prefixes, bracket_curie, textrefs, multiline,
+                         ordered, skip)
+    for edge in sorted(container.edges, key=lambda e: (str(e.label), _position_key(e))):
+        _write_assertion(edge, True, out, indent, nodebase, prefixes, bracket_curie, textrefs, multiline,
+                         ordered, skip)
 
 
 def write(
@@ -238,6 +272,7 @@ def write(
     strict_namespace_bases: bool = False,
     multiline: str = 'textref',
     placeholders: set | None = None,
+    ordered=None,
 ):
     '''
     Serialize an Onya graph to Onya Literate (Markdown).
@@ -259,6 +294,11 @@ def write(
         written, as bare blocks, so the output is unchanged; the set lets you decide what to do about
         them (warn, or filter the graph first) and reminds you that reading the output back declares them.
 
+    ordered -- labels (IRIs, as in ``ParseResult.ordered``) to write under the ordering layer's ``@ordered``
+        docheader stanza: their values come out in ``@ordering`` order, and stamps that are exactly
+        ``1..n`` are left out, since reading the stanza stamps them again. Without it every stamp is
+        written out (faithful, verbose). Occurrences with no stamp are written after the stamped ones.
+
     Faithfulness: ``read(write(g)) == g`` holds for any namespace arguments, because bare-name
     compaction is only applied to IRIs genuinely under a declared base and everything else falls
     back to explicit ``<full-iri>`` form. The one precondition is that ``@schema``/``@nodebase``
@@ -274,13 +314,14 @@ def write(
     schema = ensure_namespace_separator('@schema', schema, strict=strict_namespace_bases)
     nodebase = ensure_namespace_separator('@nodebase', nodebase, strict=strict_namespace_bases)
     all_prefixes = _prefixes_for_write(schema, prefixes)
+    ordered = frozenset(I(str(label)) for label in ordered or ())
     document_s = str(document) if document else None
     # Collected multi-line property values, emitted as `:name = """..."""` text-ref
     # definitions after the node blocks (the parser gathers these in a first pass, so their
     # position relative to the referencing lines does not matter).
     textrefs: list = []
 
-    if document or nodebase or schema or prefixes:
+    if document or nodebase or schema or prefixes or ordered:
         out.write('# @docheader\n\n')
         if document:
             out.write(f'* @document: {document}\n')
@@ -293,13 +334,16 @@ def write(
             out.write('* @iri:\n')
             for k, v in extra.items():
                 out.write(f'    * {k}: {v}\n')
+        if ordered:
+            labels = sorted(_format_label(label, all_prefixes) for label in ordered)
+            out.write(f'* @ordered: {" ".join(labels)}\n')
         if document_s and document_s in model.nodes:
             # The document node is a first-class node: emit its assertions with the same full
             # path as body nodes (@id / @as / nesting / edges), just inside @docheader rather
             # than a `#` block (see SPEC § Document Header). The directives above are document
             # fields, not stored assertions, so there is no double-emission.
             _write_assertions(model.nodes[document_s], out, '', nodebase, all_prefixes,
-                              bracket_curie, textrefs, multiline)
+                              bracket_curie, textrefs, multiline, ordered)
         out.write('\n')
 
     for nid in sorted(model.nodes.keys(), key=str):
@@ -319,7 +363,7 @@ def write(
             out.write(f'# {header_id} [{type_str}]\n\n')
         else:
             out.write(f'# {header_id}\n\n')
-        _write_assertions(node, out, '', nodebase, all_prefixes, bracket_curie, textrefs, multiline)
+        _write_assertions(node, out, '', nodebase, all_prefixes, bracket_curie, textrefs, multiline, ordered)
         out.write('\n')
 
     # Trailing text-reference definitions for any multi-line values emitted above.

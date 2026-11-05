@@ -25,7 +25,7 @@ from amara import iri  # for absolutize & matches_uri_syntax
 
 from onya import I, ONYA_BASEIRI, ONYA_NULL, LITERAL
 from onya.graph import AssertionIdConflict, allowed, edge as edge_cls, node as node_cls
-from onya.terms import ONYA_DOCUMENT, ONYA_SOURCE_REL, ONYA_INTERP, RESERVED_INTERP_NAMES, INTERP_NONE
+from onya.terms import ONYA_DOCUMENT, ONYA_SOURCE_REL, ONYA_INTERP, ONYA_ORDERING, RESERVED_INTERP_NAMES, INTERP_NONE
 from onya.locations import Location, Locations, describe
 from onya.util import join_namespace, namespace_for_curie
 
@@ -80,6 +80,10 @@ class doc_info:
     pending_edges: list = None  # deferred (edge, target_id) links resolved after all @ids are known
     interp_defaults: dict = None  # docheader @interpretations: resolved label IRI -> interp IRI/_CANCEL
     interp_defaults_raw: list = None  # raw (label_str, interp_raw) pairs, resolved after header parse
+    ordered_raw: list = None  # docheader @ordered: raw label names, resolved after header parse
+    ordered: frozenset = frozenset()  # resolved label IRIs whose occurrences get an `@ordering` stamp
+    ordering_counts: dict = None  # (id(parent), label) -> occurrences seen so far (the next stamp is count + 1)
+    ordering_seen: set = None  # (id(parent), label, kind, value): spots a repeated claim under an ordered label
     text: str = None        # the text the grammar saw: same line numbering as the source
     track: object = None    # a `_Tracker` when locations are being recorded, else None
 
@@ -372,6 +376,8 @@ class ParseResult:
     prefixes: dict | None = None
     # References this read made to nodes that nothing has declared (see `Dangling`)
     dangling: list = field(default_factory=list)
+    # Labels the docheader's `@ordered` stanza named (resolved IRIs), to hand back to `write(ordered=...)`
+    ordered: frozenset = frozenset()
     # Where each node and assertion this read created was written; None unless the read was made with
     # `track_locations=True`. Index it with the object: `r.locations[assertion]`.
     locations: object = None
@@ -490,6 +496,7 @@ class LiterateParser:
         doc.iris = {}  # Initialize the iris dictionary
         doc.text_refs = {}  # Initialize the text references dictionary
         doc.pending_edges = []  # Edge targets are resolved after all @id declarations are seen
+        doc.ordering_counts, doc.ordering_seen = {}, set()  # for the docheader's @ordered stamping
 
         source_text = lit_text
         lit_text, folded = _fold_continuations(_expand_structural_tabs(lit_text))
@@ -554,7 +561,7 @@ class LiterateParser:
         return ParseResult(doc.iri, graph_obj, nodes_added,
                            schema=doc.schemabase, nodebase=doc.nodebase,
                            typebase=doc.typebase, prefixes=prefixes,
-                           dangling=dangling, locations=locations)
+                           ordered=doc.ordered, dangling=dangling, locations=locations)
 
     def _parse_string(self, lit_text):
         '''
@@ -1182,6 +1189,29 @@ def _create_assertion(parent, pi, assertion_label, doc, parser: LiterateParser |
     return created
 
 
+def _note_ordered(parent, label, pi, created, doc, pending: list) -> None:
+    '''
+    Count one occurrence of a label the docheader declared `@ordered`: its stamp is its 1-based
+    position among that label's occurrences under `parent`, in document order. The stamp itself is
+    added once its bullet's children are known (an author's own `@ordering` wins; see the caller).
+    Repeating a claim under such a label warns: the repeats merge into one assertion, which can
+    keep only one position, so a list with genuine repeats needs ids (SPEC: `[=r3]`).
+    '''
+    key = (id(parent), label)
+    doc.ordering_counts[key] = n = doc.ordering_counts.get(key, 0) + 1
+    claim = (*key, pi.is_edge, str(pi.value.verbatim) if pi.value is not None else '')
+    if claim in doc.ordering_seen:
+        warnings.warn(
+            f'{pi.key!r} is declared @ordered, and `{pi.key}{" ->" if pi.is_edge else ":"} '
+            f'{claim[-1]}` appears twice under one {"assertion" if hasattr(parent, "origin") else "node"}'
+            f'{_line_note(doc, pi.loc)}: repeats merge into one assertion, so only one position survives. '
+            f'Give each occurrence an id (`[=name]`) to keep both.',
+            stacklevel=2,
+        )
+    doc.ordering_seen.add(claim)
+    pending.append((created, n))
+
+
 def _inline_name(a) -> str:
     return str(a.id).rsplit('/', 1)[-1] if a.id is not None else '?'
 
@@ -1203,6 +1233,7 @@ def _build_assertions(node, props, graph_obj, doc, parser: LiterateParser | None
     saw_assertion = False
     seen_as = set()  # id(parent) of assertions that already took an inline @as (dup -> parse error)
     inline_named = set()  # id(assertion) of assertions named by an inline `[=name]`
+    ordered_pending = []  # (assertion, position) for occurrences of @ordered labels, stamped after the loop
 
     def register_id(raw, target, loc=None) -> None:
         assertion_id = _resolve_node_id(str(raw), doc, parser)
@@ -1296,7 +1327,14 @@ def _build_assertions(node, props, graph_obj, doc, parser: LiterateParser | None
                 default = doc.interp_defaults.get(assertion_label)
                 if default is not None and default is not _CANCEL:
                     created.interp = default
+            if assertion_label in doc.ordered:
+                _note_ordered(parent, assertion_label, pi, created, doc, ordered_pending)
             stack.append((pi.indent, created))
+
+    # Stamp `@ordering` with document position, except where the author wrote one by hand
+    for a, position in ordered_pending:
+        if not any(p.label == ONYA_ORDERING for p in a.properties):
+            a.add_property(ONYA_ORDERING, str(position))
 
     return saw_assertion
 
@@ -1381,6 +1419,13 @@ def process_docheader(props, graph_obj, doc, parser: LiterateParser | None = Non
                 # @typebase for less common cases where types need a different base than @schema
                 doc.typebase = prop.value.verbatim if prop.value else None
                 directive_owner = None
+            elif key == '@ordered':
+                # The ordering layer's stanza: whitespace-separated labels whose occurrences are stamped
+                # with `@ordering` from document order. Resolved after the header, like @interpretations.
+                if doc.ordered_raw is None:
+                    doc.ordered_raw = []
+                doc.ordered_raw.extend((prop.value.verbatim if prop.value else '').split())
+                directive_owner = None
             elif key == '@iri':
                 # Prefix block only; nested lines supply mappings (not a document assertion).
                 directive_owner = '@iri'
@@ -1424,6 +1469,8 @@ def process_docheader(props, graph_obj, doc, parser: LiterateParser | None = Non
     _sync_schema_prefix(doc)
     _check_namespace_bases(doc, strict=bool(parser and parser.strict_namespace_bases))
     _resolve_interp_defaults(doc)
+    if doc.ordered_raw:
+        doc.ordered = frozenset(expand_iri(name, doc.schemabase, doc=doc) for name in doc.ordered_raw)
 
     # Build the document node's assertions with the same machinery as any node block, so `@as`,
     # `@id`, nested/reified assertions, and edges all round-trip.

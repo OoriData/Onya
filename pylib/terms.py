@@ -31,6 +31,11 @@ ONYA_INTERPRETATIONS = ONYA('interpretations')  # @interpretations (default-inte
 ONYA_ID = ONYA('id')  # @id
 ONYA_AS = ONYA('as')  # @as
 
+# The ordering layer's terms (see onya.ordering). Reserved here, with the layer's name, so that a graph
+# using them isn't reported by `unknown_reserved_terms` whether or not `onya.ordering` was imported.
+ONYA_ORDERING = ONYA('ordering')  # @ordering: a nested integer giving an occurrence's position
+ONYA_ORDERED = ONYA('ordered')  # @ordered: docheader stanza naming labels to stamp from document order
+
 # Reserved vocabulary. Every `@x` in Onya Literate is the IRI `onya:x` (http://purl.org/onya/vocab/x).
 # RESERVED maps each reserved local name to the layer that defines it: 'core' for the terms above, and
 # the layer's own name for terms a layer adds (via `reserve`, from that layer's module). Layers extend the
@@ -56,6 +61,7 @@ reserve('core',
         'source', 'method', 'confidence',  # provenance
         'Document', 'Assertion',  # implicit types
         'type')  # the type relation: reserved, with no behavior defined yet
+reserve('ordering', 'ordering', 'ordered')  # onya.ordering (not core: see SPEC, Reserved vocabulary)
 
 
 def unknown_reserved_terms(g) -> dict:
