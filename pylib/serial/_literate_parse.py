@@ -25,7 +25,9 @@ from amara import iri  # for absolutize & matches_uri_syntax
 
 from onya import I, ONYA_BASEIRI, ONYA_NULL, LITERAL
 from onya.graph import AssertionIdConflict, allowed, edge as edge_cls, node as node_cls
-from onya.terms import ONYA_DOCUMENT, ONYA_SOURCE_REL, ONYA_INTERP, ONYA_ORDERING, RESERVED_INTERP_NAMES, INTERP_NONE
+from onya.terms import (
+    ONYA_AS, ONYA_DOCUMENT, ONYA_INTERP, ONYA_ORDERING, ONYA_SOURCE_REL, RESERVED_INTERP_NAMES, INTERP_NONE,
+)
 from onya.locations import Location, Locations, describe
 from onya.util import join_namespace, namespace_for_curie
 
@@ -1286,7 +1288,16 @@ def _build_assertions(node, props, graph_obj, doc, parser: LiterateParser | None
         # assertion (the current parent) rather than creating a property. It sets `interp`.
         if pi.key == '@as':
             if not stack:
-                # No enclosing assertion to annotate (node's own level): nothing to do.
+                # No enclosing assertion to annotate. At a node's own level the shape layer reads `@as` as
+                # a property declaration's default interpretation, so it is kept as an ordinary `@as`
+                # property holding the resolved interpretation IRI (`none` declares nothing).
+                raw = pi.value.verbatim if pi.value else None
+                if raw is not None and isinstance(parent, node_cls):
+                    resolved = _resolve_interp(raw, doc)
+                    if resolved is not _CANCEL:
+                        made = parent.add_property(ONYA_AS, str(resolved))
+                        if doc.track:
+                            doc.track.add(made, pi.loc, doc)
                 continue
             if isinstance(parent, edge_cls):
                 # An edge's value is a node, not a string, so there is nothing to interpret.

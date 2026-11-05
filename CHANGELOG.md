@@ -6,7 +6,17 @@ For interim changes not yet earmarked for a particular release, can use this hea
 ## [Unreleased]
 -->
 
-## [0.5.4] 2026-11-04: Parsing tweaks (#62). Layered support for assertion ordering (#63). Canonical content digest (#66).
+## [0.5.5] 2026-11-06: Shapes (i.e. a schema constraint-like system, #68).
+
+### Added
+
+- **The shape layer: `onya.shape.validate()`, `load_shapes()`, `Shapes`, `Report`, `Finding`, and `onya validate`** (#68). Lightweight, RDFS-flavored declarations written as ordinary nodes in the Onya namespace (specified in `doc/design-shapes.md`; SPEC gets a short pointer). `@Class` (`@subClassOf`, `@closed: true`) and `@Property` (`@appliesTo` and `@range`, both any-of; `@as` as the default interpretation of its values; `@oneOf`; one `@cardinality` as `1`, `0..1`, `1..*`, `0..*` or `n..m`; `@ordered: true`), each with `@label` and `@severity`. A declaration's node id is the class or label IRI it declares. Shapes **never infer and never mutate**; they are open unless a class says `@closed`, and validation runs only when asked. `validate(g, shapes=None, dangling=, allow=)` returns a `Report` of `Finding`s (`severity`, `kind`, `node`, `label`, `detail`, `location`): `applies_to`, `cardinality`, `range`, `one_of`, `as` (also each assertion's own `@as`, at any depth), `ordering`, `undeclared_label`, `unknown_reserved_term` (a warning), `dangling` and `bad_shape`; subclasses are closed over at validation time only. `onya validate FILESPEC [--shapes=] [--dangling] [--allow=] [--strict]` prints findings with file and line, and exits 2 on errors (on warnings too with `--strict`). Existing vocabularies (`rdfs:subClassOf`, `domainIncludes`, a project's own terms) are deliberately not read as aliases: migrate with an explicit transform. The doc includes a mapping to SHACL.
+
+### Changed
+
+- A node-level `@as` (nothing to annotate) is now kept as a property holding the resolved interpretation IRI, where it used to be dropped. `write` prints it back as `@as: integer`. It is what a shape's `@as` is. `@Class`, `@Property`, `@label`, `@subClassOf`, `@appliesTo`, `@range`, `@cardinality`, `@oneOf`, `@closed` and `@severity` are registered in `onya.terms.RESERVED` under the layer `shape`, with `ONYA_*` constants.
+
+## [0.5.4] 2026-11-05: Parsing tweaks (#62). Layered support for assertion ordering (#63). Canonical content digest (#66).
 
 ### Added
 
