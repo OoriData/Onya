@@ -301,6 +301,39 @@ write(g, out, ordered=r.ordered, ...)   # an @ordered stanza and values in order
 
 Without `ordered=` every stamp is written out; both forms read back in the same order. One limitation: repeating a value under an ordered label merges into one assertion, so only one position survives (the stanza warns). Give each occurrence an id to keep both: `* reading -> sicp [=r3]`. The layer is specified in [doc/design-ordering.md](https://github.com/OoriData/Onya/blob/main/doc/design-ordering.md).
 
+### Shapes: what should this graph look like?
+
+Declare classes and properties as nodes (a declaration's id is the class or label IRI it is about), then validate. Shapes report; they never infer a type or change a value, and nothing runs until you ask.
+
+```
+# Person [@Class]
+# name [@Property]
+* @appliesTo -> Person
+* @as: text
+* @cardinality: 1
+# status [@Property]
+* @appliesTo -> Person
+* @oneOf: active
+* @oneOf: closed
+```
+
+```python
+from onya.shape import validate
+
+report = validate(g)               # shapes in g itself; or validate(g, shapes=shapes_graph)
+for f in report.findings:
+    print(f.severity, f.kind, f.node, f.label, f.detail, f.location)   # e.g. one_of ... 'dormant' is not one of [...]
+report.ok, report.errors, report.warnings
+```
+
+Findings cover `applies_to`, `cardinality` (`1`, `0..1`, `1..*`, `0..*`, `n..m`), `range`, `one_of`, `as`, `ordering`, `undeclared_label` (only for a class marked `@closed: true`), a typo'd `@term`, and, with `dangling=True`, edge targets nothing declares. On the command line:
+
+```
+onya validate kg/ --shapes=shapes/ --dangling --allow=https://orcid.org/ --strict
+```
+
+Exit status is 2 on errors (warnings too with `--strict`). The vocabulary, rules, and a mapping to SHACL are in [doc/design-shapes.md](https://github.com/OoriData/Onya/blob/main/doc/design-shapes.md).
+
 ### Did the knowledge graph change? The content digest
 
 ```python

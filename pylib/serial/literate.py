@@ -20,7 +20,7 @@ from onya.util import compact_iri, namespace_for_curie, shorten_node_id
 from onya.graph import AssertionIdConflict, graph
 from onya.locations import Location, Locations
 from onya.ordering import stamp_of, stamps
-from onya.terms import ONYA_INTERP, RESERVED_INTERP_NAMES
+from onya.terms import ONYA_AS, ONYA_INTERP, RESERVED_INTERP_NAMES
 from onya.serial._literate_parse import (
     Dangling,
     EdgeArrowError,
@@ -203,7 +203,11 @@ def _write_assertion(assertion, is_edge: bool, out, indent: str, nodebase, prefi
                      textrefs: list, multiline: str = 'textref', ordered=frozenset(), skip=frozenset()):
     '''Emit one assertion line, its ``@id`` / ``@as`` (if any), then recurse into its assertions.'''
     label = _format_label(assertion.label, prefixes, bracket_curie=bracket_curie)
-    if is_edge:
+    if not is_edge and assertion.label == ONYA_AS:
+        # A node-level `@as` (a shape's default interpretation, kept as a property): write the
+        # interpretation the way `@as` is written, so a reserved name stays a bare name.
+        out.write(f'{indent}* {label}: {_format_interp(assertion.value, prefixes)}\n')
+    elif is_edge:
         out.write(f'{indent}* {label} -> {shorten_node_id(assertion.target.id, nodebase)}\n')
     else:
         _write_prop_line(out, indent, label, assertion.value, nodebase, prefixes, textrefs, multiline)

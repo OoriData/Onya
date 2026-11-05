@@ -175,6 +175,59 @@ def convert(filespec: str,
         sys.stderr.write(f'Wrote {fmt} to {out}{doc_hint}\n')
 
 
+def validate(filespec: str,
+             *,
+             shapes: str | None = None,
+             strict: bool = False,
+             dangling: bool = False,
+             allow: str | list | tuple | None = None,
+             encoding: str = 'utf-8'):
+    '''
+    Check Onya Literate input against its shapes (see doc/design-shapes.md) and print the findings.
+
+    Args:
+        filespec: Path, directory (recursive; `.onya` and `.onya.md`), glob, or '-' for stdin.
+        shapes: Where the `@Class` / `@Property` declarations are, as a filespec; by default, the input itself.
+        strict: Fail on warnings too (a typo'd `@term`, a `@severity: warning` shape).
+        dangling: Also report edge targets that no node block declares.
+        allow: Targets that may stay undeclared: an IRI prefix, or several separated by commas.
+        encoding: Text encoding used to read input files (ignored for stdin).
+
+    Exit status: 0 if clean, 2 if there are error findings (or warnings, with --strict), or on a
+    parse error. Findings name the line they came from.
+
+    Examples:
+        onya validate kg/
+        onya validate kg/ --shapes=shapes/ --dangling --allow=https://orcid.org/ --strict
+    '''
+    from onya.serial.literate import read_many
+    from onya.shape import load_shapes, validate as check
+
+    def _read(spec):
+        try:
+            if spec == '-':
+                from onya.serial.literate import read
+                from onya.graph import graph
+                g = graph()
+                read(sys.stdin.read(), g, track_locations=True)
+                return g
+            return read_many(spec, merge=True, encoding=encoding, track_locations=True).graph
+        except LiterateParseError as exc:
+            sys.stderr.write(f'{spec}: {exc}\n')
+            raise SystemExit(2)
+
+    g = _read(filespec)
+    if isinstance(allow, str):
+        allow = [a.strip() for a in allow.split(',') if a.strip()]
+    report = check(g, load_shapes(_read(shapes)) if shapes else None, dangling=dangling, allow=allow)
+    for f in report.findings:
+        print(f)
+    failed = report.findings if strict else report.errors
+    if failed:
+        sys.stderr.write(f'{len(report.errors)} error(s), {len(report.warnings)} warning(s)\n')
+        raise SystemExit(2)
+
+
 def version() -> str:
     '''Return Onya version.'''
     return __version__
@@ -188,6 +241,7 @@ class _CLI:
     to test `convert()` without needing to emulate argv parsing.
     '''
     convert = staticmethod(convert)
+    validate = staticmethod(validate)
     version = staticmethod(version)
 
 

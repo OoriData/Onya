@@ -36,6 +36,18 @@ ONYA_AS = ONYA('as')  # @as
 ONYA_ORDERING = ONYA('ordering')  # @ordering: a nested integer giving an occurrence's position
 ONYA_ORDERED = ONYA('ordered')  # @ordered: docheader stanza naming labels to stamp from document order
 
+# The shape layer's terms (see onya.shape): classes and properties declared as nodes, and what they say.
+ONYA_CLASS = ONYA('Class')  # type of a class declaration
+ONYA_PROPERTY = ONYA('Property')  # type of a property declaration (its node id is the label IRI)
+ONYA_LABEL = ONYA('label')  # @label: a human-readable name
+ONYA_SUBCLASSOF = ONYA('subClassOf')  # @subClassOf -> Class
+ONYA_APPLIESTO = ONYA('appliesTo')  # @appliesTo -> Class (any of)
+ONYA_RANGE = ONYA('range')  # @range -> Class (any of): the property is an edge
+ONYA_CARDINALITY = ONYA('cardinality')  # @cardinality: 1 | 0..1 | 1..* | 0..* | n..m
+ONYA_ONEOF = ONYA('oneOf')  # @oneOf: an allowed value (repeat for each)
+ONYA_CLOSED = ONYA('closed')  # @closed: true on a Class: undeclared labels are findings
+ONYA_SEVERITY = ONYA('severity')  # @severity: error | warning
+
 # Reserved vocabulary. Every `@x` in Onya Literate is the IRI `onya:x` (http://purl.org/onya/vocab/x).
 # RESERVED maps each reserved local name to the layer that defines it: 'core' for the terms above, and
 # the layer's own name for terms a layer adds (via `reserve`, from that layer's module). Layers extend the
@@ -62,6 +74,8 @@ reserve('core',
         'Document', 'Assertion',  # implicit types
         'type')  # the type relation: reserved, with no behavior defined yet
 reserve('ordering', 'ordering', 'ordered')  # onya.ordering (not core: see SPEC, Reserved vocabulary)
+reserve('shape', 'Class', 'Property', 'label', 'subClassOf', 'appliesTo', 'range', 'cardinality', 'oneOf',
+        'closed', 'severity')  # onya.shape
 
 
 def unknown_reserved_terms(g) -> dict:

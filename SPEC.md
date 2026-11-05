@@ -187,6 +187,10 @@ assertion lines in one document are two occurrences until a union collapses them
 
 Two graphs are **equivalent** when they have the same union-normalized content: after the identity rules above are applied, the same nodes, with the same types and the same assertions (skeleton, interpretation, identifier and nested assertions), irrespective of the order of anything, of the vocabulary prefixes or serialization used to write them, and of whether duplicates had yet been merged. Equivalence is a property of content, not of provenance, so how a graph was split across documents is no part of it. (The Python library's `onya.digest` is a hash of exactly this; see [doc/design-digest.md](doc/design-digest.md).)
 
+## Shapes
+
+A **shape** says what a graph is expected to look like: which labels a class of node may carry, how many values or targets each may have, and what they must be. Shapes are an optional layer written as ordinary nodes in the Onya namespace (`@Class`, `@Property`, `@appliesTo`, `@cardinality` and so on); the layer, which only reports and never infers or changes a graph, is specified in [doc/design-shapes.md](doc/design-shapes.md).
+
 ## Interpretations (data contract layers)
 
 Every Onya value is a string, and the string layer is unconditionally valid:

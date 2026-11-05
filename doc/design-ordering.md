@@ -11,6 +11,8 @@ The ordering layer adds a sequence without changing the core. It defines two ter
 | `@ordering` | nested property | An integer giving this occurrence's position among the occurrences of its label under the same parent. Smaller comes first. Gaps are fine (`10, 20, 30` leaves room to insert). |
 | `@ordered` | docheader directive | Whitespace-separated labels whose occurrences get `@ordering` stamped from document order. |
 
+The shape layer also reads `@ordered: true` on a `@Property` declaration, to check the stamps of that label (see [design-shapes.md](design-shapes.md)); it does not make the parser stamp anything.
+
 `@ordering` is a plain nested property: it carries no interpretation, and nothing in the core model treats it specially. The layer's accessors read it as an integer, with the same grammar as `@as: integer` (`7`, `007`, `-3`, `1_000`; not `3.0`, not `1,000`).
 
 ## Writing it
