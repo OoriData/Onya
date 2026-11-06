@@ -79,9 +79,9 @@ async def test_materialize_is_idempotent_and_records_the_digest():
     await _drop(dsn, p)
     try:
         first = await materialize(dsn, p, g)
-        assert (first.created, first.inserted) == (3, 5)
+        assert (first.created, first.inserted) == (3, 4)
         second = await materialize(dsn, p, g)
-        assert (second.inserted, second.updated, second.deleted, second.unchanged) == (0, 0, 0, 5)
+        assert (second.inserted, second.updated, second.deleted, second.unchanged) == (0, 0, 0, 4)
         assert (await last_run(dsn, p))['graph_digest'] == digest(g)
         assert (await materialize(dsn, p, load('8'))).updated == 1
     finally:
@@ -91,3 +91,18 @@ async def test_materialize_is_idempotent_and_records_the_digest():
 def test_postgres_ddl_statements():
     p = from_shapes(load(), 'http://e.o/Person')
     assert all(s.startswith('CREATE TABLE') for s in statements(p, 'postgres'))
+
+
+async def test_into_the_stores_own_database():
+    from onya.store import connect
+    dsn = os.environ['ONYA_TEST_PG_DSN']
+    g = load()
+    p = from_shapes(g, 'http://e.o/Person')
+    await _drop(dsn, p)
+    try:
+        async with await connect(dsn) as store:
+            assert (await materialize(store, p, g)).inserted == 4
+            assert (await materialize(store, p, load('9'))).updated == 1
+            assert (await last_run(store, p))['unchanged'] == 3
+    finally:
+        await _drop(dsn, p)

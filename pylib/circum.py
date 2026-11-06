@@ -510,8 +510,8 @@ class _Postgres:
     dialect = 'postgres'
     marker = '$'
 
-    def __init__(self, pool):
-        self.pool, self.conn = pool, None
+    def __init__(self, conn):
+        self.conn = conn  # one connection for the whole call, so reads outside a transaction work too
 
     async def fetch(self, sql, params=()):
         return [tuple(r) for r in await self.conn.fetch(sql, *params)]
@@ -529,13 +529,8 @@ class _Postgres:
 
     @contextlib.asynccontextmanager
     async def transaction(self):
-        async with self.pool.acquire() as conn:
-            self.conn = conn
-            try:
-                async with conn.transaction():
-                    yield
-            finally:
-                self.conn = None
+        async with self.conn.transaction():
+            yield
 
     def encode(self, col, v):
         return v
@@ -560,21 +555,20 @@ async def _target(target):
                 import asyncpg
             except ImportError as e:
                 raise ImportError('PostgreSQL support requires: pip install "onya[postgres]"') from e
-            pool = await asyncpg.create_pool(target)
+            conn = await asyncpg.connect(target)
             try:
-                yield _Postgres(pool)
+                yield _Postgres(conn)
             finally:
-                await pool.close()
+                await conn.close()
             return
         raise ValueError(f'Unknown target URL scheme {scheme!r}; known: sqlite, postgresql')
     if isinstance(target, sqlite3.Connection):
         yield _Sqlite(target)
     elif hasattr(target, '_conn') and isinstance(target._conn, sqlite3.Connection):  # an onya.store SqliteStore
         yield _Sqlite(target._conn, target._lock)
-    elif hasattr(target, '_pool'):  # an onya.store PostgresStore
-        yield _Postgres(target._pool)
-    elif hasattr(target, 'acquire'):  # an asyncpg pool
-        yield _Postgres(target)
+    elif hasattr(target, '_pool') or hasattr(target, 'acquire'):  # an onya.store PostgresStore, or an asyncpg pool
+        async with (getattr(target, '_pool', None) or target).acquire() as conn:
+            yield _Postgres(conn)
     else:
         raise TypeError(f'cannot project into {target!r}: expected a URL, an onya.store store or a connection')
 

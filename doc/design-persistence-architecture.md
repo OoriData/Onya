@@ -1,6 +1,9 @@
 **Design: Pluggable persistence layer for the Onya Python library**
 
-Status: draft for review, pre-implementation. Assumes
+Status: implemented as `onya.store` (files, SQLite, PostgreSQL). This began as a
+pre-implementation design and keeps that voice in places; where the code has since
+moved, the text below has been brought into line, and § Related layers lists what
+was built on top of the store afterwards. Assumes
 [SPEC.md](../SPEC.md) (especially § Assertion Identifiers and § Identity
 and graph merge) and the interpretation design trio, particularly
 [design-interpretations-pylib.md](design-interpretations-pylib.md) and the
@@ -46,7 +49,7 @@ nothing but a version check.
   property values byte-identical, `interp` and explicit `id` preserved,
   unknown interpretation IRIs untouched. No backend ever "helpfully"
   types, trims, or normalizes a value. Typed storage is a *projection*
-  concern (§ Analytics projection), always derived, never primary.
+  concern (§ Analytics projection, built as `onya.circum`), always derived, never primary.
 - **Merge semantics are the write semantics.** Writing a graph into a
   store that already holds one is a graph union under SPEC merge Rules
   1–3 plus the interp compatibility amendment. A backend that cannot
@@ -109,9 +112,14 @@ in-memory API ports by adding `await`/`async for`.
 class AssertionStore(Protocol):
     def match(self, name: I | str, origin: I | str | None = None,
               label: I | str | None = None,
+              where: tuple[I | str, str, float | str] | None = None,
+              *, target: I | str | None = None,
               ) -> AsyncIterator[tuple[I | str, I | str, str | I, dict]]:
         '''Stream assertions matching the given constraints, without
-        loading the graph. None means unconstrained.'''
+        loading the graph. None means unconstrained. `target` restricts
+        to edges pointing at that node ("who links here?"); `where` is one
+        comparison against a nested property (see § Nested-property
+        predicate filtering).'''
 
     async def subgraph(self, name: I | str, roots: set[I | str],
                        hops: int = 1) -> graph:
@@ -253,7 +261,7 @@ async def overlay(
 handles the one case that's unambiguous (`@id` mismatches, which raise).
 It's **cardinality**: Onya's core model deliberately carries no
 schema/cardinality constraints (SPEC § Design Principles), so nothing in
-the graph says whether a same-label disagreement between anonymous
+the core says whether a same-label disagreement between anonymous
 assertions (e.g. two different `age` values) should shadow to one winner,
 or coexist like a genuinely multi-valued property (`email`) should. A
 design that shadows every disagreement would silently break the multi-valued
@@ -262,7 +270,11 @@ case; a design that shadows none just reproduces `union()`.
 - **`single_cardinality`** is the caller's own declaration, since the model
   can't infer it: either a plain collection of assertion label IRIs, or a
   callable `label -> bool` for arbitrary logic (a naming convention, an
-  external schema — Onya doesn't care). Covers edges and properties alike;
+  external schema — Onya doesn't care). Since the shape layer arrived, the
+  usual source is the graph's own `@cardinality` declarations:
+  `onya.circum.single_valued(shapes)` returns the labels whose maximum is one,
+  and passing that keeps the core schema-free while still not making every
+  caller restate it. Covers edges and properties alike;
   the identical ambiguity applies to both (`primaryContact` is plausibly
   single-valued, `knows` plainly isn't). Default (empty) shadows nothing, so
   `overlay()` with no cardinality hints reduces exactly to `union()`'s
@@ -323,6 +335,28 @@ treated as one candidate rather than two. A narrow edge case (a caller
 declaring differing interpretations for the identical string value on a
 single-cardinality label across two named graphs); not resolved here.
 
+### Capability: `SearchStore`
+
+Entry-point lookup without materializing a graph: "which node is the user
+talking about?" It is kept apart from `AssertionStore` so that protocol stays
+minimal, and so the filesystem backend (which has no `AssertionStore`) can
+still offer it.
+
+```python
+@runtime_checkable
+class SearchStore(Protocol):
+    async def search(self, name, query, *, labels=None, types=None, limit=None,
+                     min_score=0.5, per_node=True, normalize=None,
+                     similarity=None) -> list: ...
+    def nodes_by_type(self, name, type_iri) -> AsyncIterator[I]: ...
+```
+
+The semantics are `onya.query.search`'s (tiers exact > prefix > word >
+fuzzy). SQLite and the filesystem rank in process, so they equal an in-memory
+search; PostgreSQL computes the tiers in SQL and scores the fuzzy tier with
+`pg_trgm` when it is installed, so fuzzy *scores* can differ. The details are
+in the protocol's docstring. Offered by all three backends.
+
 ### Capability: `GraphQueryStore` (PG 19)
 
 ```python
@@ -355,19 +389,25 @@ async with await connect('sqlite:app.db') as store: ...
 async with await connect('postgresql://u:p@host/db') as store: ...
 ```
 
-The Postgres backend probes `server_version` at connect time; on ≥ 19 it
-installs/refreshes the property graph definitions and the store instance
-additionally satisfies `GraphQueryStore`. No separate URL scheme, no
+The Postgres backend probes `server_version` at connect time; on ≥ 19 it tries
+to install the property graph definitions, and if the server accepts them the
+store instance additionally satisfies `GraphQueryStore`. If it can't (no
+privilege to create them, or a server that doesn't have SQL/PGQ) the store
+opens without that capability rather than failing. No separate URL scheme, no
 user-facing PG 17 vs 19 fork.
 
 ## Backends
 
-| Backend | Module | Extra deps | GraphStore | AssertionStore | OverlayReadStore | GraphQueryStore |
-| --- | --- | --- | --- | --- | --- | --- |
-| Literate files | `onya.store.filesystem` | none | ✓ | — | — | — |
-| SQLite | `onya.store.sqlite` | none (stdlib) | ✓ | ✓ | ✓ | — |
-| PostgreSQL ≥ 17 | `onya.store.postgres` | `onya[postgres]` → asyncpg | ✓ | ✓ | ✓ | — |
-| PostgreSQL ≥ 19 | `onya.store.postgres` | `onya[postgres]` | ✓ | ✓ | ✓ | ✓ |
+| Backend | Module | Extra deps | GraphStore | AssertionStore | OverlayReadStore | SearchStore | GraphQueryStore |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| Literate files | `onya.store.filesystem` | none | ✓ | — | — | ✓ | — |
+| SQLite | `onya.store.sqlite` | none (stdlib) | ✓ | ✓ | ✓ | ✓ | — |
+| PostgreSQL ≥ 17 | `onya.store.postgres` | `onya[postgres]` → asyncpg | ✓ | ✓ | ✓ | ✓ | — |
+| PostgreSQL ≥ 19 with SQL/PGQ | `onya.store.postgres` | `onya[postgres]` | ✓ | ✓ | ✓ | ✓ | ✓ |
+
+A 19 server is not enough for the last row: the server must also accept
+`CREATE PROPERTY GRAPH`, and the `postgres:19rc1` image does not (§ SQL/PGQ layer). A
+store opened against it simply lacks `GraphQueryStore`.
 
 ### Filesystem backend (default; the testing fake)
 
@@ -570,6 +610,15 @@ Two consequences fall straight out of the SPEC merge rules:
   identified assertions are matched by `ident_pk`, anonymous by
   `skeleton_hash`, and the write path never crosses the streams.
 
+Do not confuse it with `onya.digest` (a canonical *content* digest of a whole
+graph, SPEC § Graph equivalence). `skeleton_hash` is a merge-identity hash: it
+leaves out `@id` and interpretations on purpose, since those are what the merge
+rules compare *around*. The digest includes them, because it answers "do these
+graphs say the same thing", and is defined on the model, not on any store's
+rows. A graph's digest is unchanged by a round trip through any backend (a
+conformance test), which is the property that lets a projection record "the
+graph version it was built from".
+
 The hash is a **per-store implementation detail**, not (yet) SPEC
 material: merges between independent stores happen through the model
 layer, which uses real structural comparison. If we ever want wire-level
@@ -674,6 +723,17 @@ if isinstance(store, GraphQueryStore):
     ''', str(chuks_iri), str(KNOWS))
 ```
 
+**Verification status (checked against `postgres:19rc1`).** The server
+reports `PostgreSQL 19rc1` and answers `CREATE PROPERTY GRAPH` with a syntax
+error (psql has no `\h CREATE PROPERTY GRAPH`, and there are no
+`pg_propgraph*` catalogs), so SQL/PGQ is absent from that build. That means
+the major version alone does not say whether PGQ is there, and the backend
+now treats a syntax error from the property graph DDL as "not available": it
+logs, opens without `GraphQueryStore`, and does not fail the connection. The
+PGQ test skips on such a server. The two open questions above (views as
+element tables, the PGQ usage example) are therefore still unverified: they
+need a build that has the feature.
+
 Known PG 19 limitation, worn openly in our docs: no variable-length or
 quantified path patterns in the initial release — fixed-depth hops only;
 transitive traversals still mean recursive CTEs over `onya_edge_hop`
@@ -689,44 +749,53 @@ traversal-first stance: aggregate/analytic questions are answered by
 *projecting* graph content into ordinary domain tables, then using plain
 SQL — not by an aggregate-capable graph query language.
 
-The interpretation layer is the typing bridge, and this is where the
-data-contract design earns its keep in persistence. A projection spec
-maps a node type to a table, labels to columns, and each column's SQL
-type comes from the label's interpretation via the registry — with the
-established laws intact (`number` → `NUMERIC`/`BIGINT`, never floats;
-`boolean` strict; unknown interps project as `TEXT`, untouched).
+This is built, and it is **not part of `onya.store`**: it is `onya.circum`
+(design: [design-circum.md](design-circum.md)). An earlier version of this
+section sketched an `onya.store.project` module with a hand-written
+`projection(...)` spec and a `project(store, name, spec)` call. That design
+was superseded, for these reasons:
 
-```python
-from onya.store.project import projection, project
+- **The spec is derived, not listed.** The shape layer
+  ([design-shapes.md](design-shapes.md)) already says which properties a class
+  has, their `@as`, `@cardinality` and `@range`, so `from_shapes(g, cls)` reads
+  them. A hand-written `Projection` remains for exceptions.
+- **It does not need a store.** It projects a graph, from wherever the graph
+  came from: a file, `store.get(name)`, or a `store.union([...])` /
+  `store.overlay([...])` of several named graphs. That is the right seam; a
+  projection that took a store would only be able to project what that store
+  could load. `materialize` can however *write into* a store's own database
+  (pass the store as the target), so circumstance tables sit beside the
+  `onya_*` tables in one SQLite file or PostgreSQL schema.
+- **Typing comes from two places, both on the model.** A column's type is the
+  shape's `@as` (a default for the label), and a value is read through its own
+  `@as` when it has one, with the established laws intact: `number` is exact
+  (never a float), `boolean` is strict, an unknown or absent interpretation is
+  `text`, untouched, never guessed.
+- **A contract failure raises, naming its node and line.** The earlier sketch
+  had `on_broken_contract='null' | 'skip' | 'error'`, defaulting to `null`.
+  The built projection takes the strict reading (`CircumError`, listing every
+  problem, nothing written); a lenient mode can be added if the field wants
+  one.
 
-people = projection(
-    'people',
-    type=SCHEMA_ORG.Person,
-    columns={'name': SCHEMA_ORG.name, 'age': SCHEMA_ORG.age},
-)  # column types resolved from interp: age asserted @as number → BIGINT/NUMERIC
+Projection stays *derived and disposable*: regenerate at will, never a
+write-back path, and the graph remains the source of truth. Each run records
+the graph's content digest (`onya.digest`) in the tables it wrote, so "which
+graph version produced these" is answerable. Per-assertion contracts are
+checked as the rows are built; shape-level guarantees about the graph itself
+remain the shape layer's job, run on demand (`onya validate`), and a projection
+neither imposes nor verifies them. Our "data contract layers" language should
+still not lead data-engineering readers to expect more than that.
 
-await project(store, 'http://example.org/friendship-graph', people)
-# → CREATE TABLE people AS ... ; ordinary SQL from here on
-```
-
-Projection is always *derived and disposable* — regenerate at will;
-never a write-back path. Contract checking stays on-demand: `project()`
-takes `on_broken_contract='null' | 'skip' | 'error'`, defaulting to
-`null` with findings reported as data, in keeping with
-`validate()`'s posture. Note for the docs, per the standing caution: our
-"data contract layers" language must not lead data-engineering readers
-to expect shape-level guarantees here — a projection types *columns from
-per-assertion contracts*; it does not impose or verify a schema on the
-graph.
-
-This section is architecture-level intent; `project()` gets its own
-design pass before implementation.
+The other direction, reading circumstance tables back into a graph at read
+time, is `onya.circum`'s second half and is not built yet
+([design-sidecars.md](design-sidecars.md)). It reads tables; it does not make
+them a storage backend.
 
 ## Packaging and the extraction seam
 
 - New subpackage `pylib/store/` (→ `onya.store` after the wheel remap),
-  containing `base`, `filesystem`, `sqlite`, `_relational`, `postgres`,
-  `project`.
+  containing `base`, `filesystem`, `sqlite`, `_relational`, `postgres`, `sync`.
+  (There is no `project` module: see § Analytics projection.)
 - `pyproject.toml` gains:
 
   ```toml
@@ -745,9 +814,10 @@ design pass before implementation.
 - On the standing question of whether relational backends belong in this
   repo at all: they stay, for now, for velocity and shared test
   infrastructure. The ground rules make later extraction mechanical:
-  `onya.store.postgres` + `_relational` (+ `project`) move to a
-  supplementary distribution, registering through the same entry-point
-  group. One caution for that day: a PEP 420 namespace-package split
+  `onya.store.postgres` + `_relational` move to a supplementary
+  distribution, registering through the same entry-point group. (`onya.circum`
+  is a separate module with its own lazy asyncpg import, and doesn't move with
+  them.) One caution for that day: a PEP 420 namespace-package split
   (`onya.db` as its own distribution) interacts badly with this repo's
   `pylib → onya` wheel remap (`onya/__init__.py` exists, so `onya` is a
   regular package). A sibling top-level distribution name
@@ -771,7 +841,40 @@ contract once, run every implementation through it.
   backend.
 - SQLite runs everywhere; Postgres suites gate on `ONYA_TEST_PG_DSN` (17)
   and `ONYA_TEST_PG19_DSN`, the latter also exercising
-  `GraphQueryStore` against fixture patterns with known answers.
+  `GraphQueryStore` against fixture patterns with known answers (skipped, with
+  its reason, on a server that has no SQL/PGQ: see § SQL/PGQ layer).
+- Digest parity: a graph's `onya.digest` is the same before and after a round
+  trip through every backend.
+- `onya.circum` has a SQLite suite that always runs, and a PostgreSQL one
+  (`test/store/test_circum_postgres.py`, marked `integration`) on the same DSN.
+
+Running the PostgreSQL suites locally takes a throwaway container per server
+version, with no state to clean up (`--rm`):
+
+```sh
+docker run -d --rm --name onya-test-pg17 -e POSTGRES_PASSWORD=test -e POSTGRES_DB=onya_test \
+    -p 127.0.0.1:54417:5432 postgres:17
+docker run -d --rm --name onya-test-pg19 -e POSTGRES_PASSWORD=test -e POSTGRES_DB=onya_test \
+    -p 127.0.0.1:54419:5432 postgres:19rc1
+export ONYA_TEST_PG_DSN=postgresql://postgres:test@127.0.0.1:54417/onya_test
+export ONYA_TEST_PG19_DSN=postgresql://postgres:test@127.0.0.1:54419/onya_test
+pytest                 # the whole suite, both servers
+docker stop onya-test-pg17 onya-test-pg19
+```
+
+CI runs `pytest -m "not integration"` without asyncpg installed, so the lazy
+import and the skip paths are what it exercises.
+
+## Related layers
+
+The store is a peripheral; these were built on top of it and refer back here:
+
+| Layer | What it adds | Touches the store how |
+| --- | --- | --- |
+| [Ordering](design-ordering.md) | `@ordering`, ordered accessors | Stamps are ordinary nested properties, so every backend round-trips them |
+| [Digest](design-digest.md) | Canonical content digest | Parity across backends is tested; independent of `skeleton_hash` |
+| [Shapes](design-shapes.md) | Declarations and `validate()` | Shapes are ordinary nodes, stored like any; `single_valued(shapes)` feeds `overlay()` |
+| [Circum](design-circum.md) | KG → relational projection | Projects what `get`/`union`/`overlay` return; may write into the store's database |
 
 ## Deferred / open questions
 
