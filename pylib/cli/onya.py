@@ -175,6 +175,22 @@ def convert(filespec: str,
         sys.stderr.write(f'Wrote {fmt} to {out}{doc_hint}\n')
 
 
+def _load(spec: str, encoding: str):
+    '''Read a filespec (or '-' for stdin) into one merged graph, tracking locations; a parse error exits 2.'''
+    from onya.serial.literate import read_many
+    try:
+        if spec == '-':
+            from onya.serial.literate import read
+            from onya.graph import graph
+            g = graph()
+            read(sys.stdin.read(), g, track_locations=True)
+            return g
+        return read_many(spec, merge=True, encoding=encoding, track_locations=True).graph
+    except LiterateParseError as exc:
+        sys.stderr.write(f'{spec}: {exc}\n')
+        raise SystemExit(2)
+
+
 def validate(filespec: str,
              *,
              shapes: str | None = None,
@@ -200,31 +216,61 @@ def validate(filespec: str,
         onya validate kg/
         onya validate kg/ --shapes=shapes/ --dangling --allow=https://orcid.org/ --strict
     '''
-    from onya.serial.literate import read_many
     from onya.shape import load_shapes, validate as check
 
-    def _read(spec):
-        try:
-            if spec == '-':
-                from onya.serial.literate import read
-                from onya.graph import graph
-                g = graph()
-                read(sys.stdin.read(), g, track_locations=True)
-                return g
-            return read_many(spec, merge=True, encoding=encoding, track_locations=True).graph
-        except LiterateParseError as exc:
-            sys.stderr.write(f'{spec}: {exc}\n')
-            raise SystemExit(2)
-
-    g = _read(filespec)
+    g = _load(filespec, encoding)
     if isinstance(allow, str):
         allow = [a.strip() for a in allow.split(',') if a.strip()]
-    report = check(g, load_shapes(_read(shapes)) if shapes else None, dangling=dangling, allow=allow)
+    report = check(g, load_shapes(_load(shapes, encoding)) if shapes else None, dangling=dangling, allow=allow)
     for f in report.findings:
         print(f)
     failed = report.findings if strict else report.errors
     if failed:
         sys.stderr.write(f'{len(report.errors)} error(s), {len(report.warnings)} warning(s)\n')
+        raise SystemExit(2)
+
+
+def project(filespec: str,
+            cls: str,
+            *,
+            shapes: str | None = None,
+            to: str | None = None,
+            dialect: str = 'postgres',
+            arrays: bool = False,
+            encoding: str = 'utf-8'):
+    '''
+    Project the graph into relational tables, derived from its shapes (see doc/design-circum.md).
+    With `--to`, create and fill the tables there; without it, print the `CREATE TABLE` statements.
+
+    Args:
+        filespec: Path, directory (recursive; `.onya` and `.onya.md`), glob, or '-' for stdin.
+        cls: IRI (or CURIE) of the class whose instances become rows; classes its edges point at come too.
+        shapes: Where the `@Class` / `@Property` declarations are, as a filespec; by default, the input itself.
+        to: Where to write: `sqlite:PATH` or `postgresql://...` (needs `onya[postgres]`).
+        dialect: `postgres` or `sqlite`, for the printed DDL (without --to).
+        arrays: Put multi-valued properties in array columns (PostgreSQL) rather than child tables.
+        encoding: Text encoding used to read input files (ignored for stdin).
+
+    Exit status: 0 on success, 2 if a value does not fit its column (the message names the node and line)
+    or on a parse error; nothing is written in that case.
+
+    Examples:
+        onya project kg/ https://example.org/Person
+        onya project kg/ https://example.org/Person --to=sqlite:circumstances.db
+    '''
+    import asyncio
+    from onya.circum import CircumError, ddl, from_shapes, materialize
+
+    g = _load(filespec, encoding)
+    try:
+        p = from_shapes(g, cls, shapes=_load(shapes, encoding) if shapes else None, array_columns=arrays)
+        if to is None:
+            print(ddl(p, dialect))
+            return
+        print(asyncio.run(materialize(to, p, g)))
+    except CircumError as exc:
+        for problem in exc.problems:
+            sys.stderr.write(f'{problem}\n')
         raise SystemExit(2)
 
 
@@ -242,6 +288,7 @@ class _CLI:
     '''
     convert = staticmethod(convert)
     validate = staticmethod(validate)
+    project = staticmethod(project)
     version = staticmethod(version)
 
 

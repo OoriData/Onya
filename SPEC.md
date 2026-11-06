@@ -191,6 +191,8 @@ Two graphs are **equivalent** when they have the same union-normalized content: 
 
 A **shape** says what a graph is expected to look like: which labels a class of node may carry, how many values or targets each may have, and what they must be. Shapes are an optional layer written as ordinary nodes in the Onya namespace (`@Class`, `@Property`, `@appliesTo`, `@cardinality` and so on); the layer, which only reports and never infers or changes a graph, is specified in [doc/design-shapes.md](doc/design-shapes.md).
 
+**Circumstances.** Data that surrounds a thing rather than defining it (this quarter's income, readings, billing terms) is better kept in relational tables than in the graph. An optional layer projects a graph into such tables, driven by its shapes, and records the digest of the graph it projected; it adds two reserved terms, `@table` and `@column`, to rename what it derives, and is specified in [doc/design-circum.md](doc/design-circum.md).
+
 ## Interpretations (data contract layers)
 
 Every Onya value is a string, and the string layer is unconditionally valid:

@@ -6,6 +6,12 @@ For interim changes not yet earmarked for a particular release, can use this hea
 ## [Unreleased]
 -->
 
+## [Unreleased]
+
+### Added
+
+- **Circumstances: `onya.circum`, a KG to relational projection, and `onya project`** (#70). `from_shapes(g, cls)` derives a `Projection` from the `@Property` shapes that apply to a class (`@as` gives the column type, `@cardinality` the nullability or a child table, `@range` a foreign key, `@ordered` an `ordinal`). `ddl(p, dialect)` prints it, `rows(p, g)` gives typed rows, and `await materialize(target, p, g)` creates the tables and inserts, updates and deletes rows in one transaction, reporting what it changed. A second run over an unchanged graph reports every row unchanged, and `nodes=` re-projects only the nodes whose `node_digests` changed. Each run records the graph's content digest in `onya_circum_runs` (`last_run()` reads it back). SQLite and asyncpg targets; `single_valued(shapes)` feeds `store.overlay()` so authored and runtime graphs can be projected together. A bad value raises `CircumError` naming every node (and line). `@table` and `@column` are new reserved terms. See `doc/design-circum.md`.
+
 ## [0.5.5] 2026-11-06: Shapes (i.e. a schema constraint-like system, #68).
 
 ### Added
