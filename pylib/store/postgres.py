@@ -340,6 +340,10 @@ def _is_privilege_error(e: Exception) -> bool:
     return getattr(e, 'sqlstate', None) == '42501'  # insufficient_privilege (incl. "must be owner")
 
 
+def _is_syntax_error(e: Exception) -> bool:
+    return getattr(e, 'sqlstate', None) == '42601'  # syntax_error: the server doesn't know the statement
+
+
 async def _missing_relations(conn, names: list[str]) -> list[str]:
     rows = await conn.fetch('SELECT n FROM unnest($1::text[]) AS n WHERE to_regclass(n) IS NULL', names)
     return [r['n'] for r in rows]
@@ -497,13 +501,15 @@ async def _ensure_pgq(conn) -> bool:
     '''
     Returns whether both property graphs exist afterwards. They're left as is when present
     (refreshing needs ownership); when missing and not creatable, the store opens without the
-    ``GraphQueryStore`` capability instead of failing. (Unverified against PostgreSQL 19 here.)
+    ``GraphQueryStore`` capability instead of failing. So does a server that doesn't know the syntax:
+    PostgreSQL 19rc1 (the ``postgres:19rc1`` image) answers ``CREATE PROPERTY GRAPH`` with a syntax
+    error, so a version number alone doesn't say that SQL/PGQ is there.
     '''
     if not await _missing_relations(conn, ['onya_base', 'onya_reified']):
         return True
     err = await _try_ddl_pgq(conn)
     if err is not None:
-        if not _is_privilege_error(err):
+        if not (_is_privilege_error(err) or _is_syntax_error(err)):
             raise err
         logger.info('SQL/PGQ property graphs could not be created (%s); GraphQueryStore unavailable', err)
         return False

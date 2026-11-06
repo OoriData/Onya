@@ -47,6 +47,8 @@ ONYA_CARDINALITY = ONYA('cardinality')  # @cardinality: 1 | 0..1 | 1..* | 0..* |
 ONYA_ONEOF = ONYA('oneOf')  # @oneOf: an allowed value (repeat for each)
 ONYA_CLOSED = ONYA('closed')  # @closed: true on a Class: undeclared labels are findings
 ONYA_SEVERITY = ONYA('severity')  # @severity: error | warning
+ONYA_TABLE = ONYA('table')  # @table: override a derived table name (onya.circum)
+ONYA_COLUMN = ONYA('column')  # @column: override a derived column name (onya.circum)
 
 # Reserved vocabulary. Every `@x` in Onya Literate is the IRI `onya:x` (http://purl.org/onya/vocab/x).
 # RESERVED maps each reserved local name to the layer that defines it: 'core' for the terms above, and
@@ -76,6 +78,7 @@ reserve('core',
 reserve('ordering', 'ordering', 'ordered')  # onya.ordering (not core: see SPEC, Reserved vocabulary)
 reserve('shape', 'Class', 'Property', 'label', 'subClassOf', 'appliesTo', 'range', 'cardinality', 'oneOf',
         'closed', 'severity')  # onya.shape
+reserve('circum', 'table', 'column')  # onya.circum
 
 
 def unknown_reserved_terms(g) -> dict:

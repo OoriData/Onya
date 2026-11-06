@@ -61,8 +61,9 @@ async def test_reachable_bounded_transitive():
 async def test_pgq_friend_of_friend():
     async with await connect(PG19_DSN) as store:
         await store._reset_for_tests()
+        if not isinstance(store, GraphQueryStore):  # a 19 server without SQL/PGQ (19rc1 has none) opens without it
+            pytest.skip('this PostgreSQL server has no SQL/PGQ (CREATE PROPERTY GRAPH)')
         await store.put(GNAME, parse(FRIENDS))
-        assert isinstance(store, GraphQueryStore)
         rows = await store.graph_table(
             '''
             SELECT * FROM GRAPH_TABLE (onya_base
