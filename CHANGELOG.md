@@ -28,7 +28,7 @@ For interim changes not yet earmarked for a particular release, can use this hea
 - Every `onya.store` backend's `put` raises `CircumDerivedError` for a graph holding sidecar-derived assertions (a view from `augment`): a view is never written back. `strip` it first.
 - `doc/design-sidecars.md` rewritten against the declared vocabulary: the catalog node is a `@Sidecar`, and "where Onya could help more" became what `onya.circum` provides.
 
-## [0.5.6] 2026-11-06: Onya Circumstances
+## [0.5.6] 2026-11-06: Onya Circumstances (`onya.circum`; projections to SQL and reflections back)
 
 ### Added
 
