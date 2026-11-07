@@ -14,6 +14,7 @@ ONYA_TYPE_REL = ONYA('type')
 ONYA_SOURCE_REL = ONYA('source')  # @source provenance sub-property
 ONYA_METHOD_REL = ONYA('method')  # @method provenance sub-edge (points to a node identifying the method)
 ONYA_CONFIDENCE_REL = ONYA('confidence')  # @confidence provenance sub-property, nested under @method
+ONYA_ASOF = ONYA('asOf')  # @asOf: ISO 8601 time an assertion was true at, nested under it (core: not only circum)
 ONYA_DOCUMENT = ONYA('Document')  # Type for document nodes created from @document directive
 ONYA_ASSERTION = ONYA('Assertion')  # Implicit type carried by every assertion (edge/property)
 
@@ -49,6 +50,14 @@ ONYA_CLOSED = ONYA('closed')  # @closed: true on a Class: undeclared labels are 
 ONYA_SEVERITY = ONYA('severity')  # @severity: error | warning
 ONYA_TABLE = ONYA('table')  # @table: override a derived table name (onya.circum)
 ONYA_COLUMN = ONYA('column')  # @column: override a derived column name (onya.circum)
+# The circum layer's read side (see onya.circum): sidecars are declared as nodes, and circum properties point at them
+ONYA_SIDECAR = ONYA('Sidecar')  # type of a sidecar declaration: where some properties' values are held
+ONYA_SYSTEM = ONYA('System')  # type of the system a sidecar lives in
+ONYA_SYSTEM_REL = ONYA('system')  # @system -> System
+ONYA_CIRCUMQUERY = ONYA('circumQuery')  # on a @Property: -> the @Sidecar holding its values
+ONYA_QUERYDETAIL = ONYA('queryDetail')  # nested under @circumQuery: opaque to Onya, passed to the resolver
+ONYA_SENSITIVITY = ONYA('sensitivity')  # @sensitivity on a sidecar: what a policy decides access by
+ONYA_RETENTION = ONYA('retention')  # @retention on a sidecar: how long its rows are kept
 
 # Reserved vocabulary. Every `@x` in Onya Literate is the IRI `onya:x` (http://purl.org/onya/vocab/x).
 # RESERVED maps each reserved local name to the layer that defines it: 'core' for the terms above, and
@@ -72,13 +81,14 @@ def reserve(layer: str, *names: str) -> None:
 reserve('core',
         'document', 'nodebase', 'base', 'schema', 'typebase', 'language', 'iri', 'interpretations',  # directives
         'id', 'as',  # assertion directives
-        'source', 'method', 'confidence',  # provenance
+        'source', 'method', 'confidence', 'asOf',  # provenance
         'Document', 'Assertion',  # implicit types
         'type')  # the type relation: reserved, with no behavior defined yet
 reserve('ordering', 'ordering', 'ordered')  # onya.ordering (not core: see SPEC, Reserved vocabulary)
 reserve('shape', 'Class', 'Property', 'label', 'subClassOf', 'appliesTo', 'range', 'cardinality', 'oneOf',
         'closed', 'severity')  # onya.shape
-reserve('circum', 'table', 'column')  # onya.circum
+reserve('circum', 'table', 'column', 'Sidecar', 'System', 'system', 'circumQuery', 'queryDetail', 'sensitivity',
+        'retention')  # onya.circum
 
 
 def unknown_reserved_terms(g) -> dict:

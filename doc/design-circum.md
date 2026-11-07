@@ -2,9 +2,9 @@
 
 A knowledge graph is the place for what a thing *is*: a person's name and birthdate. It is a poor place for what is true of the thing right now and in volume (income this year, readings, billing terms). The graph's extreme denormalization is inefficient for that, and keeping the essence of things apart from their circumstances is worth doing for its own sake. Arguments about which side a fact falls on are fine, and useful.
 
-`onya.circum` keeps the two connected. Circumstances live in relational tables, and the graph stays the source of truth: the tables are a **projection** of it, derived and rebuildable. (The other direction, tables read back into a graph at read time, belongs to this module too and is not built yet. See [design-sidecars.md](design-sidecars.md).)
+`onya.circum` keeps the two connected. Circumstances live in relational tables, and the graph stays the source of truth: the tables are a **projection** of it, derived and rebuildable. The other direction, circumstances held in tables but shown in the graph at read time, belongs to the same module (see [Reading circumstances](#reading-circumstances-sidecars-augment-emit) below, and [design-sidecars.md](design-sidecars.md) for the pattern).
 
-It is a layer in the sense of SPEC § Reserved vocabulary. The only terms it adds are `@table` and `@column` (below).
+It is a layer in the sense of SPEC § Reserved vocabulary. The terms it adds are `@table` and `@column` (below), and, for the read side, `@Sidecar`, `@System`, `@system`, `@circumQuery`, `@queryDetail`, `@sensitivity` and `@retention`. It also uses the core `@method` and `@asOf`.
 
 ## Deriving a projection from shapes
 
@@ -67,6 +67,62 @@ Authored files and runtime assertions should live in **separate named graphs** o
 - `store.union([...])` keeps every value. A disagreement on a single-valued label then breaks its `@cardinality`, and `rows` refuses to pick for you. Use it when the graphs should agree and a disagreement is a bug.
 - `store.overlay([...], single_cardinality=single_valued(shapes), precedence=[...])` treats the graphs as ordered layers and lets the winner replace the others, returning the audit trail of what was shadowed. Use it when a layer is supposed to override. `single_valued(shapes)` lists the labels whose `@cardinality` allows one value.
 
+## Reading circumstances: sidecars, `augment`, `emit`
+
+Some facts are **declared** in the graph but **held** elsewhere: a counsellor assignment in the university database, a fee in the billing system. `augment` makes them appear in a *view* of the graph, as if written there; `emit` moves them out of the graph and into where they live. One declaration drives both.
+
+```markdown
+# counselledBy [@Property]
+* @appliesTo -> Student
+* @range -> Person
+* @cardinality: 1
+* @circumQuery -> counsellor-assignments
+  * @queryDetail: counsellor_for_students
+
+# counsellor-assignments [@Sidecar]
+* @label: Counsellor assignments
+* @system -> onya-uni-db
+* @table: counsellor
+* @sensitivity: internal
+* @retention: life of the enrolment plus seven years
+```
+
+A circum property is an ordinary `@Property` with one `@circumQuery` edge, to the `@Sidecar` that holds its values. The sidecar node is also the catalog entry (`onya catalog` lists it, with the properties that point at it, computed from those edges and never written). Sidecars are keyed by subject IRI, implicitly.
+
+`@queryDetail` is **opaque**: a name or token handed to the resolver. It is never executable text, because a graph travels (git, an LLM's context, other teams) and query text in one is both a leak and an injection surface. The application writes its own, parameterized, query; a resolver may ignore `@queryDetail` and build one from `@table` and the shapes.
+
+### Resolvers and `augment`
+
+```python
+reg = Registry(policy=lambda viewer, sensitivity: viewer.staff or sensitivity == 'public')
+
+@reg.resolver('https://example.org/counselledBy')
+async def counselled_by(subjects, ctx):          # every subject at once: one query per property
+    rows = await ctx.conn.fetch(SQL[ctx.detail], subjects)
+    return {r['iri']: [Edge(r['counsellor'], node=Node(('Person',), {NAME: r['name']}), as_of=r['updated'])]
+            for r in rows}
+
+view = await augment(g, registry=reg, viewer=me, conn=conn)       # a new graph; g is untouched
+```
+
+A resolver returns `{subject IRI: [Edge | Text]}`. An `Edge` to a node the graph lacks carries a `Node` (the **circum node**) with the few facts it needs, so the view has no dangling edge. A target already in the graph is not re-typed. A resolver may be a plain function or a coroutine.
+
+Everything the view adds carries `@method -> <sidecar>` and `@asOf` (the row's own time, else the retrieval time); a node the view creates also carries `@method` itself. The view also says that it is one: each sidecar it consulted gets an `@asOf` with a nested `@method` pointing back at the sidecar itself, so a view that is written out as text and read back is still recognised (`onya.circum.is_view`). `strip(view)` removes exactly that, and nothing else, so `digest(strip(view)) == digest(g)`. A view is never persisted: every `onya.store` backend's `put` raises `CircumDerivedError` for a graph holding sidecar-derived assertions.
+
+Order of events in `augment`: declarations are checked, then the viewer's access to **every** sidecar involved (`policy(viewer, sensitivity)`; none means allow all), then each resolver runs. A refusal (`CircumAccessDenied`) names the sidecar and the property and runs nothing. A resolver that raises fails the call (`on_error='finding'` returns the view with the failure in `view_findings(view)` instead); one that returns rows for a subject it wasn't asked about is refused.
+
+Because the graph can be incomplete only as a view, `validate` skips the `@cardinality` minimum of a circum property on an ordinary graph, and checks it on a view: a student with no counsellor row is a finding on the view, not a flaw in the graph. The marker above is what tells `validate` which it is, so the result is the same before and after a text round trip. A view limited with `ids=` is incomplete only for the nodes it was asked about: each of those carries the same `@asOf` / `@method -> <sidecar>` mark, and `validate` checks the minimum on them alone. A property whose resolver failed (`on_error='finding'`) is not reported as missing either; the failure is the finding. The graph can't say which of two properties in one sidecar failed, so if that happens `augment` warns once, naming every such property, that the view, once written out and read back, would report the failed property as missing.
+
+### `emit`
+
+```python
+report = await emit(g, touched=[iri], registry=reg)    # report.moved, report.review
+```
+
+For each touched node, `emit` hands the assertions whose label has a `@circumQuery` to the property's registered **writer** as `{subject IRI: [Edge | Text]}`, then removes them from `g`: sidecar first, graph second, so a fact is never in neither place. Writers must be idempotent, since a crash between the two steps leaves a fact in both and the retry writes it again. Nothing is removed until every writer has succeeded.
+
+It leaves in place, naming them in `report.review`, assertions with an `@id` or nested assertions (removing one would take them along, and a row elsewhere may point at it), and ignores what came from a sidecar. A circum label with no writer, or a viewer the policy refuses, raises before anything is written. `g` is edited in place: pass `g.copy()` for a dry run. A target node an emitted edge pointed at stays in the graph.
+
 ## What this layer does not do
 
-It reads no tables back into a graph yet, makes no migrations, writes no graph assertions, and does not infer anything the shapes don't say. A graph with no shapes projects to nothing.
+It makes no migrations, does no caching and has no staleness policy, and does not infer anything the shapes don't say. It opens no database connection for the read side: resolvers and writers are the application's, and receive what it passes as `conn`. A graph with no shapes projects to nothing.

@@ -27,6 +27,7 @@ from amara.iri import I
 from onya.graph import edge, graph, warn_prefix_clashes
 from onya.query import DEFAULT_MIN_SCORE, normalize as query_normalize, rank, score_candidates
 from onya.store import _relational as rel
+from onya.store.base import refuse_circum_derived
 from onya.store._relational import Dialect, SQLITE
 
 _BATCH = 512  # fetchmany batch size for streaming match()
@@ -84,6 +85,7 @@ class SqliteStore:
 
     async def put(self, name: I | str, g: graph, *, merge: bool = True) -> None:
         g.validate_id_space()  # node-id vs assertion-id collision -> AssertionIdConflict
+        refuse_circum_derived(g)
 
         def _put(conn):
             cur = conn.cursor()

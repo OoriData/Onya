@@ -33,6 +33,7 @@ from onya.graph import GraphMergeError, edge, graph, warn_prefix_clashes
 from onya.util import namespace_for_curie
 from onya.query import DEFAULT_MIN_SCORE, SearchHit, normalize as query_normalize, rank, score_candidates
 from onya.store import _relational as rel
+from onya.store.base import refuse_circum_derived
 from onya.store._relational import (
     POSTGRES, SCHEMA_VERSION, SKELETON_HASH_VERSION, classify_anonymous, ddl_statements,
     iter_records, skeleton_hash,
@@ -95,6 +96,7 @@ class PostgresStore:
 
     async def put(self, name: I | str, g: graph, *, merge: bool = True) -> None:
         g.validate_id_space()
+        refuse_circum_derived(g)
         async with self._pool.acquire() as conn:
             async with conn.transaction():
                 clashes = await _write_graph(conn, str(name), g, merge=merge)
