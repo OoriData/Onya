@@ -106,3 +106,68 @@ async def test_into_the_stores_own_database():
             assert (await last_run(store, p))['unchanged'] == 3
     finally:
         await _drop(dsn, p)
+
+
+# --- the read side, through asyncpg: a batch resolver using ANY($1), and an idempotent writer ---------------
+
+SIDECAR = '''# @docheader
+* @document: http://e.o/sidecar
+* @nodebase: http://e.o/
+* @schema: http://e.o/
+
+# Student [@Class]
+# Person [@Class]
+# counselledBy [@Property]
+* @appliesTo -> Student
+* @range -> Person
+* @cardinality: 1
+* @circumQuery -> counsellor-assignments
+# counsellor-assignments [@Sidecar]
+* @table: pg_counsellor
+# chuks [Student]
+# dede [Student]
+'''
+
+
+@pytest.mark.asyncio
+async def test_augment_and_emit_through_asyncpg():
+    import asyncpg
+    from onya.circum import Edge, Node, Registry, augment, emit, strip
+
+    label = 'http://e.o/counselledBy'
+    conn = await asyncpg.connect(os.environ['ONYA_TEST_PG_DSN'])
+    try:
+        await conn.execute('DROP TABLE IF EXISTS pg_counsellor')
+        await conn.execute('CREATE TABLE pg_counsellor (iri text PRIMARY KEY, counsellor text, name text)')
+        await conn.execute("INSERT INTO pg_counsellor VALUES ('http://e.o/chuks', 'http://e.o/adat', 'Adat Okon')")
+        calls = []
+        reg = Registry()
+
+        @reg.resolver(label)
+        async def counselled_by(subjects, ctx):
+            calls.append(list(subjects))
+            rows = await ctx.conn.fetch('SELECT iri, counsellor, name FROM pg_counsellor WHERE iri = ANY($1)', subjects)
+            return {r['iri']: [Edge(r['counsellor'], node=Node(('Person',), {'http://e.o/name': r['name']}))]
+                    for r in rows}
+
+        @reg.writer(label)
+        async def put(rows, ctx):
+            await ctx.conn.executemany(
+                'INSERT INTO pg_counsellor (iri, counsellor) VALUES ($1, $2) '
+                'ON CONFLICT (iri) DO UPDATE SET counsellor = excluded.counsellor',
+                [(s, e.target) for s, items in rows.items() for e in items])
+
+        g = read(SIDECAR).graph
+        view = await augment(g, registry=reg, conn=conn)
+        assert calls == [['http://e.o/chuks', 'http://e.o/dede']]  # one batch
+        assert [str(e.target.id) for e in view['http://e.o/chuks'].getedge(label)] == ['http://e.o/adat']
+        assert digest(strip(view)) == digest(g)
+
+        g['http://e.o/dede'].add_edge(label, g.node('http://e.o/adat'))
+        assert len((await emit(g, ['http://e.o/dede'], registry=reg, conn=conn)).moved) == 1
+        assert not list(g['http://e.o/dede'].getedge(label))
+        assert (await conn.fetchval("SELECT counsellor FROM pg_counsellor WHERE iri = 'http://e.o/dede'")
+                ) == 'http://e.o/adat'
+    finally:
+        await conn.execute('DROP TABLE IF EXISTS pg_counsellor')
+        await conn.close()

@@ -36,8 +36,9 @@ from onya.interp import DEFAULT, InterpretationRegistry, validate as validate_in
 from onya.locations import describe
 from onya.ordering import OrderingError, ordered
 from onya.terms import (
-    ONYA, ONYA_APPLIESTO, ONYA_AS, ONYA_CARDINALITY, ONYA_CLASS, ONYA_CLOSED, ONYA_DOCUMENT, ONYA_LABEL, ONYA_ONEOF,
-    ONYA_ORDERED, ONYA_PROPERTY, ONYA_RANGE, ONYA_SEVERITY, ONYA_SUBCLASSOF, unknown_reserved_terms,
+    ONYA, ONYA_APPLIESTO, ONYA_AS, ONYA_CARDINALITY, ONYA_CIRCUMQUERY, ONYA_CLASS, ONYA_CLOSED, ONYA_DOCUMENT,
+    ONYA_LABEL, ONYA_ONEOF, ONYA_ORDERED, ONYA_PROPERTY, ONYA_RANGE, ONYA_SEVERITY, ONYA_SUBCLASSOF,
+    unknown_reserved_terms,
 )
 
 SEVERITIES = ('error', 'warning')
@@ -120,6 +121,7 @@ class PropertyShape:
     one_of: set = field(default_factory=set)  # allowed values
     ordered: bool = False
     severity: str = 'error'
+    circum: bool = False  # its values are held in a sidecar (`@circumQuery`): see `onya.circum`
 
 
 class Shapes:
@@ -182,7 +184,8 @@ def load_shapes(g) -> Shapes:
                 n.id, labels[0] if labels else None, _targets(n, ONYA_SUBCLASSOF), flag(n, ONYA_CLOSED), severity(n))
         if str(ONYA_PROPERTY) in types:
             p = PropertyShape(n.id, labels[0] if labels else None, _targets(n, ONYA_APPLIESTO), _targets(n, ONYA_RANGE),
-                              severity=severity(n), ordered=flag(n, ONYA_ORDERED), one_of=set(n.values(ONYA_ONEOF)))
+                              severity=severity(n), ordered=flag(n, ONYA_ORDERED), one_of=set(n.values(ONYA_ONEOF)),
+                              circum=any(True for _ in n.getedge(ONYA_CIRCUMQUERY)))
             as_ = n.values(ONYA_AS)
             if len(as_) > 1:
                 problem(n, 'bad_shape', ONYA_AS, f'a property has at most one @as, found {as_}')
@@ -225,6 +228,16 @@ def validate(g, shapes=None, *, registry: InterpretationRegistry = DEFAULT, dang
     '''
     sh = shapes if isinstance(shapes, Shapes) else load_shapes(g if shapes is None else shapes)
     out: list = list(sh.problems)
+    src = g if shapes is None else shapes
+    if hasattr(src, 'nodes') and any(p.circum for p in sh.properties.values()):
+        from onya.circum import declarations  # lazy: onya.circum builds on this module
+        out.extend(declarations(src, sh).problems)
+    is_view, sidecar_of, asked, failed = False, {}, None, set()
+    if hasattr(g, 'nodes') and any(p.circum for p in sh.properties.values()):
+        from onya.circum import asked, declarations as _decl, is_view as _is_view, view_findings  # from `augment`
+        is_view = _is_view(g)
+        sidecar_of = {pid: str(cp.sidecar.id) for pid, cp in _decl(src, sh).properties.items()}
+        failed = {str(f.label) for f in view_findings(g)}  # a resolver that failed: its values aren't "missing"
     onya_ns = str(ONYA)
 
     def add(sev, kind, n, label, detail, assertion=None):
@@ -263,6 +276,9 @@ def validate(g, shapes=None, *, registry: InterpretationRegistry = DEFAULT, dang
         applicable = {str(p.id): p for c in closure for p in by_class.get(c, ())}
         for pid, p in applicable.items():
             if p.cardinality is None:
+                continue
+            # A circum value isn't in the graph to count, unless this is a view that looked for it on this node
+            if p.circum and not (is_view and sidecar_of.get(pid) in asked(n) and pid not in failed):
                 continue
             lo, hi = p.cardinality
             found = used.get(pid, [])

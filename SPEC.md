@@ -302,7 +302,7 @@ So an `@x` that no loaded specification defines is not an error, since some laye
 | `@interpretations` | docheader stanza: default interpretations | [`@interpretations`](#interpretations) |
 | `@id` | assertion directive: names its enclosing assertion | [Assertion Identifiers](#assertion-identifiers) |
 | `@as` | assertion directive: sets its enclosing assertion's interpretation | [`@as`](#as) |
-| `@source`, `@method`, `@confidence` | provenance sub-assertions | [Optional assertion provenance](#optional-assertion-provenance-source-method-confidence) |
+| `@source`, `@method`, `@confidence`, `@asOf` | provenance sub-assertions | [Optional assertion provenance](#optional-assertion-provenance-source-method-confidence-asof) |
 | `@Document` | implicit type of the document node | [Document Header](#document-header) |
 | `@Assertion` | implicit type carried by every assertion | [Assertions](#assertions) |
 | `@type` | the type relation; reserved, with no behavior defined yet | (this section) |
@@ -713,7 +713,7 @@ Document-node assertions are emitted as top-level `@docheader` bullets through t
 - **The precondition is separator-terminated bases.** Bare node ids, labels, and types join `@nodebase`/`@schema`/`@typebase` by pure concatenation (see [Vocabulary prefixes](#vocabulary-prefixes-iri)), so a base must end in `/`, `#`, or `?`; otherwise reparse mints mashed IRIs (`…/vocab` + `title` → `…/vocabtitle`). `write` guarantees this on output: a separator-less `schema`/`nodebase` is normalized (append `/`) with a warning — parity with the parser's read-side check — or raises `NamespaceBaseError` under `write(..., strict_namespace_bases=True)`.
 - **Faithfulness does not require the *original* convention; readability does.** With no namespace hints, `write` emits everything in explicit `<full-iri>` form — correct, but verbose. Recovering the compact authoring convention (bare schema names, CURIE prefixes) requires the docheader namespaces the graph no longer remembers; `read` returns them on `ParseResult` (`schema`, `nodebase`, `typebase`, `prefixes`) precisely so a consumer can re-serialize with `write(..., schema=r.schema, nodebase=r.nodebase, prefixes=r.prefixes)`. A store that re-serializes on write (e.g. `put(merge=True)`) preserves an authored file's convention this way, keeping the on-disk form stable and diff-friendly across round trips.
 
-## Optional assertion provenance (`@source`, `@method`, `@confidence`)
+## Optional assertion provenance (`@source`, `@method`, `@confidence`, `@asOf`)
 
 Some workflows want document-level provenance without making it part of the core model. The parser can optionally tag **every created assertion** (including nested assertions but excluding document header declarations) with a sub-property:
 
@@ -733,7 +733,9 @@ A related but distinct need arises when *multiple methods* (a deterministic pars
             * @as: number
 ```
 
-Unlike `@source`, these are **filled in by the caller**; there is no parser flag and no directive handling. `@method`/`@confidence` are ordinary reserved-vocabulary assertions, authorable directly in Onya Literate (exactly as shown above) or via `add_edge`/`add_property`, exactly like hand-authoring `@source` would work today. See `onya.provenance` for a small read-accessor surface (`list_provenance`, `highest_confidence`) mirroring `onya.interp.value_of()`'s stance: honored on demand, never ambiently, and asserting no canonical confidence scale.
+- `@asOf`: a **property** nested directly under the assertion it describes, with an ISO 8601 date or time as its value: *when this was true*, as distinct from when it was written down. A value read from a database can carry its own as-of time. Nothing in the core model reads it.
+
+Unlike `@source`, `@method`, `@confidence` and `@asOf` are **filled in by the caller**; there is no parser flag and no directive handling. They are ordinary reserved-vocabulary assertions, authorable directly in Onya Literate (exactly as shown above) or via `add_edge`/`add_property`, exactly like hand-authoring `@source` would work today. See `onya.provenance` for a small read-accessor surface (`list_provenance`, `highest_confidence`) mirroring `onya.interp.value_of()`'s stance: honored on demand, never ambiently, and asserting no canonical confidence scale.
 
 ## Model Summary
 

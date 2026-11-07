@@ -39,6 +39,7 @@ from onya.util import namespace_for_curie
 from onya.query import DEFAULT_MIN_SCORE, normalize as query_normalize, search as query_search
 from onya.serial.literate import LITERATE_SUFFIXES, LiterateParser, write as literate_write
 from onya.store.exceptions import StoreError
+from onya.store.base import refuse_circum_derived
 
 # Deterministic slug: safe characters from the IRI, truncated, plus a short digest of the
 # full IRI so distinct IRIs that sanitize to the same prefix never collide. Deterministic so
@@ -204,6 +205,7 @@ class FileStore:
     # --- blocking put implementation (runs in a worker thread) ----------------------
 
     def _put_blocking(self, name: str, g: graph, merge: bool) -> list:
+        refuse_circum_derived(g)  # before taking the lock: a view must never be written
         lock = self._acquire_lock(name)
         try:
             if merge:

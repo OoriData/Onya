@@ -23,18 +23,26 @@ import asyncio
 import contextlib
 import datetime as _dt
 import graphlib
+import inspect
 import re
 import sqlite3
+import warnings
 from dataclasses import dataclass, field
 from decimal import Decimal
+
+from amara.iri import I
 
 from onya.digest import digest
 from onya.graph import graph
 from onya.interp import DEFAULT, InterpretationError
 from onya.locations import describe
 from onya.ordering import OrderingError, ordered
-from onya.shape import Shapes, load_shapes
-from onya.terms import ONYA_INTERP, ONYA_TABLE, ONYA_COLUMN
+from onya.shape import Finding, PropertyShape, Shapes, load_shapes
+from onya.terms import (
+    ONYA_ASOF, ONYA_CIRCUMQUERY, ONYA_CLASS, ONYA_COLUMN, ONYA_DOCUMENT, ONYA_INTERP, ONYA_LABEL, ONYA_METHOD_REL,
+    ONYA_PROPERTY, ONYA_QUERYDETAIL, ONYA_RETENTION, ONYA_SENSITIVITY, ONYA_SIDECAR, ONYA_SOURCE_REL, ONYA_SYSTEM,
+    ONYA_SYSTEM_REL, ONYA_TABLE,
+)
 
 RUNS_TABLE = 'onya_circum_runs'
 # Interpretation IRI -> column type. Anything else (and no interpretation at all) is `text`: never a guess.
@@ -706,3 +714,485 @@ async def last_run(target, p: Projection | str) -> dict | None:
         return None
     keys = ('run_at', 'projection', 'graph_digest', 'inserted', 'updated', 'unchanged', 'deleted')
     return dict(zip(keys, found[0]))
+
+
+# --- the read side: circumstances held elsewhere, shown in a view ----------------------------
+#
+# Some properties are *declared* in the graph but *held* in a sidecar (a table somewhere else). `augment`
+# makes them appear in a new graph, the view, with the application's resolvers fetching the values;
+# `strip` takes them out again; `emit` is the write-side twin, moving such assertions out of a graph into
+# their sidecar. The graph never holds query text: `@queryDetail` is opaque to Onya, handed to the resolver.
+
+_SIDECAR, _CIRCUMQUERY = str(ONYA_SIDECAR), str(ONYA_CIRCUMQUERY)
+_DECLARATIONS = frozenset(map(str, (ONYA_CLASS, ONYA_PROPERTY, ONYA_SIDECAR, ONYA_SYSTEM, ONYA_DOCUMENT)))
+
+
+class CircumAccessDenied(CircumError):
+    '''A viewer is not allowed to read (or write) a sidecar. Raised before any resolver or writer runs.'''
+
+
+class CircumDerivedError(CircumError):
+    '''A graph holding circum-derived assertions (a view) was offered for persistence.'''
+
+
+@dataclass
+class CircumProperty:
+    '''A `@Property` whose values are held in `sidecar`. `detail` is the nested `@queryDetail`, opaque to Onya.'''
+    label: object  # the label IRI (the declaration's node id)
+    sidecar: 'Sidecar'
+    detail: str | None = None
+    shape: PropertyShape | None = None  # what `onya.shape` makes of the same declaration
+
+
+@dataclass
+class Sidecar:
+    '''A `@Sidecar` declaration: the catalog entry for a store of rows keyed by node IRI.'''
+    id: object
+    label: str | None = None
+    system: object = None  # id of the `@System` it lives in
+    table: str | None = None
+    sensitivity: str | None = None
+    retention: str | None = None
+    holds: list = field(default_factory=list)  # the `CircumProperty`s that point at it (computed, never written)
+
+
+@dataclass
+class Declarations:
+    sidecars: dict = field(default_factory=dict)  # str(id) -> Sidecar
+    properties: dict = field(default_factory=dict)  # str(label IRI) -> CircumProperty
+    problems: list = field(default_factory=list)  # `onya.shape.Finding`s for declarations that can't be read
+
+
+def declarations(g, shapes=None) -> Declarations:
+    '''Read the `@Sidecar` nodes and the `@circumQuery` of each `@Property` in `g`. Malformed ones become `problems`.'''
+    out = Declarations()
+    sh = shapes if isinstance(shapes, Shapes) else load_shapes(g)
+    where = getattr(g, 'locate', lambda obj: None)
+
+    def problem(n, label, detail, assertion=None):
+        out.problems.append(Finding('error', 'circum', n.id, label, detail, where(assertion or n), assertion))
+
+    def one(n, term) -> str | None:
+        found = n.values(term)
+        if len(found) > 1:
+            problem(n, term, f'a sidecar has at most one {_local(term)}, found {found}')
+        return found[0] if found else None
+
+    for n in g.nodes.values():
+        if _SIDECAR in {str(t) for t in n.types}:
+            systems = n.targets(ONYA_SYSTEM_REL)
+            out.sidecars[str(n.id)] = Sidecar(n.id, one(n, ONYA_LABEL), systems[0].id if systems else None,
+                                              one(n, ONYA_TABLE), one(n, ONYA_SENSITIVITY), one(n, ONYA_RETENTION))
+    for n in g.nodes.values():
+        queries = list(n.getedge(ONYA_CIRCUMQUERY))
+        if not queries:
+            continue
+        if str(ONYA_PROPERTY) not in {str(t) for t in n.types}:
+            problem(n, ONYA_CIRCUMQUERY, '@circumQuery belongs on a @Property declaration', queries[0])
+            continue
+        if len(queries) > 1:
+            problem(n, ONYA_CIRCUMQUERY, f'a property has at most one @circumQuery, found {len(queries)}', queries[1])
+            continue
+        e = queries[0]
+        sc = out.sidecars.get(str(e.target.id)) if hasattr(e.target, 'types') else None
+        if sc is None:
+            problem(n, ONYA_CIRCUMQUERY, f'{e.target.id} is not declared as a @Sidecar', e)
+            continue
+        details = e.values(ONYA_QUERYDETAIL)
+        if len(details) > 1:
+            problem(n, ONYA_CIRCUMQUERY, f'a @circumQuery has at most one @queryDetail, found {details}', e)
+        prop = CircumProperty(n.id, sc, details[0] if details else None, sh.properties.get(str(n.id)))
+        out.properties[str(n.id)] = prop
+        sc.holds.append(prop)
+    for sc in out.sidecars.values():
+        sc.holds.sort(key=lambda p: str(p.label))
+    return out
+
+
+def catalog(g) -> list:
+    '''Every `Sidecar` declared in `g`, in id order, with the properties each holds. `CircumError` if one is unsound.'''
+    d = declarations(g)
+    if d.problems:
+        raise CircumError([str(f) for f in d.problems])
+    return sorted(d.sidecars.values(), key=lambda s: str(s.id))
+
+
+# What a resolver (or writer) is handed, and what it returns
+
+@dataclass
+class Node:
+    '''A circum node: the few facts a synthesized edge target needs. `props` maps a label IRI to a value or a list.'''
+    types: tuple = ()
+    props: dict = field(default_factory=dict)
+
+
+@dataclass
+class Edge:
+    '''A circum edge to `target` (a full IRI), with the `Node` to create when the graph doesn't have it yet.'''
+    target: str
+    node: Node | None = None
+    as_of: object = None  # a datetime, date or ISO 8601 string: when the sidecar says this was true
+
+
+@dataclass
+class Text:
+    '''A circum value, with an optional interpretation IRI.'''
+    value: str
+    as_of: object = None
+    interp: object = None
+
+
+@dataclass
+class Context:
+    '''
+    What a resolver or writer gets besides its batch: the sidecar and `detail` (the nested `@queryDetail`)
+    it was declared with, the property's `label` and `shape`, the `viewer`, and `conn`, whatever the caller
+    passed to `augment` / `emit` (a connection, a pool): Onya never opens one.
+    '''
+    label: object
+    sidecar: Sidecar
+    detail: str | None
+    shape: PropertyShape | None
+    viewer: object = None
+    conn: object = None
+
+
+class Registry:
+    '''
+    The application's side of a circum declaration: resolvers (and writers) keyed by the property's label IRI,
+    and `policy(viewer, sensitivity)`, which decides whether a viewer may reach a sidecar (None allows all).
+
+        @registry.resolver('https://example.org/counselledBy')
+        async def counselled_by(subjects, ctx): ...        # {subject IRI: [Edge | Text]}
+    '''
+    def __init__(self, policy=None):
+        self.policy = policy
+        self.resolvers: dict = {}
+        self.writers: dict = {}
+
+    def resolver(self, label):
+        def register(fn):
+            self.resolvers[str(label)] = fn
+            return fn
+        return register
+
+    def writer(self, label):
+        def register(fn):
+            self.writers[str(label)] = fn
+            return fn
+        return register
+
+    def allows(self, viewer, sidecar: Sidecar) -> bool:
+        return self.policy is None or bool(self.policy(viewer, sidecar.sensitivity))
+
+
+async def _call(fn, *args):
+    result = fn(*args)
+    return await result if inspect.isawaitable(result) else result
+
+
+def _asof(v=None) -> str:
+    '''ISO 8601 UTC, to the second, for `@asOf`: `v` a datetime, date or string; None is now.'''
+    if isinstance(v, str):
+        return v
+    v = _dt.datetime.now(_dt.timezone.utc) if v is None else _utc(v)
+    return v.isoformat(timespec='seconds').replace('+00:00', 'Z')
+
+
+def _subjects(g, sh, prop: CircumProperty, ids) -> list:
+    '''The node ids a circum property applies to: its `@appliesTo` classes (any node when none), within `ids`.'''
+    wanted = None if ids is None else {str(g.resolve(i)) for i in ids}
+    applies = prop.shape.applies_to if prop.shape else set()
+    return sorted(str(n.id) for n in g.nodes.values()
+                  if (wanted is None or str(n.id) in wanted)
+                  and not {str(t) for t in n.types} & _DECLARATIONS
+                  and (not applies or sh.closure(n.types) & applies))
+
+
+def _denied(registry, viewer, plan) -> list:
+    return [f'{prop.sidecar.id} (sensitivity {prop.sidecar.sensitivity!r}) is not available to this viewer; '
+            f'needed by {prop.label}' for prop, _ in plan if not registry.allows(viewer, prop.sidecar)]
+
+
+def _method_of(a, sids) -> bool:
+    '''Does assertion `a` carry a nested `@method` edge to one of the sidecars `sids`?'''
+    return any(str(m.target.id) in sids for m in a.getedge(ONYA_METHOD_REL))
+
+
+def _consulted(g) -> set:
+    '''Ids of the sidecars `g` says it was augmented from: a node with an `@asOf` that is `@method` -> itself.'''
+    return {str(n.id) for n in g.nodes.values()
+            if any(str(m.target.id) == str(n.id) for a in n.getprop(ONYA_ASOF) for m in a.getedge(ONYA_METHOD_REL))}
+
+
+def asked(n) -> set:
+    '''Ids of the sidecars a view looked in for node `n` (its `@asOf` marks with a nested `@method`).'''
+    return {str(m.target.id) for a in n.getprop(ONYA_ASOF) for m in a.getedge(ONYA_METHOD_REL)}
+
+
+def is_view(g) -> bool:
+    '''Did `g` come out of `augment`? The view says so itself (see `augment`), so this survives writing it out.'''
+    return bool(_consulted(g))
+
+
+def _sidecar_node(view, sid):
+    '''The node for sidecar `sid` in `view`; a bare one if the declarations live in another graph.'''
+    sc = view.nodes.get(sid)
+    if sc is None:
+        sc = view.node(sid)
+        sc._stub = True
+    return sc
+
+
+def _sidecar_ids(g, shapes=None) -> set:
+    ids = _consulted(g)
+    for src in (g, shapes):
+        if src is not None:
+            ids |= {str(n.id) for n in src.nodes.values() if _SIDECAR in {str(t) for t in n.types}}
+    return ids
+
+
+async def augment(g, *, registry: Registry, viewer=None, ids=None, shapes=None, on_error: str = 'raise',
+                  conn=None, now=None) -> graph:
+    '''
+    The view of `g` with the values its sidecars hold: a **new graph** (`g` is untouched), in which every
+    assertion added carries `@method -> <sidecar>` and `@asOf`. A node the view had to create also carries
+    `@method` itself, so `strip(view)` can remove it whole.
+
+    ids -- node ids to augment (default: every node a circum property applies to)
+    shapes -- a graph holding the declarations, when they aren't in `g`
+    on_error -- `'raise'` (default): a resolver that raises fails the whole call; `'finding'`: the view comes back
+        and `view_findings(view)` says what failed
+    conn -- opaque; handed to each resolver as `ctx.conn`
+    now -- the `@asOf` of a value the resolver gave no time for (default: the current time)
+
+    Each resolver is called once per property, with every subject at once. The viewer's access to each
+    sidecar (`registry.policy`) is checked first, for all of them, before any resolver runs.
+    '''
+    if on_error not in ('raise', 'finding'):
+        raise ValueError(f"on_error must be 'raise' or 'finding', not {on_error!r}")
+    src = g if shapes is None else shapes
+    decl = declarations(src)
+    if decl.problems:
+        raise CircumError([str(f) for f in decl.problems])
+    sh = load_shapes(src)
+    plan = []
+    for prop in sorted(decl.properties.values(), key=lambda p: str(p.label)):
+        subjects = _subjects(g, sh, prop, ids)
+        if subjects:
+            plan.append((prop, subjects))
+    if denied := _denied(registry, viewer, plan):
+        raise CircumAccessDenied(denied)
+    if missing := [f'no resolver is registered for {prop.label} (sidecar {prop.sidecar.id})'
+                   for prop, _ in plan if str(prop.label) not in registry.resolvers]:
+        raise CircumError(missing)
+
+    view = g.copy()
+    view._circum_findings = []
+    default_stamp = _asof(now)
+    # The view is self-describing: each sidecar it consulted gets `@asOf` (when) with a nested `@method` back to
+    # itself. That is how `validate` knows a missing value is a gap, and how `strip` and `store.put` know it's a view.
+    for sid in sorted({p.sidecar.id for p in decl.properties.values()}):
+        sc = _sidecar_node(view, sid)
+        for old in [a for a in sc.getprop(ONYA_ASOF) if _method_of(a, {str(sid)})]:
+            sc.remove_property(old)  # augmenting a view: this consultation replaces the earlier one
+        sc.add_property(ONYA_ASOF, default_stamp).add_edge(ONYA_METHOD_REL, sc)
+    done, failed = [], []  # the properties whose resolver succeeded, and those whose resolver failed
+    for prop, subjects in plan:
+        ctx = Context(prop.label, prop.sidecar, prop.detail, prop.shape, viewer, conn)
+        try:
+            found = await _call(registry.resolvers[str(prop.label)], subjects, ctx)
+            _apply(view, prop, subjects, found or {}, default_stamp)
+            sc = _sidecar_node(view, prop.sidecar.id)
+            for subject in subjects:  # asked, whether or not a row came back: `validate` counts only these nodes
+                n = view.nodes[str(subject)]
+                if str(sc.id) not in asked(n):
+                    n.add_property(ONYA_ASOF, default_stamp).add_edge(ONYA_METHOD_REL, sc)
+            done.append(prop)
+        except Exception as e:
+            if on_error == 'raise':
+                if isinstance(e, CircumError):
+                    raise
+                raise CircumError(f'{prop.label} (sidecar {prop.sidecar.id}): resolver failed: {e!r}') from e
+            failed.append(prop)
+            view._circum_findings.append(Finding('error', 'circum', prop.sidecar.id, prop.label,
+                                                 f'resolver failed: {e!r}'))
+    # The marks that say "this node was asked about" are per sidecar. If one property of a sidecar failed and
+    # another succeeded, the graph can't tell them apart: `validate` knows from the findings (in memory), but a
+    # view written out as text and read back would report the failed property's values as missing.
+    if hit := [p for p in failed if any(d.sidecar.id == p.sidecar.id for d in done)]:
+        names = ', '.join(sorted(str(p.label) for p in hit))
+        warnings.warn(f'resolver failed for {names}, while another property of the same sidecar succeeded. If this '
+                      'view is written out and read back, validate() will report those properties as missing for '
+                      'the nodes asked about. Keep the view in memory, or treat those findings as the resolver '
+                      'failure.', UserWarning, stacklevel=2)
+    view.touch()
+    return view
+
+
+def view_findings(view) -> list:
+    '''The findings `augment(..., on_error='finding')` recorded on `view`: one per resolver that failed.'''
+    return list(getattr(view, '_circum_findings', ()))
+
+
+def _apply(view, prop: CircumProperty, subjects, found, default_stamp) -> None:
+    '''Add what a resolver returned to `view`, marking each addition as circum-derived.'''
+    if stray := sorted(set(map(str, found)) - set(subjects)):
+        raise CircumError(f'{prop.label} (sidecar {prop.sidecar.id}): the resolver returned rows for '
+                          f'{stray[:3]}, which it was not asked about')
+    sc = _sidecar_node(view, prop.sidecar.id)
+
+    def mark(a, stamp):
+        a.add_edge(ONYA_METHOD_REL, sc)
+        a.add_property(ONYA_ASOF, stamp)
+
+    for subject, items in found.items():
+        n = view.nodes[str(subject)]
+        for item in items:
+            stamp = _asof(item.as_of) if item.as_of is not None else default_stamp
+            if isinstance(item, Text):
+                if not any(p.value == item.value for p in n.getprop(prop.label)):  # already authored: leave it
+                    mark(n.add_property(prop.label, item.value, interp=item.interp), stamp)
+                continue
+            tid = I(str(item.target))
+            target = view.nodes.get(tid)
+            if target is None or not target.declared:  # ours to make, so ours to take away again in `strip`
+                target = target or view.node(tid)
+                target.types |= {I(view.resolve(t)) for t in (item.node.types if item.node else ())}
+                target.add_edge(ONYA_METHOD_REL, sc)
+            if not any(e.target.id == tid for e in n.getedge(prop.label)):
+                mark(n.add_edge(prop.label, target), stamp)
+            for label, values in (item.node.props if item.node else {}).items():
+                label = view.resolve(label)
+                for v in [values] if isinstance(values, str) else values:
+                    if not any(p.value == v for p in target.getprop(label)):
+                        mark(target.add_property(label, v), stamp)
+
+
+def strip(g, *, shapes=None) -> graph:
+    '''
+    A copy of `g` with everything `augment` added taken out, so that `digest(strip(view)) == digest(g)`.
+    It removes only what came in through a circum query: assertions carrying `@method` to a sidecar, and the
+    nodes the view created (or, if something else still points at one, what it was given). Sidecars are
+    known from the view itself, or the `@Sidecar` nodes in `g` or `shapes`.
+    '''
+    out = g.copy()
+    sids = _sidecar_ids(g, shapes)
+    created = set()
+    for n in out.nodes.values():
+        for e in list(n.edges):
+            if e.label == ONYA_METHOD_REL and str(e.target.id) in sids:
+                created.add(n.id)
+                n.remove_edge(e)
+    for n in out.nodes.values():
+        for p in [p for p in n.properties if _method_of(p, sids)]:
+            n.remove_property(p)
+        for e in [e for e in n.edges if _method_of(e, sids)]:
+            n.remove_edge(e)
+    for nid in created:
+        n = out.nodes[nid]
+        if n.properties or n.edges:  # something else was written on it since: it stays as it is
+            continue
+        n.types.clear()
+        if next(out.inbound(n), None) is None:
+            del out[nid]
+        else:
+            n._stub = True  # still named by an edge, and says nothing else
+    out.touch()
+    return out
+
+
+def derived(g) -> list:
+    '''`'node label'` for each assertion in `g` that came from a sidecar (and each node a view created), or `[]`.'''
+    sids = _sidecar_ids(g)
+    if not sids:
+        return []
+    found = []
+    for n in g.nodes.values():
+        found += [f'{n.id} {e.label}' for e in n.edges if e.label == ONYA_METHOD_REL and str(e.target.id) in sids]
+        found += [f'{n.id} {a.label}' for a in (*n.properties, *n.edges) if _method_of(a, sids)]
+    return found
+
+
+def check_persistable(g) -> None:
+    '''Raise `CircumDerivedError` if `g` holds sidecar-derived assertions: a view must never be written back.'''
+    if found := derived(g):
+        raise CircumDerivedError(f'this graph is a circum view and would swallow its sidecar: {"; ".join(found[:3])}'
+                                 f'{f" (and {len(found) - 3} more)" if len(found) > 3 else ""}. '
+                                 'Call strip() on it first.')
+
+
+@dataclass
+class EmitReport:
+    '''What `emit` did: `moved` is `(sidecar id, subject id, label)` per assertion, `review` what it left in place.'''
+    moved: list = field(default_factory=list)
+    review: list = field(default_factory=list)
+
+    def __str__(self) -> str:
+        return f'{len(self.moved)} moved, {len(self.review)} for review'
+
+
+def _emittable(a) -> bool:
+    '''No `@id`, and nothing nested but the parser's own `@source`: removing it takes nothing else along.'''
+    return a.id is None and not any(c.label != ONYA_SOURCE_REL for c in (*a.properties, *a.edges))
+
+
+async def emit(g, touched=None, *, registry: Registry, viewer=None, shapes=None, conn=None) -> EmitReport:
+    '''
+    The write-side twin of `augment`: for each touched node (ids; default every node), move the assertions
+    whose label has a `@circumQuery` out of `g` and into their sidecar, through the property's registered
+    writer, which receives `{subject IRI: [Edge | Text]}` as a batch and must be idempotent. **Sidecar first,
+    graph second**: assertions leave `g` only after every writer has succeeded, so a failure changes nothing
+    in `g`, and a retry writes the same rows again.
+
+    `g` is edited in place; pass `g.copy()` for a dry run. Left in place, and named in `report.review`: an
+    assertion with an `@id` or nested assertions, and (silently) anything that already came from a sidecar.
+    Raises `CircumAccessDenied` if the policy refuses the viewer, and `CircumError` for a circum label with
+    no writer, both before anything is written.
+    '''
+    src = g if shapes is None else shapes
+    decl = declarations(src)
+    if decl.problems:
+        raise CircumError([str(f) for f in decl.problems])
+    wanted = None if touched is None else {str(g.resolve(i)) for i in touched}
+    sids = {str(p.sidecar.id) for p in decl.properties.values()}
+    report, plan = EmitReport(), []  # plan: (property, {subject: [items]}, [(node, assertion)])
+    for prop in sorted(decl.properties.values(), key=lambda p: str(p.label)):
+        batch, taken = {}, []
+        for n in g.nodes.values():
+            if (wanted is not None and str(n.id) not in wanted) or {str(t) for t in n.types} & _DECLARATIONS:
+                continue
+            for a in (*n.getprop(prop.label), *n.getedge(prop.label)):
+                if _method_of(a, sids):
+                    continue  # it came from the sidecar
+                if not _emittable(a):
+                    report.review.append(f'{n.id}: {prop.label} has an id or nested assertions; unchanged')
+                    continue
+                if hasattr(a, 'target'):
+                    t = a.target
+                    props = {str(p.label): [] for p in getattr(t, 'properties', ())}
+                    for p in getattr(t, 'properties', ()):
+                        props[str(p.label)].append(p.value)
+                    node_ = Node(tuple(map(str, t.types)), props) if hasattr(t, 'types') else None
+                    batch.setdefault(str(n.id), []).append(Edge(str(t.id), node_))
+                else:
+                    batch.setdefault(str(n.id), []).append(Text(a.value, interp=a.interp))
+                taken.append((n, a))
+        if batch:
+            plan.append((prop, batch, taken))
+    if denied := _denied(registry, viewer, [(p, b) for p, b, _ in plan]):
+        raise CircumAccessDenied(denied)
+    if missing := [f'no writer is registered for {prop.label} (sidecar {prop.sidecar.id})'
+                   for prop, _, _ in plan if str(prop.label) not in registry.writers]:
+        raise CircumError(missing)
+    for prop, batch, _ in plan:
+        ctx = Context(prop.label, prop.sidecar, prop.detail, prop.shape, viewer, conn)
+        try:
+            await _call(registry.writers[str(prop.label)], batch, ctx)
+        except Exception as e:
+            raise CircumError(f'{prop.label} (sidecar {prop.sidecar.id}): writer failed: {e!r}') from e
+    for prop, _, taken in plan:  # every writer succeeded: now the graph lets go
+        for n, a in taken:
+            (n.remove_edge if hasattr(a, 'target') else n.remove_property)(a)
+            report.moved.append((str(prop.sidecar.id), str(n.id), str(prop.label)))
+    return report

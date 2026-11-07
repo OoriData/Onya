@@ -6,6 +6,17 @@ For interim changes not yet earmarked for a particular release, can use this hea
 ## [Unreleased]
 -->
 
+## [0.6.0] 2026-11-07: Bidirectional circumstances (augment and emit)
+
+### Added
+
+- **Circumstances in both directions: sidecars, `augment`, `strip`, `emit` and `onya catalog`** (#72). Some properties are *declared* in the graph but *held* in a table elsewhere: a property gets `@circumQuery -> <sidecar>` (with an opaque `@queryDetail` nested under it; never query text), and the sidecar is a `@Sidecar` node (`@label`, `@system -> @System`, `@table`, `@sensitivity`, `@retention`) that doubles as its catalog entry. `Registry` holds the application's resolvers, writers and `policy(viewer, sensitivity)`. `await augment(g, registry=, viewer=, ids=, shapes=, on_error=, conn=)` returns a **new graph** in which each resolver's `Edge`/`Text` results (an `Edge` may carry a `Node`, the circum node, so the target exists) appear, every addition marked `@method -> <sidecar>` and `@asOf`; one batch call per property; the viewer's access to every sidecar is checked before any resolver runs (`CircumAccessDenied`); a resolver that raises fails the call unless `on_error='finding'` (`view_findings(view)`). `strip(view)` removes exactly what was added, so `digest(strip(view)) == digest(g)`. A view is self-describing: each sidecar it consulted carries an `@asOf` with a nested `@method` to itself, so `is_view(g)`, `validate` and `store.put` recognise a view even after it is written to text and read back (`strip` removes the marker too). `validate` checks a circum property's `@cardinality` minimum only on the nodes the view was asked about (`ids=`), each of which carries the same mark. `await emit(g, touched, registry=)` is the write-side twin: it hands a node's circum assertions to the property's writer and removes them only after every writer succeeds, leaving assertions with an `@id` or nested assertions in `report.review`. `onya catalog FILESPEC` lists each sidecar with its table and the properties it holds. `validate` checks the declarations, skips the `@cardinality` minimum of a circum property on an ordinary graph and checks it on a view. New reserved terms: `@asOf` (core, SPEC), and `@Sidecar`, `@System`, `@system`, `@circumQuery`, `@queryDetail`, `@sensitivity`, `@retention` (layer `circum`). See `doc/design-circum.md`.
+
+### Changed
+
+- Every `onya.store` backend's `put` raises `CircumDerivedError` for a graph holding sidecar-derived assertions (a view from `augment`): a view is never written back. `strip` it first.
+- `doc/design-sidecars.md` rewritten against the declared vocabulary: the catalog node is a `@Sidecar`, and "where Onya could help more" became what `onya.circum` provides.
+
 ## [0.5.6] 2026-11-06: Onya Circumstances
 
 ### Added

@@ -15,6 +15,7 @@ Implementation notes:
 
 from __future__ import annotations
 
+import re
 import sys
 # from pathlib import Path
 from typing import TextIO
@@ -279,6 +280,42 @@ def version() -> str:
     return __version__
 
 
+def catalog(filespec: str, *, encoding: str = 'utf-8'):
+    '''
+    List the sidecars a graph declares (`@Sidecar`), each with its table and the properties that are held in it.
+
+    Args:
+        filespec: Path, directory (recursive; `.onya` and `.onya.md`), glob, or '-' for stdin.
+        encoding: Text encoding used to read input files (ignored for stdin).
+
+    Exit status: 2 if a declaration is unsound (a `@circumQuery` that names no `@Sidecar`), or on a parse error.
+
+    Example:
+        onya catalog kg/
+    '''
+    from onya.circum import CircumError, catalog as sidecars
+
+    try:
+        found = sidecars(_load(filespec, encoding))
+    except CircumError as e:
+        sys.stderr.write('\n'.join(e.problems) + '\n')
+        raise SystemExit(2)
+    for sc in found:
+        facts = [f'system: {_tail(sc.system)}' if sc.system else '', f'table: {sc.table}' if sc.table else '',
+                 f'sensitivity: {sc.sensitivity}' if sc.sensitivity else '']
+        print('  '.join(x for x in [_tail(sc.id), sc.label or '', *facts] if x))
+        for p in sc.holds:
+            shape = p.shape
+            where = ' | '.join(sorted(_tail(c) for c in shape.applies_to)) if shape else ''
+            to = ' | '.join(sorted(_tail(c) for c in shape.range)) if shape else ''
+            span = f' ({where} -> {to})' if where and to else f' ({where or to})' if where or to else ''
+            print(f'  holds: {_tail(p.label)}{span}')
+
+
+def _tail(iri) -> str:
+    return re.split(r'[/#]', str(iri).rstrip('/#'))[-1]
+
+
 class _CLI:
     '''
     Fire command surface.
@@ -289,6 +326,7 @@ class _CLI:
     convert = staticmethod(convert)
     validate = staticmethod(validate)
     project = staticmethod(project)
+    catalog = staticmethod(catalog)
     version = staticmethod(version)
 
 

@@ -282,3 +282,12 @@ class GraphQueryStore(Protocol):
     async def graph_table(self, sql: str, *args) -> list[tuple]:
         '''Execute a query containing ``GRAPH_TABLE(...)`` against this store's PGQ graphs.'''
         ...
+
+
+def refuse_circum_derived(g) -> None:
+    '''
+    Raise ``onya.circum.CircumDerivedError`` if ``g`` holds assertions that came from a sidecar (a view
+    built by ``augment``): persisting one would make the graph swallow the sidecar. ``strip`` it first.
+    '''
+    from onya.circum import check_persistable  # lazy: onya.circum builds on the store layer's neighbours
+    check_persistable(g)
