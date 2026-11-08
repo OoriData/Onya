@@ -127,8 +127,9 @@ An interpretation your software doesn't recognize is data, not an error: it
 parses, merges, and round-trips untouched. The built-in starter set (`number`,
 `integer`, `datetime`, `boolean`, `iri`, `text`) is deliberately modest, and the plugin
 registry lets any community define its own. If you're arriving from data
-engineering, note that this is the *value-level* slice of "data contract" —
-shape, ownership, and SLAs would be further layers, deliberately not this one.
+engineering, note that this is the *value-level* slice of "data contract":
+what a graph should look like is the separate [shapes](#shapes-what-should-a-graph-look-like)
+layer, and ownership and SLAs would be further layers, deliberately not these.
 The design rationale is in
 [doc/design-interpretations-strings-vs-typing.md](doc/design-interpretations-strings-vs-typing.md).
 
@@ -231,6 +232,39 @@ labels=[...])`, `store.nodes_by_type(name, type_iri)`); PostgreSQL serves it fro
 trigram index. `await view.project_from_store(store, name, node_id, specs)`
 fetches just the neighborhood a view needs, so "search → project" is a handful of small queries.
 
+## Shapes: what should a graph look like?
+
+A **shape** says what a class of node is expected to carry. Shapes are ordinary nodes in the same document: `# Person [@Class]` declares a class, and `# name [@Property]` declares a property label, with `@appliesTo` (which class), `@as` (how to read its values), `@cardinality` (`1`, `0..1`, `1..*`, `n..m`), `@range` (which class an edge points to) and `@oneOf` (a closed set). The label's declaration node has the label's own IRI as its id.
+
+```
+# Person [@Class]
+
+# name [@Property]
+* @appliesTo -> Person
+* @as: text
+* @cardinality: 1
+
+# status [@Property]
+* @appliesTo -> Person
+* @oneOf: active
+* @oneOf: closed
+```
+
+```python
+from onya.shape import validate
+
+for f in validate(g).findings:       # shapes in g itself, or validate(g, shapes=other_graph)
+    print(f.severity, f.kind, f.node, f.label, f.detail)    # e.g. error cardinality ... has 0, declared 1
+```
+
+Shapes only report: they never infer a type or change a value, and nothing runs until you ask (`onya validate kg/ --shapes=shapes/`). Other layers read the same declarations, which is why the next section needs no column list. See [doc/design-shapes.md](doc/design-shapes.md).
+
+## Ordered values and the content digest
+
+Assertions are a set, so a label's values have no order. When sequence is the point (address lines, authors, steps), declare the label with `* @ordered: author` in the docheader, and the parser numbers the values from document order: `n.ordered_values('author')`. See [doc/design-ordering.md](doc/design-ordering.md).
+
+`onya.digest.digest(g)` hashes what a graph *says*, so it is equal for one file or three, in any order, with any prefixes, and after a store round trip, and different if any value, target, interpretation or id changes. `node_digests(g)` finds which nodes changed between two versions. See [doc/design-digest.md](doc/design-digest.md).
+
 ## Persistence
 
 `onya.store` keeps graphs across sessions and processes. It is a peripheral, not
@@ -270,6 +304,37 @@ asyncio.run(main())
 A blocking facade (`from onya.store.sync import connect`) mirrors the API with
 `with`/plain calls for scripts and REPL use. Design and schema details are in
 [doc/design-persistence-architecture.md](doc/design-persistence-architecture.md).
+
+## Circumstances: facts held in tables
+
+What a thing *is* belongs in the graph; what is true of it right now and in volume (a GPA, a fee, readings) belongs in a traditional DB table. `onya.circum` keeps the two connected. A property's [shape](#shapes-what-should-a-graph-look-like) can also declare where its values live, and the graph can be projected into those tables, shown with the table values filled in, or used to write new values back:
+
+```
+# gpa [@Property]
+* @appliesTo -> Student
+* @as: number
+* @circumQuery -> students-db
+
+# students-db [@Sidecar]
+* @table: student
+```
+
+`gpa` is an ordinary shape plus one line, `@circumQuery`, saying its values are held in the `students-db` sidecar (here a table) rather than in the graph.
+
+```python
+from onya.circum import Registry, augment, emit, from_shapes, materialize, strip, table_resolvers, table_writers
+
+p = from_shapes(g, 'https://example.org/Student')   # the tables, derived from the graph's shapes
+await materialize(conn, p, g)                        # project the graph into them
+
+reg = Registry()
+reg.resolvers.update(table_resolvers(p))             # read and write the tables just built
+reg.writers.update(table_writers(p))
+view = await augment(g, registry=reg, conn=conn)     # a new graph, with table values marked @method / @asOf
+await emit(g, ['https://example.org/dede'], registry=reg, conn=conn)   # a node's table values: graph -> table
+```
+
+A view is never stored, `strip(view)` gets the original graph back exactly, and Redis, MongoDB or any other store plugs in with a resolver you write. Walkthrough: [doc/python-tutorial.md](doc/python-tutorial.md#circumstances-tables-beside-the-graph); design: [doc/design-circum.md](doc/design-circum.md).
 
 ## Visualize / export
 

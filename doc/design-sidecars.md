@@ -4,7 +4,7 @@ A knowledge graph tends to collect anything anyone writes down: invoice amounts,
 
 This pattern keeps the graph small and conceptual, and moves everything else into **sidecars**: plain tables or key/value stores that point back into the graph. The word is borrowed from sidecar files (the `.xmp` beside a photo, the `.onya` beside a `.csv`): data that travels alongside the main artifact without being part of it.
 
-This is a usage pattern, not a change to the model: nothing here needs new Onya features. [The last section](#what-onya-provides) lists what `onya.circum` adds to make it easier to deploy (declared sidecars, a read-time view, and the write-side move). The examples use Onya Literate for the graph and Python dicts as the sidecar store. Swap in SQLite, PostgreSQL, Redis or anything else that persists; nothing depends on the backend. (The sidecar can even share a database with an [`onya.store`](design-persistence-architecture.md) backend, but it needn't, and the graph's tables shouldn't be where the rows go.)
+This is a usage pattern first, and the model needs nothing new for it. [The last section](#what-onya-provides) lists what `onya.circum` adds to make it easier to deploy (declared sidecars, a read-time view, and the write-side move). The examples use Onya Literate for the graph and Python dicts as the sidecar store. Swap in SQLite, PostgreSQL, Redis or anything else that persists; nothing depends on the backend. (The sidecar can even share a database with an [`onya.store`](design-persistence-architecture.md) backend, but it needn't, and the graph's tables shouldn't be where the rows go.)
 
 ## The test
 
@@ -239,6 +239,7 @@ The pattern started as convention. `onya.circum` now covers the parts that were 
 1. **A catalog vocabulary.** `@Sidecar` (with `@label`, `@system`, `@table`, `@sensitivity`, `@retention`), `@System`, and `@circumQuery` / `@queryDetail` on a property. `onya catalog` lists sidecars and what they hold.
 2. **A read-time view.** `augment` shows sidecar-held values in a new graph, marked with `@method` and `@asOf`; `strip` takes them out; a view is never persisted. Access is decided by the sidecar's `@sensitivity` and the application's policy, in the one place every read passes through.
 3. **The write-side move.** `emit` hands a node's circum assertions to a writer and then removes them, sidecar first.
+   When the sidecar is a table `onya project` built, `table_resolvers` and `table_writers` derive both ends from the projection; any other store gets functions you write.
 4. **An in-memory graph copy.** `graph.copy()` and `graph.subgraph(ids)` make dry runs and staged rewrites cheap.
 
 Still convention: sidecar tables beside the graph in `onya.store`, so that "sidecar first, then graph" could be one transaction for small deployments.

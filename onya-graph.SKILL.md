@@ -264,17 +264,43 @@ Keep the graph to concepts: entities, relationships, rules, current state and sh
 
 - **Leave the shape in the graph.** A closed-set value (`status: active`, `feeModel: retainer`) with any prose in a nested `note`; a figure in prose replaced by a marker such as `[amount on file]`; a short pointer (`source: decision log, 2026-05-02`) to where the detail went.
 - **Sidecar rows key on the node's full IRI** (or an assertion `@id` when the row is about one claim). The graph never points back per row.
-- **Catalog each sidecar with one node**, so a reader of the graph alone knows the data exists:
+- **Catalog each sidecar with one `@Sidecar` node, and declare each held property with `@circumQuery`**, so a reader of the graph alone knows the data exists and where. The property is an ordinary `@Property` shape plus one `@circumQuery` (its values live in the sidecar, not the graph); the sidecar never lists its properties (`onya catalog` finds them from the edges):
 
 ```
-# dataset/billing-terms [Dataset]
-* name: Billing terms
-* <ex:table>: billing_terms
-* <ex:holds>: fee
-* <ex:sensitivity>: internal
+# fee [@Property]
+* @appliesTo -> Client
+* @as: number
+* @circumQuery -> billing-terms
+
+# billing-terms [@Sidecar]
+* @label: Billing terms
+* @system -> billing-db
+* @table: billing_terms
+* @sensitivity: internal
+* @retention: life of the engagement plus seven years
+
+# billing-db [@System]
+* @label: Billing database
 ```
+
+`@queryDetail` (nested under `@circumQuery`) is an opaque token handed to the application's resolver, never SQL: a graph travels, so never write query text, credentials or connection strings in one. Don't author `@method` or `@asOf` on these values either; `onya.circum` stamps them on what it reads in.
 
 - **When extracting a KG from a document**, route ledger-like content (amounts, dated events, logs) to sidecar rows instead of node properties, and put anything you can't classify on a review list rather than guessing.
+
+Once a property is declared, `onya.circum` (Python, not authoring) does the rest. This is for the downstream project, so mention it rather than writing it into a `.onya` file:
+
+```python
+from onya.circum import Registry, augment, emit, from_shapes, materialize, strip, table_resolvers, table_writers
+
+p = from_shapes(g, 'https://example.org/Client')    # tables derived from the shapes (or `onya project FILES Client --to=sqlite:x.db`)
+await materialize(conn, p, g)                        # project the graph into them
+reg = Registry()                                     # tables onya built: derive both ends
+reg.resolvers.update(table_resolvers(p)); reg.writers.update(table_writers(p))
+view = await augment(g, registry=reg, conn=conn)     # new graph with table values, marked @method/@asOf; never persisted
+await emit(g, [iri], registry=reg, conn=conn)        # move a node's circum values graph -> table (idempotent, never deletes)
+```
+
+`strip(view)` returns the original graph (digest-equal). `validate` checks a circum property's `@cardinality` minimum only on a view, so a pure graph is never "incomplete" for a value it doesn't hold. Redis, Mongo, someone else's tables, and a property shared by two projected tables (the derived resolver raises `CircumError ... write its resolver or writer by hand`) each take a resolver/writer you write with `@reg.resolver(label)` / `@reg.writer(label)`. Tables made before 0.6.1 lack the `updated` column and now raise `CircumError`: `ALTER TABLE ... ADD COLUMN updated` or rebuild. Walkthrough: [doc/python-tutorial.md](https://github.com/OoriData/Onya/blob/main/doc/python-tutorial.md#circumstances-tables-beside-the-graph).
 
 Design, a worked transform, and the write-path ordering (sidecar first, idempotent) are in [doc/design-sidecars.md](https://github.com/OoriData/Onya/blob/main/doc/design-sidecars.md).
 

@@ -573,6 +573,124 @@ facade with the same methods (`with connect(url) as store: store.put(...)`). The
 architecture, canonical schema, skeleton hash, and PGQ layer are documented in
 [design-persistence-architecture.md](design-persistence-architecture.md).
 
+# Circumstances: tables beside the graph
+
+A graph is the place for what a thing *is*. What is true of it right now, and in volume (a GPA, this term's fees, readings), belongs in tables. `onya.circum` connects the two, in three steps: **project** the graph into tables, **declare** which properties live there, then **augment** (read) and **emit** (write) through that declaration. The design is in [doc/design-circum.md](https://github.com/OoriData/Onya/blob/main/doc/design-circum.md).
+
+### 1. Declare where a property lives
+
+A property that is held in a table gets one `@circumQuery` edge, to a `@Sidecar` node that catalogs the table:
+
+```
+# gpa [@Property]
+* @appliesTo -> Student
+* @as: number
+* @circumQuery -> students-db
+
+# counselledBy [@Property]
+* @appliesTo -> Student
+* @range -> Person
+* @cardinality: 1
+* @circumQuery -> students-db
+
+# students-db [@Sidecar]
+* @label: Student records
+* @table: student
+* @sensitivity: internal
+```
+
+Everything else about the property (its type, cardinality, range) is the ordinary [shape](#shapes-what-should-this-graph-look-like). `onya catalog kg/` lists every sidecar and the properties that point at it.
+
+### 2. Project the graph into tables
+
+`from_shapes` reads the shapes and derives the tables, so you don't list columns by hand:
+
+```python
+import sqlite3
+from onya.circum import from_shapes, ddl, materialize
+
+conn = sqlite3.connect('students.db')
+p = from_shapes(g, 'http://e.o/Student')       # also projects Person, because counselledBy points at it
+print(ddl(p))                                  # the CREATE TABLEs (the same as `onya project kg/ Student`)
+report = await materialize(conn, p, g)         # report.inserted, .updated, .unchanged, .deleted
+```
+
+`materialize` is idempotent: a second run over an unchanged graph reports every row `unchanged`. Every table gets an `updated` column, which a row only changes when its values do. Tables are created if missing and never altered, and a table that no longer matches the projection raises `CircumError` rather than being guessed at.
+
+### 3. Read: `augment` gives a view
+
+Later you load a graph that doesn't hold the table's values (they have been moved out, or never were in it). `augment` returns a **new graph** with them filled in:
+
+```python
+from onya.circum import Registry, augment, strip, is_view, table_resolvers, table_writers
+from onya.shape import validate
+
+reg = Registry()
+reg.resolvers.update(table_resolvers(p))       # one resolver per property, derived from the projection
+reg.writers.update(table_writers(p))
+
+view = await augment(g, registry=reg, conn=conn)     # g is untouched
+is_view(view), is_view(g)                            # (True, False)
+```
+
+Everything the view adds carries `@method -> students-db` and an `@asOf` (the row's `updated`), so you can always tell it from what the graph says itself. `strip(view)` removes exactly that, and `digest(strip(view)) == digest(g)`. A view is never persisted: `store.put` refuses one.
+
+A view can be incomplete in a way the pure graph can't. Dede has no row in the table, and `counselledBy` is `@cardinality: 1`:
+
+```python
+validate(g).findings                           # []: the graph never claimed a counsellor for Dede
+[str(f) for f in validate(view).findings]
+# ['error cardinality: http://e.o/dede http://e.o/counselledBy: has 0, declared 1']
+```
+
+`augment(g, registry=reg, conn=conn, ids=[chuks])` looks up only those nodes, and `validate` then reports gaps only for them. To keep a sidecar private, give `Registry(policy=fn)` a function `fn(viewer, sensitivity)`, and pass `viewer=` to `augment`.
+
+### 4. Write: `emit` moves values into the table
+
+Give a node a circum value in the graph, and `emit` writes it to the table, then removes it from the graph (table first, so a fact is never in neither place):
+
+```python
+from onya.circum import emit
+
+g['http://e.o/dede'].add_property('http://e.o/gpa', '3.9')
+g['http://e.o/dede'].add_edge('http://e.o/counselledBy', g['http://e.o/adat'])
+report = await emit(g, ['http://e.o/dede'], registry=reg, conn=conn)
+len(report.moved), report.review               # (2, []): review lists what it left in the graph, and why
+```
+
+`emit` is idempotent and never deletes. A new row is created only if the table can take it: if other columns are `NOT NULL`, the call raises a `CircumError` naming them, because a node that breaks its own `@cardinality: 1` has nothing valid to insert.
+
+### When the derived functions aren't enough
+
+`table_resolvers` and `table_writers` only know tables that `from_shapes` built. A sidecar in Redis, MongoDB or someone else's database gets a function you write, registered by the property's IRI. It receives every requested node at once and returns `{subject IRI: [Edge | Text]}`:
+
+```python
+from onya.circum import Edge, Text
+
+@reg.resolver('http://e.o/gpa')
+async def gpa(subjects, ctx):                  # ctx.conn is whatever you passed to augment
+    found = await ctx.conn.mget([f'gpa:{s}' for s in subjects])      # e.g. redis.asyncio
+    return {s: [Text(v)] for s, v in zip(subjects, found) if v}
+```
+
+The same goes for a property shared by two projected tables (say `email` on both `Student` and `Person`): Onya won't guess which table is meant, and the derived resolver raises `CircumError: http://e.o/email is held in several tables ['person', 'student']: write its resolver or writer by hand`. The other properties keep their derived functions; register yours for that label alone:
+
+```python
+@reg.resolver('http://e.o/email')
+async def email(subjects, ctx):
+    found = {}
+    for table in ('student', 'person'):        # table names are literals here, never taken from the graph
+        marks = ', '.join('?' * len(subjects))
+        for id_, v in ctx.conn.execute(f'SELECT id, email FROM {table} WHERE id IN ({marks})', list(subjects)):
+            if v is not None:
+                found[id_] = [Text(v)]
+    return found
+```
+
+A writer is the same shape, `async def (rows, ctx)` with `rows` as `{subject IRI: [Edge | Text]}`, registered with `@reg.writer(label)`. Keep it idempotent, and stamp the row's `updated` so `@asOf` stays honest.
+
+One rule for both: SQL comes from your code, never from the graph. `@table`, `@column` and `@queryDetail` text in a graph is data and is never spliced into a query.
+
 # Visualization / export
 
 `onya.viz` projects a graph into other tools' formats for visualization and analysis

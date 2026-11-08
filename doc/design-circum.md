@@ -141,7 +141,40 @@ A resolver finds its property by label, in a root column, a child table or (Post
 
 A writer is the inverse, and idempotent: it sets a root column (rewriting a value only if it changed), or adds the child rows that are missing, stamping what it changes. It never deletes: a value removed from the graph leaves the stored value in place. A node with no row gets one only if every other column may be NULL; otherwise a `CircumError` names the columns (a node that breaks its own `@cardinality` 1 has nothing valid to insert). An edge to a node with no row in the referenced table is refused. Properties whose order matters (an ordered child table or array) have no writer, since `emit` leaves ordered values in the graph for review.
 
-The SQL comes only from the projection's own table and column names, quoted; nothing in the graph (`@table`, `@column`, `@queryDetail` text) is ever put in a query. The sidecar's `@table` is only compared: a call raises `CircumError` if it isn't the table holding the property. A label held in several tables (a property shared by classes that each have a table) gets a stand-in that raises, so that one is written by hand.
+The SQL comes only from the projection's own table and column names, quoted; nothing in the graph (`@table`, `@column`, `@queryDetail` text) is ever put in a query. The sidecar's `@table` is only compared: a call raises `CircumError` if it isn't the table holding the property.
+
+A label held in several tables is the one case Onya won't guess. It is easy to hit: `email` applies to both `Student` and `Person`, and `counselledBy -> Person` pulls `Person` into the projection, so there is a `student` and a `person` table, each with an `email` column. That label gets a stand-in that raises, and the other properties keep their derived functions:
+
+```python
+await augment(bare, registry=reg, conn=conn)
+# CircumError: http://e.o/email is held in several tables ['person', 'student']: write its resolver or writer by hand
+```
+
+Register your own for that label, which replaces the stand-in. Both read a batch and look in each table; the table names are literals in your code:
+
+```python
+TABLES = ('student', 'person')
+
+@reg.resolver(EMAIL)
+async def email(subjects, ctx):
+    found = {}
+    for table in TABLES:
+        marks = ', '.join('?' * len(subjects))
+        for id_, v in ctx.conn.execute(f'SELECT id, email FROM {table} WHERE id IN ({marks})', list(subjects)):
+            if v is not None:
+                found[id_] = [Text(v)]
+    return found
+
+@reg.writer(EMAIL)
+async def write_email(rows, ctx):
+    now = datetime.now(timezone.utc).isoformat()       # `updated` is what `@asOf` reads
+    for subject, items in rows.items():
+        for table in TABLES:                           # the row is in whichever table has it
+            ctx.conn.execute(f'UPDATE {table} SET email = ?, updated = ? WHERE id = ?', (items[0].value, now, subject))
+    ctx.conn.commit()
+```
+
+This writer only updates, so a node with no row is skipped, where the derived writers refuse; add that check if you need it. A property has one `@circumQuery`, so one sidecar can't name both tables, which is why this looks in both.
 
 Sidecars that are some other store, or a table somebody else built, keep hand-written resolvers. The contract is store-neutral. A key-value store is a few lines:
 

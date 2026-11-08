@@ -787,9 +787,10 @@ neither imposes nor verifies them. Our "data contract layers" language should
 still not lead data-engineering readers to expect more than that.
 
 The other direction, reading circumstance tables back into a graph at read
-time, is `onya.circum`'s second half and is not built yet
-([design-sidecars.md](design-sidecars.md)). It reads tables; it does not make
-them a storage backend.
+time, is `onya.circum`'s second half (`augment` and `emit`, with resolvers and
+writers; see [design-circum.md](design-circum.md) and
+[design-sidecars.md](design-sidecars.md)). It reads tables; it does not make
+them a storage backend, and a view it produces is never `put` in a store.
 
 ## Packaging and the extraction seam
 
