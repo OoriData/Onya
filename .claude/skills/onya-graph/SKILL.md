@@ -1,6 +1,6 @@
 ---
 name: onya-graph
-description: Use when creating, editing, extracting, or reviewing Onya knowledge graphs in Onya Literate (.onya.md), e.g. turning a document into a .onya knowledgebase or fixing a parse error. Covers docheaders, nodes, properties, edges, types, CURIEs, nested assertions, @id, @as, graph merge, validation by parsing, export, and onya.store.
+description: Use when creating, editing, extracting, or reviewing Onya knowledge graphs in Onya Literate (.onya.md), e.g. turning a document into a .onya knowledgebase or fixing a parse error. Covers docheaders, nodes, properties, edges, types, CURIEs, nested assertions, @id, @as, graph vs sidecar data, merge, validation by parsing, and onya.store/onya.circum.
 ---
 
 # Authoring Onya Graphs
@@ -14,7 +14,28 @@ The model is deliberately tiny: a **node** has an id (IRI), a set of types, and 
 ## When to use / not use
 
 - **Use** when the deliverable is a `.onya` file: extracting a KG from prose, hand-authoring one, or repairing/reviewing an existing graph.
-- **Not** for the Python graph API itself (`onya.graph`, `LiterateParser`, traversal, merge internals) — that's library work; see the README example and `pylib/`. This skill covers the *authoring* surface and uses the parser only to validate. The *Merging & identity* and *Persistence* sections below are orientation for downstream consumers, not a full API reference.
+- **Not** for general Python rules and conventions. Onya does include a Python reference graph API (`onya.graph`, `LiterateParser`, traversal, merge internals, etc.), and this skill does include some guidance for using that to write Python code to interface with Onya, but that does not necessarily extend to Python code for other purposes. This skill is primarily about authoring and managing Onya, but it's also helpful to know what capabilities the Onya library provides.
+
+## What Onya provides beyond the basics
+
+Before inventing a convention for something below, check for the built-in. Each row names the module; read its docstring (or the design doc, linked in the row) before writing code.
+
+| Need | Use | Where |
+|---|---|---|
+| Schema constraints: what a class carries, how many, of what kind, closed sets | **Shapes**: `@Class` / `@Property` nodes with `@appliesTo`, `@as`, `@cardinality`, `@range`, `@oneOf`, `@closed`. Report-only; run on demand | `onya.shape.validate`, `onya validate`; [design-shapes](https://github.com/OoriData/Onya/blob/main/doc/design-shapes.md) |
+| Values that aren't plain text (numbers, dates, booleans, IRIs) | **Interpretations**: `@as`, or per-label defaults in the docheader. The value stays a string; the contract is checked on demand | `onya.interp`; [design-interpretations-literate](https://github.com/OoriData/Onya/blob/main/doc/design-interpretations-literate.md), [-pylib](https://github.com/OoriData/Onya/blob/main/doc/design-interpretations-pylib.md) |
+| Sequence matters (steps, authors, address lines) | **Ordered values**: `@ordered` in the docheader, `@ordering` stamps | `onya.ordering`, `node.ordered_values()`; [design-ordering](https://github.com/OoriData/Onya/blob/main/doc/design-ordering.md) |
+| Where a claim came from, how sure, and when it was true | **Provenance**: nested `@source`, `@method`, `@confidence`, `@asOf` | `onya.provenance`; [SPEC § Optional assertion provenance](https://github.com/OoriData/Onya/blob/main/SPEC.md#optional-assertion-provenance-source-method-confidence-asof) |
+| A claim you must refer to or dispute | **Assertion ids** (`[=id]` / `@id`), not an invented node | [SPEC § Assertion Identifiers](https://github.com/OoriData/Onya/blob/main/SPEC.md#assertion-identifiers) |
+| Records and volume that don't belong in the graph | **Circumstances**: `@circumQuery` + `@Sidecar`, tables derived from shapes, `augment` / `emit` | `onya.circum`, `onya project`, `onya catalog`; [design-sidecars](https://github.com/OoriData/Onya/blob/main/doc/design-sidecars.md) (the pattern), [design-circum](https://github.com/OoriData/Onya/blob/main/doc/design-circum.md) (the mechanism); see *Graph vs sidecar* |
+| Did the graph change? Are two graphs the same? | **Content digest**, per graph or per node | `onya.digest`; [design-digest](https://github.com/OoriData/Onya/blob/main/doc/design-digest.md) |
+| Find the node a user means; reverse edges; a neighborhood | `g.search`, `g.inbound`, `g.subgraph`, `g.copy` | `onya.graph`, `onya.query` |
+| Show a node to people | **Views**: declarative specs, no per-type renderers | `onya.view` |
+| Persist across sessions; combine named graphs | **Stores** (file, SQLite, PostgreSQL), `union` and `overlay` | `onya.store`; [design-persistence-architecture](https://github.com/OoriData/Onya/blob/main/doc/design-persistence-architecture.md) |
+| Diagrams and analytics | Mermaid, Graphviz, networkx | `onya.viz`, `onya convert` |
+| Catch typos and find the offending line | Dangling-edge check, `unknown_reserved_terms`, `track_locations` | `onya.terms`, `onya.locations`; see *Validate by parsing* |
+
+Rules of thumb: constraints go in shapes, not prose or a bespoke checker. Typed values use `@as`, not a typed model. Dated or sourced claims use provenance sub-assertions, not compound labels. Volume goes to a sidecar. When a feature is core to the task, read its design doc first.
 
 ## Format essentials
 
@@ -92,7 +113,7 @@ Edges nest the same way — put `startDate`/`role` under an edge to describe the
 
 ### Assertion identifiers (`@id`) — making an assertion addressable
 
-By default an assertion is **anonymous** — its identity is just its shape (origin, label, value/target). Give one an explicit identifier with a nested `* @id:` directive and it becomes a first-class, referenceable thing: another edge can point *at the assertion itself*. This is how you say something *about a specific claim* (disputes, provenance, confidence) without inventing a scaffold node.
+By default an assertion is **anonymous** — its identity is just its (origin, label, value/target) tuple. Give one an explicit identifier with a nested `* @id:` directive and it becomes a first-class, referenceable thing: another edge can point *at the assertion itself*. This is how you say something *about a specific claim* (disputes, provenance, confidence) without inventing a scaffold node.
 
 ```
 # Chuks [Person]
@@ -137,7 +158,7 @@ Or declare defaults once in the docheader with an `@interpretations:` stanza (no
     * birthDate: datetime
 ```
 
-Reserved interpretation names are `number`, `datetime`, `boolean`, `iri`, `text` (these resolve into the Onya interpretation vocabulary); `none` cancels a docheader default on one property; anything else is treated as an IRI (absolute IRIs and `@iri` CURIEs work). An **unknown interpretation is not an error** — the IRI simply travels with the data. Precedence: an inline `@as` overrides a docheader default overrides nothing. `@as` on an edge is ignored with a warning (an edge target is a node, not a string). Use `text` to positively assert prose (so `0042` is not "helpfully" read as a number downstream).
+Reserved interpretation names are `number`, `integer`, `datetime`, `boolean`, `iri`, `text` (these resolve into the Onya interpretation vocabulary); `none` cancels a docheader default on one property; anything else is treated as an IRI (absolute IRIs and `@iri` CURIEs work). An **unknown interpretation is not an error** — the IRI simply travels with the data. Precedence: an inline `@as` overrides a docheader default overrides nothing. `@as` on an edge is ignored with a warning (an edge target is a node, not a string). `integer` is the strict whole-number contract (`3`, `-3`, and `3_000_000`, where a single `_` between digits is an ignorable group separator; `3.0` and `3e3` are not integers); `number` stays the permissive one. Use `text` to positively assert prose (so `0042` is not "helpfully" read as a number downstream).
 
 ### Long text
 
@@ -179,8 +200,9 @@ HTML comments `<!-- … -->` are ignored by the parser (and by Markdown renderer
 3. **One block per distinct entity.** Give each a type. Pull entities (people, orgs, places, works, events) into nodes; pull their attributes into properties; pull relationships into edges to other nodes.
 4. **Normalize references.** If two mentions are the same thing, use one node id for both. Make edge targets actual nodes you define.
 5. **Use nesting for relationship/value metadata**, not parallel scaffolding nodes. Keep labels atomic and values clean: no years, units, kinds or sources baked into a label name, and no parenthetical asides in a value (see *Good knowledge primitives* below).
-6. **Quote ambiguous scalars** — ISBNs, dates, codes, anything with leading zeros or special characters.
-7. **Validate by parsing** (below) before reporting done.
+6. **Keep records out of the graph.** Amounts, readings, dated events and narratives go to a sidecar, not node properties (see *Graph vs sidecar*).
+7. **Quote ambiguous scalars** — ISBNs, dates, codes, anything with leading zeros or special characters.
+8. **Validate by parsing** (below) before reporting done.
 
 Keep the graph faithful to the source: don't invent facts to fill out a type's expected properties. If the document doesn't state a birthDate, leave it out.
 
@@ -198,7 +220,7 @@ Generators (LLMs especially) tend to pack qualifiers into the *label* (`ex:gdp20
 | `homePhone`, `workPhone` | `telephone: …` with nested `ex:use -> ex:Home` / `ex:use -> ex:Work` |
 | `ex:heightCm: "180"` | `height: "180"` with nested `unitCode: CMT` |
 | `ex:currentCeo -> X`, `ex:formerCeo -> Y` | `ex:ceo -> X` with nested `startDate` (and `endDate` for Y) |
-| `ex:firstAuthor`, `ex:secondAuthor` | `author -> X` with nested `position: "1"` |
+| `ex:firstAuthor`, `ex:secondAuthor` | `author -> X` with nested `@ordering: 1` (or declare `* @ordered: author` in the docheader and let document order number them) |
 | `ex:estimatedRevenue` | `ex:revenue` with nested `@method` / `@confidence` (the reserved provenance vocabulary) |
 
 **Parentheticals and asides in values → the same move.** The value is just the value; the aside is a qualifier or an entity:
@@ -257,6 +279,52 @@ Choose ids that say what the bundle is (`nigeria-pop-2024`), so a second extract
 - **Use established terms as they are.** `birthDate`, `foundingDate` and `priceCurrency` are atomic *in their vocabulary*; don't split them into `birth` + a date qualifier. The test: would the qualifier plausibly vary across values of the same relation (different years, units, kinds, sources)? If so, it's a qualifier, not part of the label.
 - **Use a node when the qualified thing is itself an entity** that others refer to, or whose qualifiers need their own qualifiers: a census release, a dataset, a statistical observation (`# usa-gdp-2025 [Observation]`). Its properties still follow the same rule: atomic labels, clean values.
 
+## Graph vs sidecar: what doesn't belong in the graph
+
+Keep the graph to concepts: entities, relationships, rules, current state and short provenance pointers. Put records in a **sidecar** (a table or key/value store beside the graph) when they accumulate per event, are numeric detail you compute over, need stricter access, are history or audit trail, or cache a third-party system. Rule of thumb: whiteboard → graph; spreadsheet → sidecar.
+
+- **Leave the shape in the graph.** A closed-set value (`status: active`, `feeModel: retainer`) with any prose in a nested `note`; a figure in prose replaced by a marker such as `[amount on file]`; a short pointer (`source: decision log, 2026-05-02`) to where the detail went.
+- **Sidecar rows key on the node's full IRI** (or an assertion `@id` when the row is about one claim). The graph never points back per row.
+- **Catalog each sidecar with one `@Sidecar` node, and declare each held property with `@circumQuery`**, so a reader of the graph alone knows the data exists and where. The property is an ordinary `@Property` shape plus one `@circumQuery` (its values live in the sidecar, not the graph); the sidecar never lists its properties (`onya catalog` finds them from the edges):
+
+```
+# fee [@Property]
+* @appliesTo -> Client
+* @as: number
+* @circumQuery -> billing-terms
+
+# billing-terms [@Sidecar]
+* @label: Billing terms
+* @system -> billing-db
+* @table: billing_terms
+* @sensitivity: internal
+* @retention: life of the engagement plus seven years
+
+# billing-db [@System]
+* @label: Billing database
+```
+
+`@queryDetail` (nested under `@circumQuery`) is an opaque token handed to the application's resolver, never SQL: a graph travels, so never write query text, credentials or connection strings in one. Don't author `@method` or `@asOf` on these values either; `onya.circum` stamps them on what it reads in.
+
+- **When extracting a KG from a document**, route ledger-like content (amounts, dated events, logs) to sidecar rows instead of node properties, and put anything you can't classify on a review list rather than guessing.
+
+Once a property is declared, `onya.circum` (Python, not authoring) does the rest. This is for the downstream project, so mention it rather than writing it into a `.onya` file:
+
+```python
+from onya.circum import Registry, augment, emit, from_shapes, materialize, strip, table_resolvers, table_writers
+
+p = from_shapes(g, 'https://example.org/Client')    # tables derived from the shapes (or `onya project FILES Client --to=sqlite:x.db`)
+await materialize(conn, p, g)                        # project the graph into them
+reg = Registry()                                     # tables onya built: derive both ends
+reg.resolvers.update(table_resolvers(p)); reg.writers.update(table_writers(p))
+view = await augment(g, registry=reg, conn=conn)     # new graph with table values, marked @method/@asOf; never persisted
+await emit(g, [iri], registry=reg, conn=conn)        # move a node's circum values graph -> table (idempotent, never deletes)
+```
+
+`strip(view)` returns the original graph (digest-equal). `validate` checks a circum property's `@cardinality` minimum only on a view, so a pure graph is never "incomplete" for a value it doesn't hold. Redis, Mongo, someone else's tables, and a property shared by two projected tables (the derived resolver raises `CircumError ... write its resolver or writer by hand`) each take a resolver/writer you write with `@reg.resolver(label)` / `@reg.writer(label)`. Tables made before 0.6.1 lack the `updated` column and now raise `CircumError`: `ALTER TABLE ... ADD COLUMN updated` or rebuild. Walkthrough: [doc/python-tutorial.md](https://github.com/OoriData/Onya/blob/main/doc/python-tutorial.md#circumstances-tables-beside-the-graph).
+
+Design, a worked transform, and the write-path ordering (sidecar first, idempotent) are in [doc/design-sidecars.md](https://github.com/OoriData/Onya/blob/main/doc/design-sidecars.md).
+
 ## Validate by parsing
 
 A `.onya` file is only "done" once it parses cleanly. Round-trip it:
@@ -274,6 +342,8 @@ from onya.serial.literate import read
 
 g = graph()
 result = read(open('file.onya').read(), g)   # accepts a str or a file-like; returns a ParseResult
+# result.dangling / g.dangling(): edge targets nobody declared (typos); read(..., on_dangling='error', allow=['https://orcid.org/']) to enforce
+# read(..., track_locations=True) makes g.locate(obj) / diagnostics name the line; unknown_reserved_terms(g) (onya.terms) flags `@Calss`-style typos
 print(result.doc_iri, len(g), 'nodes')
 ```
 
@@ -292,9 +362,9 @@ onya convert 'dir/*.onya' --dot > all.dot  # merge several files
 cat file.onya | onya convert - --mermaid   # stdin
 ```
 
-Useful display flags: `--rankdir LR`, `--noshow_properties`, `--noshow_types`, `--noshow_edge_labels`, `--noshow_edge_annotations` (negate any boolean with the `no` prefix). See `demo/mermaid_basic/` and `demo/graphviz_basic/`.
+Useful display flags: `--rankdir LR`, `--noshow_properties`, `--noshow_types`, `--noshow_edge_labels`, `--noshow_edge_annotations` (negate any boolean with the `no` prefix). See [demo/mermaid_basic](https://github.com/OoriData/Onya/tree/main/demo/mermaid_basic) and [demo/graphviz_basic](https://github.com/OoriData/Onya/tree/main/demo/graphviz_basic).
 
-For graph **analytics** (not diagrams), `onya.viz.nx` (extras-gated: `pip install "onya[nx]"`) projects a graph into a `networkx.MultiDiGraph` via `to_networkx`, and `write_back` records analytics results (centrality, communities, …) back as typed, merge-safe assertions. See `demo/nx_analytics/`.
+For graph **analytics** (not diagrams), `onya.viz.nx` (extras-gated: `pip install "onya[nx]"`) projects a graph into a `networkx.MultiDiGraph` via `to_networkx`, and `write_back` records analytics results (centrality, communities, …) back as typed, merge-safe assertions. See [demo/nx_analytics](https://github.com/OoriData/Onya/tree/main/demo/nx_analytics).
 
 ## Serialize a graph back to authoring form (`write`)
 
@@ -312,7 +382,7 @@ Onya has a precise notion of when two assertions are "the same", which matters w
 - **An identified assertion never merges with an anonymous one** (Rule 3), even with an identical skeleton — the `@id` marks a deliberately distinct, addressable occurrence.
 - **Interpretations ride along**: equal-or-one-absent `interp` merges (the present one is adopted); two *different* non-absent interps on the same anonymous skeleton stay distinct (two parties making different contracts about the same words — not an error); a differing interp on same-`@id` assertions is an error.
 
-Authoring implications: to make two documents' claims **coalesce**, give the shared entities the **same node ids** and write structurally identical assertions. To keep a claim **separate and referenceable**, give it an `@id`. Don't rely on merge to dedupe things you spelled differently — normalize ids and values yourself.
+Authoring implications: to make two documents' claims **coalesce**, give the shared entities the **same node ids** and write structurally identical assertions. To keep a claim **separate and referenceable**, give it an `@id`. Don't rely on merge to dedupe things you spelled differently — normalize ids and values yourself. `union` consumes its argument; use `g.copy()` (deep) or `g.subgraph(ids, hops=1)` (a neighborhood) when you need to keep the original or want a throwaway working copy.
 
 ## Persistence — storing graphs with `onya.store`
 
@@ -339,7 +409,7 @@ The load-bearing guarantee: **a round trip through a store is identical to an in
 Downstream code shouldn't hand-roll "find the node the user named" or reverse-edge scans, and shouldn't compare IRI tails ("local names") — `schema:name` and `ex:name` collide that way. Instead:
 
 - **Prefer full IRIs in application code.** Define namespace constants once and build labels from them — `SCHEMA = I('https://schema.org/')`, then `SCHEMA('name')`, `SCHEMA('Person')` — and pass those `I` values to accessors, `search`, and store calls. A full IRI means the same thing against every graph; a CURIE or bare name means whatever *this* graph's docheader happened to bind (prefixes are non-canonical), so it breaks or silently changes meaning on a graph from another source, one with a clashing merge, or a store written before prefixes were kept. `I` values also skip resolution entirely (the fast path). Store `search`/`match` take full IRIs only, deliberately.
-- **CURIEs are for authoring and for data tied to one vocabulary convention**: `.onya` files themselves, view specs kept beside the documents they describe, REPL exploration. A parsed graph keeps its docheader prefixes as `g.prefixes`, and label arguments to `getprop`/`getedge`/`any_prop_value`/`any_edge_target`/`select`/`typematch`/`inbound`/`search` accept a full IRI, a CURIE (`'schema:name'`), or a bare `@schema` name (`'name'`). An undeclared prefix raises `UnknownPrefixError` rather than guessing.
+- **CURIEs are for authoring and for data tied to one vocabulary convention**: `.onya` files themselves, view specs kept beside the documents they describe, REPL exploration. A parsed graph keeps its docheader prefixes as `g.prefixes`, and label arguments to `getprop`/`getedge`/`any_prop_value`/`any_edge_target`/`select`/`typematch`/`inbound`/`search` accept a full IRI, a CURIE (`'schema:name'`), or a bare `@schema` name (`'name'`). An undeclared prefix raises `UnknownPrefixError` rather than guessing. To read what an assertion says, `n.values(label)` and `n.targets(label)` return all values/targets (sorted, deterministic, not meaningfully ordered), and `n.one(label)` / `n.one_target(label)` return the single one, `None`, or raise `CardinalityError` if there are several: prefer them to `any_prop_value`, which silently picks one. Edit a value in place with `prop.value = x` (nested assertions and `@id` stay attached).
 - **Ranked search.** `g.search('ada lovelac', labels=[SCHEMA('name')], types=[SCHEMA('Person')], limit=5)` → `list[SearchHit]` (`node_id`, `node`, `label`, `value`, `tier`, `score`). Tiers: `exact` > `prefix` (word-boundary) > `word` > `fuzzy`; tier beats score. Default labels: properties with no `@as` or `@as: text`. It never picks for you — `hits[0]` plus `SearchHit.is_clear_winner(hits)` is the usual pattern. `similarity='rapidfuzz'` (needs `onya[fuzzy]`) is a faster opt-in scorer. Keep a reference to the graph while using its nodes' CURIE accessors — nodes hold their graph only weakly.
 - **Inbound edges.** `g.inbound(node_or_id, label=None)` (index-backed; `node.reverse(label, g)` wraps it).
 - **Showing a node.** Avoid hand-writing per-type renderers; instead declare a view: `view.project(g, node, view.load(toml_data))` with specs like `{type='schema:Person', fields=['name', {label='email', many=true}], follow=[{edge='worksFor', as='employer', show=['name'], edge_props=['startDate']}, {inbound='author', as='works', show=['name'], order_by='-datePublished', limit=10}]}`. Output is ordered plain data (`title`, then `fields` as `(name, value)` pairs); missing data is omitted, never an error. `many=false` shows one value: the least, unless the field ranks its values with `prefer` (patterns over each value's own nested assertions: `prefer={label='ex:use', target='ex:Primary'}`, `{label='ex:primary', value=true}`, or a list tried in order) and/or `order_by='ex:priority'` (a nested value, typed via `@as`). Follows take `prefer` too, matched against the link's own nested assertions, e.g. `prefer={label='ex:current', value=true}, limit=1`. In specs, `label` always means an assertion label; the display string is `title=` (the old view-level `label=` still works but is deprecated until 0.6.0). `view.project_from_store(store, name, node_id, specs)` fetches only the needed neighborhood.

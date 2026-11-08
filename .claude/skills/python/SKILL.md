@@ -14,11 +14,12 @@ Follow this skill for all Python 3.12+ work: style, packaging, project structure
 - `uv` for installs; `uv pip install .` for real package validation (not `-U`; use `--reinstall-package <pkg>` to force a rebuild after source edits). `uv pip` ignores `uv.lock` — we don't rely on locking; reserve `uv sync` (exact lock mirror, prunes extras — wrong for shared venvs) for repos that genuinely need it, and pass `--no-editable` (or `UV_NO_EDITABLE=1`) when you do — the prefix rewrite makes an editable sync hard-fail, same as `uv run`. Never paper over that failure with `[tool.uv] package = false`: it installs no package at all, so the rewrite never runs and the library isn't importable — only valid for genuine non-library app/service repos.
 - Hatchling build system; no `setuptools`, no `setup.py`.
 - No editable installs for libraries.
-- `asyncio` for I/O-bound work; multiprocessing for CPU-bound.
+- `asyncio` for I/O-bound work; multiprocessing for CPU-bound or broader concurrency, with message passing / shared memory between processes. Avoid threads; reach for them only when a library forces it (e.g. `asyncio.to_thread` around a blocking call you don't own).
 - `fire` for CLI args; `structlog` for logging; `httpx` for HTTP; `pytest` for tests.
 - `tenacity` for retries; `rich` for terminal output.
 - No `langchain` unless explicitly requested.
 - Dataclasses over Pydantic; keep abstractions proportionate to the task.
+- Model behavior as data plus functions: a frozen dataclass with a callable field instead of a subclass per variant, dict/registry dispatch instead of overriding, closures/`partial`/decorators instead of inheritance. Classes are for things that own state or a lifecycle (clients, caches, context managers) or name a seam as a `Protocol`; ABCs rarely. Keep pure logic apart from I/O so it tests without mocks.
 
 ## When the project sends prompts to an LLM
 Also follow [python-prompting](../python-prompting/SKILL.md): WordLoom for all prompts, shared loader module, no inline `system='...'` strings.
@@ -89,6 +90,13 @@ Additional context for coding tools & agents
 - Use async (e.g. asyncio) wherever it makes sense. Avoid multithreading, though multiprocessing is OK. Multiprocess for CPU-bound concurrency, and asyncIO for I/O bound, cooperative etc.
 - Be pythonic. Avoid e.g. complex abstract class hierarchies for the sake of them, though classes are also fine in many usage patterns. We love dictionaries, dynamic dispatch, etc.
   - I don't consider Pydantic very Pythonic, so we can tolerate it if need be (e.g. we're using a toolkit that strictly works with Pydantic), but otherwise, simple dataclasses are better.
+- **Model behavior as data plus functions, not class hierarchies.**
+  - Model a *kind of thing* as a frozen dataclass of plain fields, with behavior as a field holding a callable. Don't write a base class with one subclass per variant. Example: `Job(name, cron, tz, watermark_key, fire)`, where `fire` is an async function.
+  - Dispatch through a dict or registry of name → function (or name → `(schema, handler, flags)` tuple), looked up at call time. Adding a variant means adding an entry, not a class.
+  - Share behavior by composing functions (closures, `functools.partial`, decorators), not by inheritance. A closure over its configuration is usually the whole "object".
+  - Keep pure logic (arithmetic, parsing, schedule maths) apart from the I/O edge, so the pure part is tested with plain values and no mocks.
+  - **Exceptions**: a class is fine when something owns *state or a lifecycle*, e.g. a client holding a connection, a cache, a context manager. It is also fine as a `typing.Protocol` that names a seam structurally. Rarely reach for an ABC.
+  - **Smell test**: if the subclasses differ by a few values or one function, it should have been data. If you find yourself overriding a method, pass the function in instead.
 - Type hints are OK in moderation, but avoid absolutely littering the code with them.
   - No excess imports & symbols, e.g. Use type | None rather than Optional[type]
 - use iterator patterns as much as practical. Also functional programming approaches, including partials (currying) and decorators
