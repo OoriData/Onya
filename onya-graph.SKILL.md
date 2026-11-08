@@ -14,7 +14,28 @@ The model is deliberately tiny: a **node** has an id (IRI), a set of types, and 
 ## When to use / not use
 
 - **Use** when the deliverable is a `.onya` file: extracting a KG from prose, hand-authoring one, or repairing/reviewing an existing graph.
-- **Not** for the Python graph API itself (`onya.graph`, `LiterateParser`, traversal, merge internals) — that's library work; see the README example and `pylib/`. This skill covers the *authoring* surface and uses the parser only to validate. The *Merging & identity* and *Persistence* sections below are orientation for downstream consumers, not a full API reference.
+- **Not** for general Python rules and conventions. Onya does include a Python reference graph API (`onya.graph`, `LiterateParser`, traversal, merge internals, etc.), and this skill does include some guidance for using that to write Python code to interface with Onya, but that does not necessarily extend to Python code for other purposes. This skill is primarily about authoring and managing Onya, but it's also helpful to know what capabilities the Onya library provides.
+
+## What Onya provides beyond the basics
+
+Before inventing a convention for something below, check for the built-in. Each row names the module; read its docstring (or the design doc, linked in the row) before writing code.
+
+| Need | Use | Where |
+|---|---|---|
+| Schema constraints: what a class carries, how many, of what kind, closed sets | **Shapes**: `@Class` / `@Property` nodes with `@appliesTo`, `@as`, `@cardinality`, `@range`, `@oneOf`, `@closed`. Report-only; run on demand | `onya.shape.validate`, `onya validate`; [design-shapes](https://github.com/OoriData/Onya/blob/main/doc/design-shapes.md) |
+| Values that aren't plain text (numbers, dates, booleans, IRIs) | **Interpretations**: `@as`, or per-label defaults in the docheader. The value stays a string; the contract is checked on demand | `onya.interp`; [design-interpretations-literate](https://github.com/OoriData/Onya/blob/main/doc/design-interpretations-literate.md), [-pylib](https://github.com/OoriData/Onya/blob/main/doc/design-interpretations-pylib.md) |
+| Sequence matters (steps, authors, address lines) | **Ordered values**: `@ordered` in the docheader, `@ordering` stamps | `onya.ordering`, `node.ordered_values()`; [design-ordering](https://github.com/OoriData/Onya/blob/main/doc/design-ordering.md) |
+| Where a claim came from, how sure, and when it was true | **Provenance**: nested `@source`, `@method`, `@confidence`, `@asOf` | `onya.provenance`; [SPEC § Optional assertion provenance](https://github.com/OoriData/Onya/blob/main/SPEC.md#optional-assertion-provenance-source-method-confidence-asof) |
+| A claim you must refer to or dispute | **Assertion ids** (`[=id]` / `@id`), not an invented node | [SPEC § Assertion Identifiers](https://github.com/OoriData/Onya/blob/main/SPEC.md#assertion-identifiers) |
+| Records and volume that don't belong in the graph | **Circumstances**: `@circumQuery` + `@Sidecar`, tables derived from shapes, `augment` / `emit` | `onya.circum`, `onya project`, `onya catalog`; [design-sidecars](https://github.com/OoriData/Onya/blob/main/doc/design-sidecars.md) (the pattern), [design-circum](https://github.com/OoriData/Onya/blob/main/doc/design-circum.md) (the mechanism); see *Graph vs sidecar* |
+| Did the graph change? Are two graphs the same? | **Content digest**, per graph or per node | `onya.digest`; [design-digest](https://github.com/OoriData/Onya/blob/main/doc/design-digest.md) |
+| Find the node a user means; reverse edges; a neighborhood | `g.search`, `g.inbound`, `g.subgraph`, `g.copy` | `onya.graph`, `onya.query` |
+| Show a node to people | **Views**: declarative specs, no per-type renderers | `onya.view` |
+| Persist across sessions; combine named graphs | **Stores** (file, SQLite, PostgreSQL), `union` and `overlay` | `onya.store`; [design-persistence-architecture](https://github.com/OoriData/Onya/blob/main/doc/design-persistence-architecture.md) |
+| Diagrams and analytics | Mermaid, Graphviz, networkx | `onya.viz`, `onya convert` |
+| Catch typos and find the offending line | Dangling-edge check, `unknown_reserved_terms`, `track_locations` | `onya.terms`, `onya.locations`; see *Validate by parsing* |
+
+Rules of thumb: constraints go in shapes, not prose or a bespoke checker. Typed values use `@as`, not a typed model. Dated or sourced claims use provenance sub-assertions, not compound labels. Volume goes to a sidecar. When a feature is core to the task, read its design doc first.
 
 ## Format essentials
 
@@ -92,7 +113,7 @@ Edges nest the same way — put `startDate`/`role` under an edge to describe the
 
 ### Assertion identifiers (`@id`) — making an assertion addressable
 
-By default an assertion is **anonymous** — its identity is just its shape (origin, label, value/target). Give one an explicit identifier with a nested `* @id:` directive and it becomes a first-class, referenceable thing: another edge can point *at the assertion itself*. This is how you say something *about a specific claim* (disputes, provenance, confidence) without inventing a scaffold node.
+By default an assertion is **anonymous** — its identity is just its (origin, label, value/target) tuple. Give one an explicit identifier with a nested `* @id:` directive and it becomes a first-class, referenceable thing: another edge can point *at the assertion itself*. This is how you say something *about a specific claim* (disputes, provenance, confidence) without inventing a scaffold node.
 
 ```
 # Chuks [Person]
@@ -341,9 +362,9 @@ onya convert 'dir/*.onya' --dot > all.dot  # merge several files
 cat file.onya | onya convert - --mermaid   # stdin
 ```
 
-Useful display flags: `--rankdir LR`, `--noshow_properties`, `--noshow_types`, `--noshow_edge_labels`, `--noshow_edge_annotations` (negate any boolean with the `no` prefix). See `demo/mermaid_basic/` and `demo/graphviz_basic/`.
+Useful display flags: `--rankdir LR`, `--noshow_properties`, `--noshow_types`, `--noshow_edge_labels`, `--noshow_edge_annotations` (negate any boolean with the `no` prefix). See [demo/mermaid_basic](https://github.com/OoriData/Onya/tree/main/demo/mermaid_basic) and [demo/graphviz_basic](https://github.com/OoriData/Onya/tree/main/demo/graphviz_basic).
 
-For graph **analytics** (not diagrams), `onya.viz.nx` (extras-gated: `pip install "onya[nx]"`) projects a graph into a `networkx.MultiDiGraph` via `to_networkx`, and `write_back` records analytics results (centrality, communities, …) back as typed, merge-safe assertions. See `demo/nx_analytics/`.
+For graph **analytics** (not diagrams), `onya.viz.nx` (extras-gated: `pip install "onya[nx]"`) projects a graph into a `networkx.MultiDiGraph` via `to_networkx`, and `write_back` records analytics results (centrality, communities, …) back as typed, merge-safe assertions. See [demo/nx_analytics](https://github.com/OoriData/Onya/tree/main/demo/nx_analytics).
 
 ## Serialize a graph back to authoring form (`write`)
 
