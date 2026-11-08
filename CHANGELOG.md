@@ -6,6 +6,17 @@ For interim changes not yet earmarked for a particular release, can use this hea
 ## [Unreleased]
 -->
 
+## [0.6.1] 2026-11-07: Resolvers and writers derived from a projection
+
+### Added
+
+- **Resolvers and writers derived from a projection: `table_resolvers(p)` and `table_writers(p)`** (#74). When a sidecar is a table `materialize` built, the `Projection` already holds what a resolver or writer needs, so `registry.resolvers.update(table_resolvers(p))` and `registry.writers.update(table_writers(p))` register one for each property the projection holds, over SQLite or PostgreSQL (`ctx.conn` takes what `materialize` takes). A resolver reads all the subjects in one query and returns the column's text with its interpretation (an edge column gives an `Edge` to a node typed by the referenced class, a child table reads in `ordinal` order) and the row's own `updated` as `@asOf`. A writer is idempotent and never deletes: it sets a root column (only if the value changed) or adds the missing child rows, refuses a node with no row when other columns are required (`CircumError` names them) and an edge to a node that has no row. Ordered properties get no writer, because `emit` leaves ordered values for review. The SQL comes only from the projection's own names, never from graph text; the sidecar's `@table` is only checked against the projection. See `doc/design-circum.md`.
+- **Every projected table has an `updated` column**, stamped when `materialize` (or a writer) inserts or changes a row, and left out of the comparison that decides a row is unchanged, so an unchanged row keeps its stamp.
+
+### Changed
+
+- **`materialize`, and the derived resolvers and writers, check the tables against the projection** and raise `CircumError` naming the difference for a missing, extra or differently typed column. Tables made by 0.6.0 have no `updated` column, so they now fail this check: add the column (`ALTER TABLE <table> ADD COLUMN updated TEXT`, or `timestamptz` on PostgreSQL) or rebuild the tables. A property can no longer be mapped to a column named `updated` (rename it with `@column`).
+
 ## [0.6.0] 2026-11-07: Bidirectional circumstances (augment and emit)
 
 ### Added

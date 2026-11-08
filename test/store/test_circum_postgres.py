@@ -171,3 +171,90 @@ async def test_augment_and_emit_through_asyncpg():
     finally:
         await conn.execute('DROP TABLE IF EXISTS pg_counsellor')
         await conn.close()
+
+
+# --- tables as sidecars: resolvers and writers derived from a projection, over asyncpg -----------------------
+
+TABLES = '''# @docheader
+* @document: http://e.o/doc
+* @nodebase: http://e.o/
+* @schema: http://e.o/
+
+# Student [@Class]
+# Person [@Class]
+# counselledBy [@Property]
+* @appliesTo -> Student
+* @range -> Person
+* @circumQuery -> students-db
+# gpa [@Property]
+* @appliesTo -> Student
+* @as: number
+* @circumQuery -> students-db
+# seen [@Property]
+* @appliesTo -> Student
+* @as: datetime
+* @circumQuery -> students-db
+# interest [@Property]
+* @appliesTo -> Student
+* @cardinality: 0..*
+* @circumQuery -> students-db
+# students-db [@Sidecar]
+* @table: student
+# adat [Person]
+# chuks [Student]
+CHUKS
+# dede [Student]
+'''
+CHUKS = '''* counselledBy -> adat
+* gpa: 3.40
+* seen: 2026-03-02T09:30:00+02:00
+* interest: chess
+* interest: music'''
+
+
+@pytest.mark.asyncio
+async def test_table_resolvers_and_writers_through_asyncpg():
+    import asyncpg
+    from onya.circum import CircumError, Registry, augment, emit, strip, table_resolvers, table_writers
+    dsn = os.environ['ONYA_TEST_PG_DSN']
+    full = read(TABLES.replace('CHUKS', CHUKS)).graph
+    bare = lambda: read(TABLES.replace('CHUKS', '')).graph  # noqa: E731
+    p = from_shapes(full, 'http://e.o/Student', array_columns=True)  # `interest` is a text[] column
+    reg = Registry()
+    reg.resolvers.update(table_resolvers(p))
+    reg.writers.update(table_writers(p))
+    await _drop(dsn, p)
+    pool = await asyncpg.create_pool(dsn)
+
+    def held(g, node, label):
+        n = g['http://e.o/' + node]
+        return sorted([a.value for a in n.getprop('http://e.o/' + label)]
+                      + [str(e.target.id) for e in n.getedge('http://e.o/' + label)])
+    try:
+        await materialize(pool, p, full)
+        view = await augment(bare(), registry=reg, conn=pool)
+        assert held(view, 'chuks', 'counselledBy') == ['http://e.o/adat']
+        assert held(view, 'chuks', 'gpa') == ['3.40']  # numeric keeps its scale
+        assert held(view, 'chuks', 'interest') == ['chess', 'music']
+        (seen,) = held(view, 'chuks', 'seen')
+        assert seen == '2026-03-02T07:30:00Z'  # timestamptz comes back in UTC
+        assert digest(strip(view)) == digest(bare())
+
+        g = bare()
+        g['http://e.o/dede'].add_property('http://e.o/gpa', '3.9')
+        g['http://e.o/dede'].add_property('http://e.o/interest', 'reading')
+        g['http://e.o/dede'].add_edge('http://e.o/counselledBy', g['http://e.o/adat'])
+        assert len((await emit(g, ['http://e.o/dede'], registry=reg, conn=pool)).moved) == 3
+        async with pool.acquire() as c:
+            before = await c.fetchrow("SELECT * FROM student WHERE id = 'http://e.o/dede'")
+        g = bare()
+        g['http://e.o/dede'].add_property('http://e.o/gpa', '3.9')
+        await emit(g, ['http://e.o/dede'], registry=reg, conn=pool)  # again: nothing to change
+        async with pool.acquire() as c:
+            assert await c.fetchrow("SELECT * FROM student WHERE id = 'http://e.o/dede'") == before
+            await c.execute('ALTER TABLE student DROP COLUMN updated')
+        with pytest.raises(CircumError, match="missing \\['updated'\\]"):
+            await augment(bare(), registry=reg, conn=pool)
+    finally:
+        await pool.close()
+        await _drop(dsn, p)
