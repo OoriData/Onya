@@ -50,7 +50,9 @@ A projection can still be written by hand, for exceptions: `Projection([Table(..
 
 `materialize(target, p, g)` runs in one transaction. It creates the tables that are missing, then inserts, updates and deletes until the tables hold exactly `rows(p, g)`, and returns a `Report` (`created`, `inserted`, `updated`, `unchanged`, `deleted`, `graph_digest`, and per-table counts). The rows are built and checked first, so a bad value writes nothing. A second run over an unchanged graph reports every row `unchanged`.
 
-`target` is `'sqlite:path'`, `'postgresql://...'` (asyncpg, `pip install "onya[postgres]"`), or an open `onya.store` store, `sqlite3.Connection` or asyncpg pool. The backends are deliberately thin: SQLite through the stdlib, PostgreSQL through asyncpg. Tables are **created if missing and never altered**; after changing a projection's columns, drop the tables. Migrations are out of scope.
+`target` is `'sqlite:path'`, `'postgresql://...'` (asyncpg, `pip install "onya[postgres]"`), or an open `onya.store` store, `sqlite3.Connection` or asyncpg pool. The backends are deliberately thin: SQLite through the stdlib, PostgreSQL through asyncpg. Tables are **created if missing and never altered**; after changing a projection's columns, drop the tables. Migrations are out of scope. Every table also keeps an `updated` column (a timestamp, stamped on each row `materialize` inserts or changes, and not part of deciding whether a row changed, so an unchanged row keeps its stamp). A property can't be mapped to a column called `updated`; rename it with `@column`.
+
+The tables are a contract between the projection, `augment` and `emit`, so `materialize` and the resolvers and writers below check it. A table with a column missing, extra or of another type (a hand-made `ALTER TABLE`, or a table made before 0.6.1, which has no `updated`) is a `CircumError` naming the difference, before any row is read or written.
 
 `onya project FILESPEC CLASS [--shapes=] [--to=URL]` does the same from the command line, printing the DDL when there is no `--to`.
 
@@ -122,6 +124,33 @@ report = await emit(g, touched=[iri], registry=reg)    # report.moved, report.re
 For each touched node, `emit` hands the assertions whose label has a `@circumQuery` to the property's registered **writer** as `{subject IRI: [Edge | Text]}`, then removes them from `g`: sidecar first, graph second, so a fact is never in neither place. Writers must be idempotent, since a crash between the two steps leaves a fact in both and the retry writes it again. Nothing is removed until every writer has succeeded.
 
 It leaves in place, naming them in `report.review`, assertions with an `@id` or nested assertions (removing one would take them along, and a row elsewhere may point at it), and ignores what came from a sidecar. A circum label with no writer, or a viewer the policy refuses, raises before anything is written. `g` is edited in place: pass `g.copy()` for a dry run. A target node an emitted edge pointed at stays in the graph.
+
+### Resolvers and writers for the tables `materialize` built
+
+When the sidecar is a table the projection made, everything a resolver or writer needs is already in the `Projection`, so Onya derives them:
+
+```python
+p = from_shapes(g, STUDENT)                        # the projection that made the tables
+reg = Registry(policy=policy)
+reg.resolvers.update(table_resolvers(p))           # {label IRI: resolver}
+reg.writers.update(table_writers(p))               # {label IRI: writer}
+view = await augment(g, registry=reg, viewer=me, conn=pool)   # conn: what `materialize` takes
+```
+
+A resolver finds its property by label, in a root column, a child table or (PostgreSQL) an array column, and reads all the requested subjects in one query (`IN (...)` in chunks on SQLite, `= ANY($1)` on PostgreSQL). Values come back as the text the projection was built from, with the column's interpretation; an edge column gives an `Edge` whose target node is typed with the referenced class; the row's `updated` is the `@asOf`. A child table reads in `ordinal` order if it is ordered.
+
+A writer is the inverse, and idempotent: it sets a root column (rewriting a value only if it changed), or adds the child rows that are missing, stamping what it changes. It never deletes: a value removed from the graph leaves the stored value in place. A node with no row gets one only if every other column may be NULL; otherwise a `CircumError` names the columns (a node that breaks its own `@cardinality` 1 has nothing valid to insert). An edge to a node with no row in the referenced table is refused. Properties whose order matters (an ordered child table or array) have no writer, since `emit` leaves ordered values in the graph for review.
+
+The SQL comes only from the projection's own table and column names, quoted; nothing in the graph (`@table`, `@column`, `@queryDetail` text) is ever put in a query. The sidecar's `@table` is only compared: a call raises `CircumError` if it isn't the table holding the property. A label held in several tables (a property shared by classes that each have a table) gets a stand-in that raises, so that one is written by hand.
+
+Sidecars that are some other store, or a table somebody else built, keep hand-written resolvers. The contract is store-neutral. A key-value store is a few lines:
+
+```python
+@reg.resolver(COUNSELLED_BY)
+async def counselled_by(subjects, ctx):
+    found = await ctx.conn.mget([f'counsellor:{s}' for s in subjects])      # e.g. redis.asyncio
+    return {s: [Edge(v)] for s, v in zip(subjects, found) if v}
+```
 
 ## What this layer does not do
 

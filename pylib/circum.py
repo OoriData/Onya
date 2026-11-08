@@ -45,6 +45,7 @@ from onya.terms import (
 )
 
 RUNS_TABLE = 'onya_circum_runs'
+UPDATED = 'updated'  # every projected table keeps one: when the row was last inserted or changed
 # Interpretation IRI -> column type. Anything else (and no interpretation at all) is `text`: never a guess.
 TYPES = {
     str(ONYA_INTERP('integer')): 'integer',
@@ -144,6 +145,10 @@ class Projection:
         names = [t.name for t in self.tables]
         for n in {n for n in names if names.count(n) > 1}:
             raise CircumError(f'two tables are named {n!r}')
+        for t in self.tables:
+            if UPDATED in {c.name for c in t.columns}:
+                raise CircumError(f'table {t.name} has a column named {UPDATED!r}, which every projected table '
+                                  'keeps for the row\'s timestamp; rename it with @column')
 
     def ordered_tables(self) -> list:
         '''The tables in the order they can be created: every table after the ones its foreign keys reference.'''
@@ -306,6 +311,7 @@ def statements(p: Projection, dialect: str = 'postgres', *, if_not_exists: bool 
         for c in t.columns:
             line = f'{_q(c.name)} {_type(c, dialect)}' + ('' if c.nullable else ' NOT NULL')
             lines.append(line)
+        lines.append(f'{_q(UPDATED)} ' + ('TEXT' if dialect == 'sqlite' else 'timestamptz'))
         lines.append(f'PRIMARY KEY ({", ".join(map(_q, t.key))})')
         if p.foreign_keys:
             if t.parent:
@@ -493,6 +499,10 @@ class _Sqlite:
     async def tables(self):
         return {r[0] for r in await self.fetch("SELECT name FROM sqlite_master WHERE type = 'table'")}
 
+    async def columns(self, table):
+        '''`{column name: declared type, lowercase}` of a table (empty if there is none).'''
+        return {r[1]: (r[2] or '').lower() for r in await self.fetch(f'PRAGMA table_info({_q(table)})')}
+
     @contextlib.asynccontextmanager
     async def transaction(self):
         async with self.lock:
@@ -534,6 +544,11 @@ class _Postgres:
         found = await self.fetch('SELECT table_name FROM information_schema.tables '
                                  'WHERE table_schema = current_schema()')
         return {r[0] for r in found}
+
+    async def columns(self, table):
+        found = await self.fetch('SELECT column_name, data_type FROM information_schema.columns '
+                                 'WHERE table_schema = current_schema() AND table_name = $1', (table,))
+        return {name: kind.lower() for name, kind in found}
 
     @contextlib.asynccontextmanager
     async def transaction(self):
@@ -631,12 +646,16 @@ async def materialize(target, p: Projection, g, *, nodes=None, registry=DEFAULT)
     nodes -- only (re)project these nodes: rows owned by other nodes are left alone, and rows owned by one of
         `nodes` that no longer exists are deleted. Pass the ids whose `onya.digest.node_digests` changed.
 
-    Tables are created if absent and never altered: after changing a projection's columns, drop the tables.
+    Tables are created if absent and never altered. A table that no longer matches the projection (a column
+    missing, extra or of another type, as after a migration or a hand-made `ALTER TABLE`) is a `CircumError`
+    naming the difference, before any row is written: after changing a projection's columns, drop the tables.
+    Every row inserted or changed is stamped in its `updated` column with the time of the run.
     The bookkeeping row (`onya_circum_runs`) records the digest of the *whole* graph either way.
     '''
     data = rows(p, g, nodes=nodes, registry=registry)
     wanted = None if nodes is None else {str(g.resolve(n)) for n in nodes}
     report = Report(graph_digest=digest(g))
+    now = _dt.datetime.now(_dt.timezone.utc)
     async with _target(target) as be:
         async with be.transaction():
             have = await be.tables()
@@ -645,12 +664,12 @@ async def materialize(target, p: Projection, g, *, nodes=None, registry=DEFAULT)
             for sql in statements(p, be.dialect, if_not_exists=True):
                 await be.execute(sql)
             await be.execute(_runs_ddl(be))
+            await _check_schema(be, p)
             for t in p.ordered_tables():
-                stats = await _sync_table(be, t, data[t.name], wanted)
+                stats = await _sync_table(be, t, data[t.name], wanted, now)
                 report.tables[t.name] = stats
                 report.inserted, report.updated, report.unchanged, report.deleted = (
                     a + b for a, b in zip((report.inserted, report.updated, report.unchanged, report.deleted), stats))
-            now = _dt.datetime.now(_dt.timezone.utc)
             marks = _marks(be, 7)
             await be.execute(f'INSERT INTO {RUNS_TABLE} VALUES ({", ".join(marks)})', (
                 now.isoformat() if be.dialect == 'sqlite' else now, p.name, report.graph_digest,
@@ -665,7 +684,46 @@ def _runs_ddl(be) -> str:
             'unchanged INTEGER NOT NULL, deleted INTEGER NOT NULL)')
 
 
-async def _sync_table(be, t: Table, new: list, wanted) -> tuple:
+_UPDATED_COLUMN = Column(UPDATED, 'timestamptz')
+_PG_TYPES = {'text': 'text', 'integer': 'integer', 'numeric': 'numeric', 'timestamptz': 'timestamp with time zone',
+             'boolean': 'boolean'}
+
+
+def _stored_type(col, dialect: str) -> str:
+    '''The type a backend reports for `col`'s column (`PRAGMA table_info` declared type, or `data_type`).'''
+    if dialect == 'sqlite':
+        return _SQLITE_TYPES[col.type].lower()
+    return 'array' if col.array else _PG_TYPES[col.type]
+
+
+async def _check_schema(be, p: Projection, tables=None) -> None:
+    '''
+    `CircumError` unless each table (of `tables`, default all) is what `p` says: every column, its `updated`,
+    and nothing else, with the types `statements` gives. The tables are an agreed contract between the
+    projection, `augment` and `emit`; one that a migration or a hand-made `ALTER TABLE` changed can't be
+    trusted to be read or written.
+    '''
+    problems = []
+    for t in tables or p.tables:
+        found = await be.columns(t.name)
+        if not found:
+            problems.append(f'table {t.name} does not exist')
+            continue
+        want = {c.name: _stored_type(c, be.dialect) for c in t.columns}
+        want[UPDATED] = _stored_type(_UPDATED_COLUMN, be.dialect)
+        missing, extra = sorted(set(want) - set(found)), sorted(set(found) - set(want))
+        wrong = [f'{n} is {found[n]}, expected {want[n]}' for n in sorted(set(want) & set(found))
+                 if found[n] != want[n]]
+        if missing or extra or wrong:
+            bits = ([f'missing {missing}'] if missing else []) + ([f'unexpected {extra}'] if extra else []) + wrong
+            hint = (f' (a table made before 0.6.1 has no {UPDATED!r}: it can be added with ALTER TABLE, or the '
+                    'tables rebuilt)') if UPDATED in missing else ''
+            problems.append(f'table {t.name} no longer follows the projection: {"; ".join(bits)}{hint}')
+    if problems:
+        raise CircumError(problems)
+
+
+async def _sync_table(be, t: Table, new: list, wanted, now) -> tuple:
     '''Make the stored rows of `t` match `new` (for the owners in `wanted`, or all); counts of changes.'''
     names = [c.name for c in t.columns]
     cols = {c.name: c for c in t.columns}
@@ -687,18 +745,19 @@ async def _sync_table(be, t: Table, new: list, wanted) -> tuple:
             upd.append(r)
     dele = [k for k in stored if k not in wanted_keys]
     enc = lambda r: tuple(be.encode(cols[n], v) for n, v in zip(names, r))  # noqa: E731
+    stamp = be.encode(_UPDATED_COLUMN, now)
     nonkey = [n for n in names if n not in t.key]
     if dele:
         cond = ' AND '.join(f'{_q(k)} = {m}' for k, m in zip(t.key, _marks(be, len(t.key))))
         await be.executemany(f'DELETE FROM {_q(t.name)} WHERE {cond}', [k for k in dele])
     if upd and nonkey:
-        sets = ', '.join(f'{_q(n)} = {m}' for n, m in zip(nonkey, _marks(be, len(nonkey))))
-        cond = ' AND '.join(f'{_q(k)} = {m}' for k, m in zip(t.key, _marks(be, len(t.key), len(nonkey) + 1)))
+        sets = ', '.join(f'{_q(n)} = {m}' for n, m in zip([*nonkey, UPDATED], _marks(be, len(nonkey) + 1)))
+        cond = ' AND '.join(f'{_q(k)} = {m}' for k, m in zip(t.key, _marks(be, len(t.key), len(nonkey) + 2)))
         await be.executemany(f'UPDATE {_q(t.name)} SET {sets} WHERE {cond}', [
-            tuple(enc(r)[names.index(n)] for n in nonkey) + tuple(enc(r)[i] for i in kix) for r in upd])
+            (*(enc(r)[names.index(n)] for n in nonkey), stamp, *(enc(r)[i] for i in kix)) for r in upd])
     if ins:
-        await be.executemany(f'INSERT INTO {_q(t.name)} ({", ".join(map(_q, names))}) '
-                             f'VALUES ({", ".join(_marks(be, len(names)))})', [enc(r) for r in ins])
+        await be.executemany(f'INSERT INTO {_q(t.name)} ({", ".join(map(_q, [*names, UPDATED]))}) '
+                             f'VALUES ({", ".join(_marks(be, len(names) + 1))})', [(*enc(r), stamp) for r in ins])
     return len(ins), len(upd), same, len(dele)
 
 
@@ -1196,3 +1255,222 @@ async def emit(g, touched=None, *, registry: Registry, viewer=None, shapes=None,
             (n.remove_edge if hasattr(a, 'target') else n.remove_property)(a)
             report.moved.append((str(prop.sidecar.id), str(n.id), str(prop.label)))
     return report
+
+
+# --- tables as sidecars: resolvers and writers for the tables `materialize` built -----------------
+#
+# When a sidecar is a table the projection made, everything a resolver or writer needs is in the `Projection`:
+# the table, its key, its column types and its foreign keys. SQL comes only from those names (quoted by `_q`),
+# never from text in the graph (`@table`, `@column`, `@queryDetail`). Sidecars that are some other store, or
+# a table somebody else built, keep hand-written resolvers.
+
+def _places(p: Projection) -> dict:
+    '''`{label IRI: [(table, column)]}` for each property the projection holds: a root column, or a child payload.'''
+    found: dict = {}
+    for t in p.tables:
+        held = [(str(c.label), c) for c in t.columns[1:]] if t.parent is None else [(str(t.label), t.columns[1])]
+        for label, col in held:
+            found.setdefault(label, []).append((t, col))
+    return {label: where for label, where in found.items()}
+
+
+def _ambiguous(label, where):
+    '''Stands in for a label held in several tables (a property shared by classes): which one is not for us to guess.'''
+    names = sorted(t.name for t, _ in where)
+
+    async def refuse(*_):
+        raise CircumError(f'{label} is held in several tables {names}: write its resolver or writer by hand')
+    return refuse
+
+
+def _root_of(p: Projection, t: Table) -> Table:
+    return t if t.parent is None else next(x for x in p.tables if x.name == t.parent)
+
+
+def _check_sidecar(ctx, root: Table) -> None:
+    '''The declared sidecar's `@table` must be the table the projection holds the property in.'''
+    if ctx.sidecar.table is not None and ctx.sidecar.table != root.name:
+        raise CircumError(f'{ctx.label}: sidecar {ctx.sidecar.id} declares @table {ctx.sidecar.table!r}, but the '
+                          f'projection holds this property in {root.name!r}')
+
+
+async def _fetch_in(be, t: Table, ids: list) -> list:
+    '''Every row of `t` (its columns, then `updated`) whose owner is in `ids`: one query per 500, or one `ANY`.'''
+    base = (f'SELECT {", ".join(map(_q, [c.name for c in t.columns] + [UPDATED]))} FROM {_q(t.name)} '
+            f'WHERE {_q(t.columns[0].name)} ')
+    if be.dialect == 'postgres':
+        return await be.fetch(base + '= ANY($1)', (ids,))
+    out = []
+    for i in range(0, len(ids), 500):  # well under SQLite's limit on variables
+        chunk = ids[i:i + 500]
+        out += await be.fetch(base + f'IN ({", ".join("?" * len(chunk))})', tuple(chunk))
+    return out
+
+
+def _text_of(col, v) -> str:
+    '''The text a stored value was projected from, in a form its interpretation reads back.'''
+    n = _norm(Column(col.name, col.type), v)  # one element: an array column's `_norm` would split a string
+    if col.type == 'timestamptz':
+        return n.isoformat().replace('+00:00', 'Z')
+    if col.type == 'numeric':
+        return format(n, 'f')
+    if col.type == 'boolean':
+        return 'true' if n else 'false'
+    return str(int(n)) if col.type == 'integer' else str(n)
+
+
+def _resolver(p: Projection, t: Table, col: Column):
+    root = _root_of(p, t)
+    classes = {x.name: x.cls for x in p.tables if x.parent is None}  # table name -> class IRI
+    ordinal = next((i for i, c in enumerate(t.columns) if c.kind == 'ordinal'), None)
+
+    async def resolve(subjects, ctx):
+        _check_sidecar(ctx, root)
+        async with _target(ctx.conn) as be:
+            await _check_schema(be, p, [t])
+            found = await _fetch_in(be, t, [str(s) for s in subjects])
+        if t.parent is None:
+            at = [c.name for c in t.columns].index(col.name)
+            order = lambda r: r[0]  # noqa: E731
+        else:
+            at = 1
+            order = (lambda r: (r[0], r[ordinal])) if ordinal is not None else (lambda r: (r[0], str(r[1])))
+        out: dict = {}
+        for r in sorted(found, key=order):
+            when = _norm(_UPDATED_COLUMN, r[-1])  # the row's own time; None leaves the default
+            for v in (r[at] or []) if col.array else [r[at]]:
+                if v is None:
+                    continue
+                if col.kind == 'edge':
+                    cls = classes.get(col.ref)
+                    item = Edge(str(v), Node((cls,)) if cls else None, as_of=when)
+                else:
+                    item = Text(_text_of(col, v), as_of=when, interp=col.interp)
+                out.setdefault(r[0], []).append(item)
+        return out
+    return resolve
+
+
+def table_resolvers(p: Projection) -> dict:
+    '''
+    `{label IRI: resolver}` for every property the projection holds in a table, to merge into a `Registry`:
+    `registry.resolvers.update(table_resolvers(p))`. Each resolver reads from `ctx.conn`, which takes what
+    `materialize` takes (a URL, an `onya.store` store, a `sqlite3.Connection` or an asyncpg pool), in one
+    query for all the subjects. Values come back as the text the projection was built from, with the column's
+    interpretation, and `@asOf` is the row's `updated`. A label held in several tables (a property shared by
+    classes that have their own tables) gets a stand-in that raises `CircumError`: write that one by hand.
+    A call raises `CircumError` if the sidecar's `@table` is not the table holding the property, or if the
+    table no longer matches the projection.
+    '''
+    return {label: _resolver(p, *where[0]) if len(where) == 1 else _ambiguous(label, where)
+            for label, where in _places(p).items()}
+
+
+async def _missing_owners(be, root: Table, ids: list) -> set:
+    return set(ids) - {r[0] for r in await _fetch_in(be, root, ids)}
+
+
+def _refuse_new_rows(root: Table, missing, label) -> None:
+    '''A row can only be inserted if nothing else in it is required: otherwise the node breaks its cardinality.'''
+    needed = [c.name for c in root.columns[1:] if not c.nullable and str(c.label) != str(label)]
+    if missing and needed:
+        raise CircumError(f'{sorted(missing)[0]}{" and others" if len(missing) > 1 else ""}: no row in {root.name}, '
+                          f'and a new one also needs {needed} (@cardinality 1, NOT NULL): the node does not '
+                          'satisfy its shape, so there is nothing valid to insert')
+
+
+def _column_value(col: Column, item, subject):
+    '''What to store in `col` for a writer's `Edge` or `Text`: an id, or the value read through its interpretation.'''
+    if (col.kind == 'edge') != isinstance(item, Edge):
+        raise CircumError(f'{subject}: {_local(col.label)} is {"an edge" if col.kind == "edge" else "a value"} '
+                          f'in the table, but the graph has {"an edge" if isinstance(item, Edge) else "a value"}')
+    if col.kind == 'edge':
+        return str(item.target)
+    iri = item.interp if item.interp is not None and item.interp in DEFAULT else col.interp
+    interp = DEFAULT.get(iri) if iri is not None else None
+    try:
+        return _coerce(col, interp.to_python(item.value) if interp is not None else item.value)
+    except (InterpretationError, ValueError) as e:
+        raise CircumError(f'{subject}: {_local(col.label)}: {getattr(e, "message", None) or e}') from e
+
+
+async def _check_targets_exist(be, p: Projection, col: Column, ids) -> None:
+    '''An edge column is a foreign key: its target needs a row in the referenced table.'''
+    if col.kind != 'edge' or not col.ref or not p.foreign_keys:
+        return
+    ref = next(x for x in p.tables if x.name == col.ref)
+    missing = await _missing_owners(be, ref, sorted(set(ids)))
+    if missing:
+        raise CircumError(f'{_local(col.label)} points at {sorted(missing)}, which are not in table {ref.name}')
+
+
+def _writer(p: Projection, t: Table, col: Column):
+    root = _root_of(p, t)
+
+    async def write(rows, ctx):
+        _check_sidecar(ctx, root)
+        now = _dt.datetime.now(_dt.timezone.utc)
+        async with _target(ctx.conn) as be:
+            stamp = be.encode(_UPDATED_COLUMN, now)
+            async with be.transaction():
+                await _check_schema(be, p, [root] if t is root else [root, t])
+                subjects = sorted(map(str, rows))
+                values = {s: [_column_value(col, i, s) for i in rows[s]] for s in subjects}
+                await _check_targets_exist(be, p, col, [v for vs in values.values() for v in vs])
+                missing = await _missing_owners(be, root, subjects)
+                _refuse_new_rows(root, missing, col.label if t is root else None)
+                if t.parent is None:
+                    await _write_root(be, root, col, values, missing, stamp)
+                else:
+                    await _write_child(be, root, t, values, missing, stamp)
+    return write
+
+
+async def _write_root(be, root, col, values, missing, stamp) -> None:
+    '''Set a root-table column for each subject; insert the row if the table has none. Unchanged values are left.'''
+    for s, vs in values.items():
+        if len(vs) > 1 and not col.array:
+            raise CircumError(f'{s}: {_local(col.label)} has {len(vs)} values, but its column holds one')
+    stored = {r[0]: r for r in await _fetch_in(be, root, [s for s in values if s not in missing])}
+    at = [c.name for c in root.columns].index(col.name)
+    ins, upd = [], []
+    for s, vs in values.items():
+        new = vs if col.array else vs[0]
+        if s in missing:
+            ins.append((s, be.encode(col, new), stamp))
+        elif _norm(col, stored[s][at]) != _norm(col, new):  # idempotent: a value already there is not rewritten
+            upd.append((be.encode(col, new), stamp, s))
+    if upd:
+        m = _marks(be, 3)
+        await be.executemany(f'UPDATE {_q(root.name)} SET {_q(col.name)} = {m[0]}, {_q(UPDATED)} = {m[1]} '
+                             f'WHERE {_q(root.columns[0].name)} = {m[2]}', upd)
+    if ins:
+        await be.executemany(f'INSERT INTO {_q(root.name)} ({_q(root.columns[0].name)}, {_q(col.name)}, '
+                             f'{_q(UPDATED)}) VALUES ({", ".join(_marks(be, 3))})', ins)
+
+
+async def _write_child(be, root, t, values, missing, stamp) -> None:
+    '''Add the rows a child table lacks: one per (owner, value), never deleting any.'''
+    if missing:  # the owners need a row of their own first
+        await be.executemany(f'INSERT INTO {_q(root.name)} ({_q(root.columns[0].name)}, {_q(UPDATED)}) '
+                             f'VALUES ({", ".join(_marks(be, 2))})', [(s, stamp) for s in sorted(missing)])
+    col = t.columns[1]
+    have = {(r[0], r[1]) for r in await _fetch_in(be, t, list(values))}
+    new = [(s, be.encode(col, v), stamp) for s, vs in values.items() for v in vs
+           if (s, be.encode(col, v)) not in have]
+    if new:
+        await be.executemany(f'INSERT INTO {_q(t.name)} ({_q(t.columns[0].name)}, {_q(col.name)}, {_q(UPDATED)}) '
+                             f'VALUES ({", ".join(_marks(be, 3))})', new)
+
+
+def table_writers(p: Projection) -> dict:
+    '''
+    `{label IRI: writer}` for the properties `emit` can write into the projection's tables: the inverse of
+    `table_resolvers`. A writer sets a single-valued column (or adds the missing rows of a child table),
+    stamps what it changes with `updated`, is idempotent, and never deletes. A node with no row gets one only
+    if every other column may be NULL; otherwise `CircumError` names the columns it would need. An edge to a
+    node that has no row in the referenced table is refused. Properties whose order matters (an ordered child
+    table or array) get no writer: `emit` leaves ordered values in the graph for review.
+    '''
+    return {label: _writer(p, *where[0]) if len(where) == 1 else _ambiguous(label, where)
+            for label, where in _places(p).items() if not any(t.ordered or col.ordered for t, col in where)}
