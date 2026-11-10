@@ -525,6 +525,7 @@ hatch:
 ```python
 from onya.store import GraphQueryStore
 
+# A cache can ask `await store.version(name)` (a token to compare) instead of refetching to see if the graph changed.
 # connect(url, max_size=3) passes pool options to asyncpg (behind a pooler with a connection cap).
 # Already have an asyncpg pool? `await PostgresStore.from_pool(pool)` (from onya.store.postgres) makes a store
 # on it and leaves the pool yours; `ensure=False` creates nothing, for a role with data privileges only.

@@ -25,7 +25,7 @@ from contextlib import contextmanager
 from amara.iri import I
 
 from onya.graph import graph
-from onya.store import AssertionStore, OverlayReadStore, SearchStore, connect as _async_connect
+from onya.store import AssertionStore, OverlayReadStore, SearchStore, VersionedStore, connect as _async_connect
 
 
 class SyncStore:
@@ -56,6 +56,9 @@ class SyncStore:
         if isinstance(store, SearchStore):
             self.search = self._search
             self.nodes_by_type = self._nodes_by_type
+        if isinstance(store, VersionedStore):
+            self.version = self._version
+            self.versions = self._versions
 
     # --- GraphStore -----------------------------------------------------------------
 
@@ -122,6 +125,14 @@ class SyncStore:
         async def _collect():
             return [n async for n in self._store.nodes_by_type(name, type_iri)]
         return asyncio.run(_collect())
+
+    # --- VersionedStore (bound in __init__ only when the store offers it) -----------
+
+    def _version(self, name: I | str) -> str:
+        return asyncio.run(self._store.version(name))
+
+    def _versions(self, names) -> str:
+        return asyncio.run(self._store.versions(names))
 
 
 @contextmanager

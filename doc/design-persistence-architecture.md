@@ -357,6 +357,40 @@ search; PostgreSQL computes the tiers in SQL and scores the fuzzy tier with
 `pg_trgm` when it is installed, so fuzzy *scores* can differ. The details are
 in the protocol's docstring. Offered by all three backends.
 
+### Capability: `VersionedStore` (#77)
+
+A cache in another process (a service holding a materialized graph, a second
+worker) needs to ask "has it changed?" without fetching the graph. `version(name)`
+returns a **token**, a string to compare for equality and nothing else: a
+different token means the graph was written, or dropped and made again, since
+the last one. `KeyError` if the graph is absent, as for `get`.
+
+```python
+v = await store.version(name)
+...
+if await store.version(name) != v:         # one indexed read, not a fetch
+    g = await store.get(name)
+```
+
+`versions(names)` gives one token for several graphs, for an overlay of authored
+and runtime graphs. A name with no graph yet is allowed there: its absence is
+part of the token, so the graph appearing changes it.
+
+The relational backends keep a counter in `onya_graph_rev (name, rev)`, bumped
+by the same transaction as every write (`put`, `add`, `remove`, `drop`), so a
+token can never describe a state other than the one committed with it. It is
+keyed by name and not removed with the graph, so a graph made again carries on
+from its old revision and no token is reused. A graph stored before the table
+existed reads as `'0'` until it is next written. The file backend returns the
+file's modification time, size and inode (every write replaces the file), which
+also notices a hand edit.
+
+What it is not: a content digest (`onya.digest` is that, and needs the graph),
+and it counts writes made *through the store*, so SQL run against the tables
+directly is not seen. It does not push invalidation: a cache polls it. It is a
+separate capability protocol, like `SearchStore`, so a backend from an entry
+point is not required to offer it. All three built-in backends do.
+
 ### Capability: `GraphQueryStore` (PG 19)
 
 ```python

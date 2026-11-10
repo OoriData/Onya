@@ -1,4 +1,4 @@
--- Onya PostgreSQL store schema — EXAMPLE ONLY (generated from onya 0.5.0)
+-- Onya PostgreSQL store schema — EXAMPLE ONLY (generated from onya 0.6.2)
 --
 -- Onya creates and upgrades this schema itself whenever a store is opened (DDL only for what's
 -- missing, so a data-only role can open a store provisioned by this script), so most deployments
@@ -26,6 +26,7 @@ CREATE TABLE IF NOT EXISTS onya_meta ( key TEXT PRIMARY KEY, value TEXT NOT NULL
 CREATE TABLE IF NOT EXISTS onya_graph ( graph_pk BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, name TEXT NOT NULL UNIQUE);
 CREATE TABLE IF NOT EXISTS onya_ident ( ident_pk BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, graph_pk BIGINT NOT NULL REFERENCES onya_graph(graph_pk) ON DELETE CASCADE, id TEXT NOT NULL, UNIQUE (graph_pk, id));
 CREATE TABLE IF NOT EXISTS onya_graph_prefix ( graph_pk BIGINT NOT NULL REFERENCES onya_graph(graph_pk) ON DELETE CASCADE, prefix TEXT NOT NULL, namespace TEXT NOT NULL, PRIMARY KEY (graph_pk, prefix));
+CREATE TABLE IF NOT EXISTS onya_graph_rev ( name TEXT PRIMARY KEY, rev BIGINT NOT NULL);
 CREATE TABLE IF NOT EXISTS onya_node ( node_pk BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, ident_pk BIGINT NOT NULL UNIQUE REFERENCES onya_ident(ident_pk) ON DELETE CASCADE);
 CREATE TABLE IF NOT EXISTS onya_node_type ( node_pk BIGINT NOT NULL REFERENCES onya_node(node_pk) ON DELETE CASCADE, type_iri TEXT NOT NULL, PRIMARY KEY (node_pk, type_iri));
 CREATE TABLE IF NOT EXISTS onya_assertion ( assertion_pk BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY, graph_pk BIGINT NOT NULL REFERENCES onya_graph(graph_pk) ON DELETE CASCADE, kind CHAR(1) NOT NULL CHECK (kind IN ('E','P')), origin_node BIGINT REFERENCES onya_node(node_pk) ON DELETE CASCADE, origin_assertion BIGINT REFERENCES onya_assertion(assertion_pk) ON DELETE CASCADE, label TEXT NOT NULL, target_ident BIGINT REFERENCES onya_ident(ident_pk), value TEXT, ident_pk BIGINT UNIQUE REFERENCES onya_ident(ident_pk), interp TEXT, skeleton_hash BYTEA NOT NULL, CHECK ((origin_node IS NULL) <> (origin_assertion IS NULL)), CHECK ((kind = 'E' AND target_ident IS NOT NULL AND value IS NULL)     OR (kind = 'P' AND value IS NOT NULL AND target_ident IS NULL)));

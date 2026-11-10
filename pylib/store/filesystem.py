@@ -39,7 +39,7 @@ from onya.util import namespace_for_curie
 from onya.query import DEFAULT_MIN_SCORE, normalize as query_normalize, search as query_search
 from onya.serial.literate import LITERATE_SUFFIXES, LiterateParser, write as literate_write
 from onya.store.exceptions import StoreError
-from onya.store.base import refuse_circum_derived
+from onya.store.base import combined_version, refuse_circum_derived
 
 # Deterministic slug: safe characters from the IRI, truncated, plus a short digest of the
 # full IRI so distinct IRIs that sanitize to the same prefix never collide. Deterministic so
@@ -269,6 +269,27 @@ class FileStore:
                 raise KeyError(name)
 
         await asyncio.to_thread(_drop)
+
+    # --- VersionedStore -------------------------------------------------------------
+
+    async def version(self, name: I | str) -> str:
+        '''The graph file's modification time (ns), size and inode. A write through the store changes it (every
+        write replaces the file, so the inode changes too); so does an edit to the file by hand, which is the
+        point of a file store. Two same-size writes inside one timestamp tick of a coarse filesystem that also
+        reuse an inode would look alike: the token is a cheap check, not a guarantee.'''
+        name = str(name)
+
+        def _stat() -> str:
+            path = self._existing_path(name)
+            if path is None:
+                raise KeyError(name)
+            st = path.stat()
+            return f'{st.st_mtime_ns}-{st.st_size}-{st.st_ino}'
+
+        return await asyncio.to_thread(_stat)
+
+    async def versions(self, names) -> str:
+        return await combined_version(self, names)
 
     async def names(self):
         def _scan() -> list[str]:

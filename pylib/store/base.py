@@ -94,6 +94,38 @@ class GraphStore(Protocol):
 
 
 @runtime_checkable
+class VersionedStore(Protocol):
+    '''
+    A change token for a named graph, so a cache in another process can ask "has it changed?" without fetching
+    it. ``version`` is **opaque**: compare two tokens for equality (different means the graph was written, or
+    dropped and made again, in between) and make no other use of one. It counts writes made *through the store*;
+    SQL run against the tables directly is not seen.
+    '''
+
+    async def version(self, name: I | str) -> str:
+        '''The graph's current token. ``KeyError`` if absent, as for ``get``.'''
+        ...
+
+    async def versions(self, names: Sequence[I | str]) -> str:
+        '''One token for the graphs ``names`` together (an overlay's authored and runtime graphs). Unlike
+        ``version`` it accepts a name with no graph yet, and the token changes when that graph appears.'''
+        ...
+
+
+async def combined_version(store, names: Sequence[I | str]) -> str:
+    '''``VersionedStore.versions`` for any store with ``version``: a digest of each name's token, or of its absence.'''
+    import hashlib
+
+    parts = []
+    for name in sorted({str(n) for n in names}):
+        try:
+            parts.append((name, await store.version(name)))
+        except KeyError:
+            parts.append((name, None))
+    return hashlib.sha256(repr(parts).encode()).hexdigest()[:16]
+
+
+@runtime_checkable
 class AssertionStore(Protocol):
     '''
     Fine-grained access without materializing the whole graph. ``match`` mirrors

@@ -33,7 +33,7 @@ from onya.graph import GraphMergeError, edge, graph, warn_prefix_clashes
 from onya.util import namespace_for_curie
 from onya.query import DEFAULT_MIN_SCORE, SearchHit, normalize as query_normalize, rank, score_candidates
 from onya.store import _relational as rel
-from onya.store.base import refuse_circum_derived
+from onya.store.base import combined_version, refuse_circum_derived
 from onya.store._relational import (
     POSTGRES, SCHEMA_VERSION, SKELETON_HASH_VERSION, classify_anonymous, ddl_statements,
     iter_records, skeleton_hash,
@@ -150,6 +150,20 @@ class PostgresStore:
             if gpk is None:
                 raise KeyError(str(name))
             await conn.execute('DELETE FROM onya_graph WHERE graph_pk = $1', gpk)
+            await conn.execute(rel.bump_rev_sql('$1'), str(name))  # outlives the graph: see onya_graph_rev
+
+    # --- VersionedStore -------------------------------------------------------------
+
+    async def version(self, name: I | str) -> str:
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow('SELECT r.rev FROM onya_graph g LEFT JOIN onya_graph_rev r ON r.name = g.name'
+                                      ' WHERE g.name = $1', str(name))
+        if row is None:
+            raise KeyError(str(name))
+        return str(row['rev'] or 0)  # stored before revisions were kept: 0 until it is written
+
+    async def versions(self, names) -> str:
+        return await combined_version(self, names)
 
     async def names(self):
         async with self._pool.acquire() as conn:
@@ -284,6 +298,7 @@ class PostgresStore:
                 await _add_one(conn, str(name), str(origin), str(label), str(target_or_value),
                                kind=kind, interp=None if interp is None else str(interp),
                                id_=None if id_ is None else str(id_))
+                await conn.execute(rel.bump_rev_sql('$1'), str(name))
 
     async def remove(self, name, origin, label, target_or_value, *, kind) -> None:
         payload = str(target_or_value)
@@ -292,9 +307,11 @@ class PostgresStore:
             gpk = await _graph_pk(conn, str(name))
             if gpk is None:
                 return
-            await conn.execute(
-                'DELETE FROM onya_assertion WHERE graph_pk = $1 AND skeleton_hash = $2'
-                ' AND ident_pk IS NULL', gpk, sk)
+            async with conn.transaction():
+                await conn.execute(
+                    'DELETE FROM onya_assertion WHERE graph_pk = $1 AND skeleton_hash = $2'
+                    ' AND ident_pk IS NULL', gpk, sk)
+                await conn.execute(rel.bump_rev_sql('$1'), str(name))
 
 
     # --- SearchStore ------------------------------------------------------------------
@@ -733,6 +750,7 @@ async def _write_graph(conn, name: str, g, *, merge: bool) -> list:
             if apk is not None:
                 pk_by_obj[id(rec.obj)] = apk
 
+    await conn.execute(rel.bump_rev_sql('$1'), name)
     return await _write_prefixes(conn, gpk, getattr(g, 'prefixes', None))
 
 
