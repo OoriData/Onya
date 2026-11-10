@@ -89,3 +89,23 @@ def test_sync_facade_assertion_and_overlay_capabilities(tmp_path):
 
         g, conflicts = store.overlay([NAME, 'http://e.o/doc2'])
         assert conflicts == []   # no cardinality hints -> reduces to union() behavior
+
+
+async def test_options_reach_the_backend_that_takes_them(monkeypatch):
+    seen = {}
+
+    class Takes:
+        @classmethod
+        async def from_url(cls, url, **options):
+            seen.update(url=url, **options)
+            return 'store'
+
+    monkeypatch.setattr('onya.store._resolve_backend', lambda scheme: Takes)
+    assert await connect('postgresql://h/db', max_size=3) == 'store'
+    assert seen == {'url': 'postgresql://h/db', 'max_size': 3}
+
+
+async def test_a_backend_with_no_options_refuses_them(tmp_path):
+    for url in (f'sqlite:{tmp_path}/a.db', f'file:{tmp_path}/g'):
+        with pytest.raises(ValueError, match='takes no options'):
+            await connect(url, max_size=3)

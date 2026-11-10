@@ -75,3 +75,36 @@ async def test_pgq_friend_of_friend():
             'http://e.o/A', KNOWS)
         assert {r[0] for r in rows} == {'http://e.o/C'}   # A knows B knows C
         await store._reset_for_tests()
+
+
+@pytest.mark.skipif(not PG_DSN, reason='set ONYA_TEST_PG_DSN to run PostgreSQL tests')
+async def test_from_pool_leaves_the_callers_pool_open_and_finds_search():
+    asyncpg = pytest.importorskip('asyncpg')
+    from onya.store.postgres import PostgresStore
+    pool = await asyncpg.create_pool(PG_DSN, min_size=1, max_size=2)
+    try:
+        async with await PostgresStore.from_pool(pool) as store:
+            assert store.has_trgm  # the same bootstrap connect() does
+            await store.put(GNAME, parse(FRIENDS))
+            assert len([n async for n in store.names()]) >= 1
+            await store._reset_for_tests()
+        assert await pool.fetchval('SELECT 1') == 1  # closing the store did not close the caller's pool
+    finally:
+        await pool.close()
+
+
+@pytest.mark.skipif(not PG_DSN, reason='set ONYA_TEST_PG_DSN to run PostgreSQL tests')
+async def test_from_pool_can_hand_the_pool_over():
+    asyncpg = pytest.importorskip('asyncpg')
+    from onya.store.postgres import PostgresStore
+    pool = await asyncpg.create_pool(PG_DSN, min_size=1, max_size=2)
+    async with await PostgresStore.from_pool(pool, owns_pool=True):
+        pass
+    with pytest.raises(asyncpg.InterfaceError):  # closed with the store
+        await pool.fetchval('SELECT 1')
+
+
+@pytest.mark.skipif(not PG_DSN, reason='set ONYA_TEST_PG_DSN to run PostgreSQL tests')
+async def test_connect_passes_pool_options_to_asyncpg():
+    async with await connect(PG_DSN, max_size=3) as store:  # min_size follows, as asyncpg's own default would not
+        assert store._pool.get_max_size() == 3

@@ -6,6 +6,13 @@ For interim changes not yet earmarked for a particular release, can use this hea
 ## [Unreleased]
 -->
 
+## [0.6.2] 2026-11-10: `PostgresStore.from_pool`, and a way to size the pool.
+
+### Added
+
+- **`PostgresStore.from_pool(pool, *, ensure=True, owns_pool=False)`** (#76). A store on an asyncpg pool the caller made, for when `connect` can't build the pool (a size a session-mode pooler allows, the caller's own `init` or `ssl` settings). It does the same bootstrap as `connect`, so `has_trgm` is set and PostgreSQL 19 gets its `GraphQueryStore` where the server has SQL/PGQ, which an application no longer has to reach into the private `_ensure_*` functions for. The caller keeps the pool: closing the store leaves it open unless `owns_pool=True`. `ensure=False` creates nothing, for a role with data privileges on a schema someone else provisioned: it checks the core tables and schema version (`StoreError` names what is missing, `UnknownSchemaVersion` a mismatch) and detects search and SQL/PGQ support.
+- **`connect(url, **options)` passes backend options** (#76). For `postgresql://` they are `asyncpg.create_pool` options, so `connect(url, max_size=3)` keeps a pool under a pooler's connection cap; `min_size` follows `max_size` when only that is given (asyncpg's default `min_size` of 10 would otherwise refuse it). The blocking `onya.store.sync.connect` takes them too. `file:` and `sqlite:` have no options and raise `ValueError` if given any.
+
 ## [0.6.1] 2026-11-07: Resolvers and writers derived from a projection
 
 ### Added

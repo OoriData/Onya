@@ -389,6 +389,17 @@ async with await connect('sqlite:app.db') as store: ...
 async with await connect('postgresql://u:p@host/db') as store: ...
 ```
 
+`connect` passes keyword options to the backend. For PostgreSQL they are
+`asyncpg.create_pool` options, so `connect(url, max_size=3)` keeps a pool under
+a session-mode pooler's connection cap (`min_size` follows `max_size` when only
+that is given). When the application already has a pool, or needs one `connect`
+can't build, `PostgresStore.from_pool(pool)` makes a store on it, with the same
+bootstrap; the caller keeps the pool (closing the store leaves it open, unless
+`owns_pool=True`). `from_pool(pool, ensure=False)` creates nothing, for a role
+with data privileges on a schema someone else provisioned: it checks the core
+tables and schema version (a `StoreError` names what is missing) and detects
+search and SQL/PGQ support.
+
 The Postgres backend probes `server_version` at connect time; on ≥ 19 it tries
 to install the property graph definitions, and if the server accepts them the
 store instance additionally satisfies `GraphQueryStore`. If it can't (no

@@ -90,11 +90,15 @@ def _resolve_backend(scheme: str):
     return getattr(importlib.import_module(module_name), attr)
 
 
-async def connect(url: str) -> GraphStore:
+async def connect(url: str, **options) -> GraphStore:
     '''
     Open a store for ``url``, dispatching on its scheme. Backends are loaded lazily, so the
     (extras-gated) PostgreSQL driver is imported only for a ``postgresql://`` URL. An
     unknown scheme raises ``ValueError`` naming the schemes this build knows.
+
+    ``options`` go to the backend: for ``postgresql://`` they are ``asyncpg.create_pool`` options
+    (``min_size``, ``max_size``, ...), e.g. ``max_size=3`` behind a pooler that caps connections. A backend
+    with no options (``file:``, ``sqlite:``) raises ``ValueError`` for any.
 
     The returned store is already open; use it as an async context manager to close it::
 
@@ -106,4 +110,12 @@ async def connect(url: str) -> GraphStore:
     if cls is None:
         known = sorted(set(_BUILTIN_BACKENDS) | set(_entry_point_backends()))
         raise ValueError(f'Unknown store URL scheme {scheme!r}; known schemes: {known}')
-    return await cls.from_url(url)
+    if options and not _takes_options(cls.from_url):
+        raise ValueError(f'The {scheme!r} store takes no options, got {sorted(options)}')
+    return await cls.from_url(url, **options)
+
+
+def _takes_options(from_url) -> bool:
+    '''Does a backend's ``from_url`` accept keyword options beyond the URL?'''
+    import inspect
+    return any(p.kind is p.VAR_KEYWORD for p in inspect.signature(from_url).parameters.values())

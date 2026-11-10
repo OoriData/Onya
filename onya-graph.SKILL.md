@@ -397,6 +397,7 @@ r = read(open('classics/things-fall-apart.onya'))
 async def save():
     # file: (one .onya file per graph — the default, doubles as the testing fake)
     # sqlite: (stdlib, zero extra deps) | postgresql:// (pip install "onya[postgres]")
+    # PostgreSQL behind a pooler: connect(url, max_size=3); an existing asyncpg pool: PostgresStore.from_pool(pool)
     async with await connect('sqlite:kb.db') as store:
         await store.put(r.doc_iri, r.graph)      # merge=True: unions with any stored graph
         again = await store.get(r.doc_iri)

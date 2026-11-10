@@ -125,9 +125,9 @@ class SyncStore:
 
 
 @contextmanager
-def connect(url: str):
-    '''Open ``url`` and yield a blocking ``SyncStore``, closing it on exit.'''
-    store = asyncio.run(_async_connect(url))
+def connect(url: str, **options):
+    '''Open ``url`` (with the backend ``options`` ``onya.store.connect`` takes) and yield a blocking ``SyncStore``.'''
+    store = asyncio.run(_async_connect(url, **options))
     asyncio.run(store.__aenter__())
     try:
         yield SyncStore(store)

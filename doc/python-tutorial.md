@@ -525,6 +525,9 @@ hatch:
 ```python
 from onya.store import GraphQueryStore
 
+# connect(url, max_size=3) passes pool options to asyncpg (behind a pooler with a connection cap).
+# Already have an asyncpg pool? `await PostgresStore.from_pool(pool)` (from onya.store.postgres) makes a store
+# on it and leaves the pool yours; `ensure=False` creates nothing, for a role with data privileges only.
 async def pg_demo():
     async with await connect('postgresql://user:pass@localhost/onya') as store:
         await store.put(name, graph)
