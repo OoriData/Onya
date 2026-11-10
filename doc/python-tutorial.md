@@ -228,6 +228,16 @@ r.results    # {Path: ParseResult}: each file's own doc IRI, prefixes and nodeba
 
 A spec that matches nothing raises `FileNotFoundError` instead of silently reading nothing, and a parse error names its file. `onya convert` expands directories the same way.
 
+Each `@document` also becomes a node typed `onya:Document` in the graph (as does one read back from a store). When that node is just bookkeeping, for instance in an export you are about to apply to another graph, remove them:
+
+```python
+from onya.graph import drop_document_nodes
+
+drop_document_nodes(r.graph)      # [I('http://e.o/doc1'), ...]: the ids removed
+```
+
+A document node that carries real assertions (metadata written on the docheader), or that an edge points at, is left in place and is absent from the returned list; `force=True` removes it anyway. The digest ignores these nodes, so it is the same either way.
+
 ### Catching typo'd edge targets
 
 An edge to an id that has no node block of its own still parses: Onya Literate allows forward references, and external resources such as an ORCID URL are normal. But a typo (`-> public.unrestriced`) fails the same way, quietly, by minting an empty node. Onya tells the two cases apart by recording which nodes were *declared* (given a block, a type or an assertion, or created with `graph.node()`) and which exist only because an edge named them:

@@ -29,7 +29,7 @@ from amara.iri import I
 
 from onya import ONYA_BASEIRI
 from onya.locations import Location, Locations
-from onya.terms import ONYA_ASSERTION
+from onya.terms import ONYA_ASSERTION, ONYA_DOCUMENT
 from onya.util import join_namespace, namespace_for_curie
 
 
@@ -1089,3 +1089,38 @@ class graph(MutableMapping):
             else:
                 target = a.value
             yield (a.origin.id, a.label, target, annotations)
+
+
+def drop_document_nodes(g: graph, *, force: bool = False) -> list:
+    '''
+    Remove the `onya:Document` nodes a read mints for each `@document`: the ones that are *only* that, with no
+    other type, no properties or edges of their own, and no edge pointing at them (removing one would leave that
+    edge's target undeclared). Edits `g` in place (`g.copy()` first for a dry run) and returns the ids it removed,
+    in graph order. (An `@source` assertion from `document_source_assertions=True` holds the document's IRI as a
+    value, not an edge, so it does not keep the node.)
+
+    A document node that carries real assertions (anything written on the docheader besides the directives), or that
+    is pointed at, stays, and is missing from the returned list, so what was asked for and what happened can be
+    compared. `force=True` removes every `onya:Document` node regardless; a node that edges point at is then left
+    as an undeclared stub, as for any undescribed target, so those edges stay valid and `g.dangling()` reports it.
+
+    Works on any graph, not just one from `read`: a graph read back from a store has its document nodes too. The
+    content digest leaves `onya:Document` nodes out already, so removing them never changes it.
+    '''
+    docs = [(nid, n) for nid, n in g.nodes.items() if ONYA_DOCUMENT in n.types]
+    # Decide first, then delete: every deletion invalidates the reverse index `inbound` reads, so deciding as we go
+    # would rebuild it once per document node (a `read_many` over a large directory has one per file).
+    gone = [nid for nid, n in docs
+            if force or (set(n.types) == {ONYA_DOCUMENT} and not n.properties and not n.edges
+                         and next(g.inbound(nid), None) is None)]
+    pointed = {nid for nid in gone if next(g.inbound(nid), None) is not None}
+    for nid in gone:
+        if nid not in pointed:
+            del g[nid]
+            continue
+        n = g.nodes[nid]  # edges still aim at this node: keep it, as the undeclared stub an undescribed target is
+        n.types.clear()
+        for a in (*n.properties, *n.edges):
+            n.remove_property(a) if hasattr(a, 'value') else n.remove_edge(a)
+        n._stub = True
+    return gone

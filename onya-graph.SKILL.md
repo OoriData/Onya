@@ -33,6 +33,7 @@ Before inventing a convention for something below, check for the built-in. Each 
 | Show a node to people | **Views**: declarative specs, no per-type renderers | `onya.view` |
 | Persist across sessions; combine named graphs | **Stores** (file, SQLite, PostgreSQL), `union` and `overlay` | `onya.store`; [design-persistence-architecture](https://github.com/OoriData/Onya/blob/main/doc/design-persistence-architecture.md) |
 | Diagrams and analytics | Mermaid, Graphviz, networkx | `onya.viz`, `onya convert` |
+| Remove the `onya:Document` bookkeeping nodes a read (or a store) leaves in a graph | `onya.graph.drop_document_nodes(g)` | `onya.graph` |
 | Catch typos and find the offending line | Dangling-edge check, `unknown_reserved_terms`, `track_locations` | `onya.terms`, `onya.locations`; see *Validate by parsing* |
 
 Rules of thumb: constraints go in shapes, not prose or a bespoke checker. Typed values use `@as`, not a typed model. Dated or sourced claims use provenance sub-assertions, not compound labels. Volume goes to a sidecar. When a feature is core to the task, read its design doc first.
