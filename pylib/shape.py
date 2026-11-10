@@ -211,21 +211,32 @@ def _count(found) -> int:
 
 
 def validate(g, shapes=None, *, registry: InterpretationRegistry = DEFAULT, dangling: bool = False,
-             allow=None) -> Report:
+             allow=None, against=None) -> Report:
     '''
     Check `g` against shapes and return a `Report`. Never raises for a finding, never changes `g`.
 
-    shapes -- where the declarations are: a graph, a `Shapes`, or None for `g` itself. Nodes typed
-        `@Class` / `@Property` / `@Document` are declarations, not data, and are not themselves checked.
+    shapes -- where the declarations are: a graph, a `Shapes`, or None for `g` itself (or for `against`, when
+        given). Nodes typed `@Class` / `@Property` / `@Document` are declarations, not data, and are not
+        themselves checked.
     registry -- the interpretations that `@as` is honored with (default: the Lightweight Types)
     dangling, allow -- also report edge targets nothing declares, except those `allow` permits
         (an IRI prefix, a list of them, or a predicate; see `graph.dangling`)
+    against -- a base graph, making `g` a **fragment** (a proposed change) to check as if it were merged into
+        the base: a target resolves to its type in the base, and cardinality counts what the base already holds
+        for a node the fragment adds to. Only findings on the nodes the fragment names are reported, so the base's
+        own problems elsewhere never surface. The work is bounded by the fragment, not the base: only the nodes
+        the fragment names and their neighbors are copied. A fragment that cannot merge into the base (the same
+        assertion `@id` with a different content) raises `GraphMergeError`, as a `put` would. Pass a loaded
+        `Shapes` when checking many fragments, so the base's declarations are read once. Locations are those of
+        the merged copy, so a finding names no line.
 
     Checks node-level assertions against their property's declaration (`@appliesTo`, `@range`,
     `@cardinality`, `@oneOf`, `@as`, `@ordered`) and, for classes marked `@closed: true`, unknown
     labels. Every assertion's own `@as` is checked at every depth. Reserved `@` terms that nothing
     defines (a typo like `@Calss`) are reported as warnings.
     '''
+    if against is not None:
+        return _validate_fragment(g, against, shapes, registry, dangling, allow)
     sh = shapes if isinstance(shapes, Shapes) else load_shapes(g if shapes is None else shapes)
     out: list = list(sh.problems)
     src = g if shapes is None else shapes
@@ -317,6 +328,70 @@ def validate(g, shapes=None, *, registry: InterpretationRegistry = DEFAULT, dang
                 if hasattr(e.target, 'types') and e.target.id in missing:
                     add('error', 'dangling', n, e.label, f'target {e.target.id} is referenced but never declared', e)
     return Report(out)
+
+
+def _fragment_roots(fragment) -> set:
+    '''The nodes whose base content matters: the ones the fragment names, and the targets of its edges (their types).'''
+    return set(fragment.nodes) | {e.target.id for n in fragment.nodes.values() for e in n.edges
+                                  if hasattr(e.target, 'types')}
+
+
+def _validate_fragment(fragment, base, shapes, registry, dangling, allow) -> Report:
+    '''`validate(fragment, against=base)`: the fragment merged into what the base holds about the nodes it touches.'''
+    sh = shapes if isinstance(shapes, Shapes) else load_shapes(base if shapes is None else shapes)
+    named = {str(nid) for nid in fragment.nodes}
+    work = base.subgraph(_fragment_roots(fragment))  # one hop: the touched nodes' own edges find their targets' types
+    work.union(fragment.copy())
+    report = validate(work, sh, registry=registry, dangling=dangling, allow=allow)
+    return Report([f for f in report.findings if str(f.node) in named])
+
+
+async def validate_against_store(fragment, store, names, *, shapes=None, registry: InterpretationRegistry = DEFAULT,
+                                 dangling: bool = False, allow=None) -> Report:
+    '''
+    `validate(fragment, against=base)` for a base held in a store, which is read only where the fragment touches it.
+
+    names -- the stored graph, or several (an authored and a runtime graph): their union is the base. A name with
+        no graph yet is skipped, so a runtime graph that does not exist is not an error.
+    shapes -- a graph or `Shapes`, else the declarations stored in `names` (read as just the `@Class` and `@Property`
+        nodes, not the whole graph). Pass a loaded `Shapes` when checking many fragments.
+
+    A store with `subgraph` (SQLite, PostgreSQL) hands back only the neighborhood the fragment needs. One without
+    (the file store) has to read the whole of each named graph: still correct, just not bounded by the fragment.
+    Everything else, including what is and is not reported, is as for `validate(..., against=)`.
+    '''
+    from onya.graph import graph
+    from onya.store import AssertionStore, OverlayReadStore, SearchStore
+
+    asked = [str(names)] if isinstance(names, (str, I)) else [str(n) for n in names]
+    held = {str(n) async for n in store.names()}
+    present = [n for n in asked if n in held]
+    if not present:
+        base = graph()  # nothing stored yet: the fragment stands alone
+    elif not isinstance(store, AssertionStore):
+        base = await store.get(present[0])
+        for n in present[1:]:
+            base.union(await store.get(n))
+    else:
+        roots = _fragment_roots(fragment)
+        if shapes is None:  # the declarations only: they are few, and the base is not
+            if not isinstance(store, SearchStore):
+                raise ValueError('this store cannot list its @Class and @Property nodes: pass shapes=')
+            decl = {str(i) for n in present for t in (ONYA_CLASS, ONYA_PROPERTY)
+                    async for i in store.nodes_by_type(n, t)}
+            shapes = load_shapes(await _stored_neighborhood(store, present, decl, 0, OverlayReadStore))
+        base = await _stored_neighborhood(store, present, roots, 1, OverlayReadStore)
+    return _validate_fragment(fragment, base, shapes, registry, dangling, allow)
+
+
+async def _stored_neighborhood(store, names, roots, hops, overlay_cls):
+    '''`roots` and their neighbors out of the stored graph `names`, as one in-memory graph.'''
+    if len(names) > 1 and isinstance(store, overlay_cls):
+        return await store.subgraph_across(names, set(roots), hops)
+    g = await store.subgraph(names[0], set(roots), hops)
+    for n in names[1:]:  # several graphs on a store that cannot read across them
+        g.union(await store.subgraph(n, set(roots), hops))
+    return g
 
 
 def _check_value(sh, registry, p, n, a, add) -> None:

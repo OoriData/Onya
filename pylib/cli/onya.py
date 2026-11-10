@@ -198,6 +198,9 @@ def validate(filespec: str,
              strict: bool = False,
              dangling: bool = False,
              allow: str | list | tuple | None = None,
+             against: str | None = None,
+             store: str | None = None,
+             graph: str | list | tuple | None = None,
              encoding: str = 'utf-8'):
     '''
     Check Onya Literate input against its shapes (see doc/design-shapes.md) and print the findings.
@@ -208,6 +211,12 @@ def validate(filespec: str,
         strict: Fail on warnings too (a typo'd `@term`, a `@severity: warning` shape).
         dangling: Also report edge targets that no node block declares.
         allow: Targets that may stay undeclared: an IRI prefix, or several separated by commas.
+        against: Treat the input as a proposed change (a fragment) and check it as if merged into this base, a
+            filespec. Only findings on the nodes the input names are reported; shapes come from the base unless
+            --shapes is given.
+        store: Like --against, with the base held in this store URL (`sqlite:app.db`, `postgresql://...`); needs
+            --graph. Only the part of the stored graph the input touches is read.
+        graph: With --store, the stored graph name, or several separated by commas (their union is the base).
         encoding: Text encoding used to read input files (ignored for stdin).
 
     Exit status: 0 if clean, 2 if there are error findings (or warnings, with --strict), or on a
@@ -216,13 +225,30 @@ def validate(filespec: str,
     Examples:
         onya validate kg/
         onya validate kg/ --shapes=shapes/ --dangling --allow=https://orcid.org/ --strict
+        onya validate proposed.onya --against=kg/
+        onya validate proposed.onya --store=sqlite:kg.db --graph=http://example.org/kg
     '''
-    from onya.shape import load_shapes, validate as check
+    from onya.shape import load_shapes, validate as check, validate_against_store
 
+    if against and store:
+        raise SystemExit('Pass --against (a filespec) or --store (with --graph), not both.')
+    if store and not graph:
+        raise SystemExit('--store needs --graph: the name of the stored graph (or several, separated by commas).')
     g = _load(filespec, encoding)
     if isinstance(allow, str):
         allow = [a.strip() for a in allow.split(',') if a.strip()]
-    report = check(g, load_shapes(_load(shapes, encoding)) if shapes else None, dangling=dangling, allow=allow)
+    sh = load_shapes(_load(shapes, encoding)) if shapes else None
+    if store:
+        names = [x.strip() for x in graph.split(',')] if isinstance(graph, str) else list(graph)
+
+        async def run():
+            from onya.store import connect
+            async with await connect(store) as st:
+                return await validate_against_store(g, st, names, shapes=sh, dangling=dangling, allow=allow)
+        import asyncio
+        report = asyncio.run(run())
+    else:
+        report = check(g, sh, dangling=dangling, allow=allow, against=_load(against, encoding) if against else None)
     for f in report.findings:
         print(f)
     failed = report.findings if strict else report.errors

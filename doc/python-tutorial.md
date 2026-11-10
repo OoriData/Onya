@@ -321,6 +321,7 @@ Declare classes and properties as nodes (a declaration's id is the class or labe
 from onya.shape import validate
 
 report = validate(g)               # shapes in g itself; or validate(g, shapes=shapes_graph)
+report = validate(fragment, against=base)   # a proposed change, checked as if merged into base (see below)
 for f in report.findings:
     print(f.severity, f.kind, f.node, f.label, f.detail, f.location)   # e.g. one_of ... 'dormant' is not one of [...]
 report.ok, report.errors, report.warnings
@@ -331,6 +332,15 @@ Findings cover `applies_to`, `cardinality` (`1`, `0..1`, `1..*`, `0..*`, `n..m`)
 ```
 onya validate kg/ --shapes=shapes/ --dangling --allow=https://orcid.org/ --strict
 ```
+
+To check a **proposed change** (a few nodes, with no declarations and none of the nodes they point at), pass the graph it would join as `against`. Types and cardinality then resolve through the base, and only the findings on the fragment's own nodes come back:
+
+```python
+frag = read('# ify [Person]\n* knows -> chuks\n', ...).graph       # alone: `chuks` looks untyped
+report = validate(frag, against=base)                              # chuks is a Student in base: no finding
+```
+
+When the base lives in a store, `await validate_against_store(frag, store, name)` (from `onya.shape`) reads only the part of it the fragment touches, and `onya validate proposed.onya --against=kg/` (or `--store=sqlite:kg.db --graph=NAME`) does the same from the command line.
 
 Exit status is 2 on errors (warnings too with `--strict`). The vocabulary, rules, and a mapping to SHACL are in [doc/design-shapes.md](https://github.com/OoriData/Onya/blob/main/doc/design-shapes.md).
 

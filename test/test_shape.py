@@ -10,7 +10,8 @@ import copy
 
 import pytest
 
-from onya.graph import graph
+from onya.digest import digest
+from onya.graph import GraphMergeError, graph
 from onya.serial.literate import read, write
 from onya.shape import Shapes, load_shapes, parse_cardinality, validate
 from onya.terms import RESERVED
@@ -310,3 +311,136 @@ def test_cli_validate_strict_and_separate_shapes(tmp_path, capsys):
     with pytest.raises(SystemExit) as e:
         cli_validate(str(data), shapes=str(shapes), strict=True)
     assert e.value.code == 2
+
+
+# --- validate(fragment, against=base): a proposed change, checked as if merged into the base -----------------------
+
+BASE = SHAPES + '''
+# acme [Org]
+
+# chuks [Student]
+* name: Chuks
+* status: active
+
+# adat [Person]
+* name: Adat
+
+# nameless [Person]
+'''  # `nameless` breaks `name`'s cardinality 1: the base's own problem
+
+
+def _base():
+    return _g(BASE)
+
+
+def test_a_fragment_alone_cannot_see_the_types_of_the_base_but_against_resolves_them():
+    frag = _g('# ify [Person]\n* name: Ify\n* knows -> chuks\n')
+    alone = validate(frag, shapes=_base())
+    assert ('range', 'http://e.o/ify') in {(f.kind, str(f.node)) for f in alone.findings}  # chuks looks untyped
+    assert validate(frag, against=_base()).findings == []  # chuks is a Student, a Person, in the base
+
+
+def test_against_still_reports_a_target_of_the_wrong_type_in_the_base():
+    frag = _g('# ify [Person]\n* name: Ify\n* knows -> acme\n')
+    [f] = validate(frag, against=_base()).findings
+    assert (f.kind, str(f.node)) == ('range', 'http://e.o/ify') and 'acme' in f.detail
+
+
+def test_against_counts_what_the_base_already_holds_for_a_node_the_fragment_adds_to():
+    frag = _g('# chuks [Student]\n* name: Chukwuemeka\n')  # a second name for a cardinality-1 property
+    [f] = validate(frag, against=_base()).findings
+    assert (f.kind, str(f.node), f.detail) == ('cardinality', 'http://e.o/chuks', 'has 2, declared 1')
+    alone = validate(frag, shapes=_base())  # alone, the fragment misses the Student's `status` the base holds
+    assert 'http://e.o/status' in {str(f.label) for f in alone.findings}
+    assert 'http://e.o/status' not in {str(f.label) for f in validate(frag, against=_base()).findings}
+
+
+def test_the_bases_own_problems_are_not_reported():
+    assert [str(f.node) for f in validate(_base()).findings] == ['http://e.o/nameless']  # it is there to be seen
+    frag = _g('# ify [Person]\n* name: Ify\n')
+    assert validate(frag, against=_base()).findings == []  # but the fragment never touched it
+    touched = _g('# nameless [Person]\n* jobTitle: nobody\n')
+    assert [str(f.node) for f in validate(touched, against=_base()).findings] == ['http://e.o/nameless']
+
+
+def test_against_takes_its_shapes_from_the_base_and_applies_them_to_new_nodes():
+    frag = _g('# widget [Org]\n* name: Widget\n')  # `name` is for Person; the fragment declares nothing
+    assert {f.kind for f in validate(frag, against=_base()).findings} == {'applies_to'}
+
+
+def test_against_changes_neither_graph():
+    base, frag = _base(), _g('# chuks [Student]\n* name: Chukwuemeka\n* knows -> adat\n')
+    before = (digest(base), digest(frag))
+    validate(frag, against=base)
+    assert (digest(base), digest(frag)) == before
+
+
+def test_against_with_dangling_resolves_targets_through_the_base():
+    frag = _g('# ify [Person]\n* name: Ify\n* knows -> adat\n* knows -> nobody\n')
+    found = validate(frag, against=_base(), dangling=True).findings
+    assert [(f.kind, f.detail.split()[1]) for f in found if f.kind == 'dangling'] == [('dangling', 'http://e.o/nobody')]
+
+
+def test_the_work_is_bounded_by_the_fragment_not_the_base(monkeypatch):
+    big = _g(BASE + ''.join(f'\n# p{i} [Person]\n* name: P{i}\n' for i in range(500)))
+    sizes = []
+    real = type(big).subgraph
+
+    def spy(self, roots, hops=1):
+        out = real(self, roots, hops)
+        sizes.append(len(out.nodes))
+        return out
+
+    monkeypatch.setattr(type(big), 'subgraph', spy)
+    assert validate(_g('# ify [Person]\n* name: Ify\n* knows -> adat\n'), against=big).findings == []
+    assert sizes and max(sizes) < 10  # not the 500
+
+
+def test_a_fragment_that_cannot_merge_into_the_base_raises_as_a_put_would():
+    base = _g(BASE, '\n# a [Person]\n* name: A\n* age: 28 [=p1]\n')
+    frag = _g('# a [Person]\n* age: 29 [=p1]\n')  # the same assertion id, different content
+    with pytest.raises(GraphMergeError):
+        validate(frag, against=base)
+
+
+def test_a_broken_neighbor_of_a_touched_node_is_copied_in_but_not_reported():
+    '''The one-hop copy brings `nameless` along (it is adat's friend); the report must still leave it out.'''
+    base = _g(BASE.replace('* name: Adat\n', '* name: Adat\n* knows -> nameless\n'))
+    frag = _g('# ify [Person]\n* name: Ify\n* knows -> adat\n')
+    assert [str(f.node) for f in validate(base).findings] == ['http://e.o/nameless']
+    assert validate(frag, against=base).findings == []
+
+
+def test_cli_validate_a_fragment_against_a_base(tmp_path, capsys):
+    from onya.cli.onya import validate as cli_validate
+    base = tmp_path / 'base'
+    base.mkdir()
+    (base / 'kg.onya').write_text(HEAD + BASE)
+    ok, bad = tmp_path / 'ok.onya', tmp_path / 'bad.onya'
+    ok.write_text(HEAD + '\n# ify [Person]\n* name: Ify\n* knows -> chuks\n')
+    bad.write_text(HEAD + '\n# ify [Person]\n* name: Ify\n* knows -> acme\n')
+    cli_validate(str(ok), against=str(base))  # chuks resolves through the base; its `nameless` is not reported
+    with pytest.raises(SystemExit) as e:
+        cli_validate(str(bad), against=str(base))
+    assert e.value.code == 2
+    assert 'acme' in capsys.readouterr().out
+
+
+def test_cli_validate_a_fragment_against_a_store(tmp_path, capsys):
+    import asyncio
+
+    from onya.cli.onya import validate as cli_validate
+    from onya.store import connect
+
+    async def seed():
+        async with await connect(f'sqlite:{tmp_path}/kg.db') as st:
+            await st.put('http://e.o/doc', _g(BASE))
+    asyncio.run(seed())
+    ok, bad = tmp_path / 'ok.onya', tmp_path / 'bad.onya'
+    ok.write_text(HEAD + '\n# ify [Person]\n* name: Ify\n* knows -> chuks\n')
+    bad.write_text(HEAD + '\n# ify [Person]\n* name: Ify\n* knows -> acme\n')
+    cli_validate(str(ok), store=f'sqlite:{tmp_path}/kg.db', graph='http://e.o/doc')
+    with pytest.raises(SystemExit):
+        cli_validate(str(bad), store=f'sqlite:{tmp_path}/kg.db', graph='http://e.o/doc')
+    with pytest.raises(SystemExit, match='--graph'):
+        cli_validate(str(ok), store=f'sqlite:{tmp_path}/kg.db')
