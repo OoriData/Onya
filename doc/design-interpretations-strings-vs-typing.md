@@ -20,11 +20,11 @@ This is closer to how contracts work in the Eiffel programming language traditio
 We call this architecture **data contract layers**. The foundation — the graph itself — is unconditionally valid: every value is a string, and every string is welcome. Above it, an author may attach a *contract*: a recorded promise about how a value is meant to be read. Contracts are honored at boundaries, where a consumer chooses to check or convert; they are never enforced ambiently by the
 foundation. In Onya, a single named contract is called an **interpretation**, and the literate syntax that attaches one is `@as`.
 
-A note for readers arriving from data engineering, where "data contract" often also covers shape (required fields), ownership, and service guarantees: this layer is the *value-level* slice of that idea, and only that slice. Shape-level contracts would be a further layer, building on this one.
+A note for readers arriving from data engineering, where "data contract" often also covers shape (required fields), ownership, and service guarantees: this layer is the *value-level* slice of that idea, and only that slice. Shape-level contracts are a further layer, building on this one (see [design-shapes.md](design-shapes.md)).
 
 ## What any solution must provide
 
-1. **One agreed place to put the hint.** The core model reserves exactly one built-in marker (working name: `@interp`, a nested directive like `@id`) whose value names an interpretation. One marker, so tools can find it; only one, so the core stays minimal.
+1. **One agreed place to put the hint.** The core model reserves exactly one built-in marker (in the syntax, `@as`, a nested directive like `@id`) whose value names an interpretation. One marker, so tools can find it; only one, so the core stays minimal.
 2. **Interpretations are named by IRIs**, like everything else in Onya. Anyone can mint one; common ones get shared, dereferenced, documented.
 3. **Unknown interpretations are not errors at Onya level.** A graph using an interpretation your software has never heard of parses fine, merges fine, round-trips fine. The hint travels with the data untouched.
 4. **A small standard starter set** — the "Onya Lightweight Types" plugin — covering the cases nearly everyone hits: number, date/time, boolean, IRI-valued string, language-tagged text. Deliberately modest. It exists so that ninety percent of users never need to invent anything.

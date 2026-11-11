@@ -71,7 +71,7 @@ The accessor decides, not the docheader. The graph does not remember which label
                    * @ordering: 5
 ```
 
-the claims have the same skeleton, so they merge into one assertion that carries both stamps. Nothing is lost and nothing is decided. `ordered_values` then raises `OrderingConflict`, and (once the shape layer exists) validation reports it as a finding.
+the claims have the same skeleton, so they merge into one assertion that carries both stamps. Nothing is lost and nothing is decided. `ordered_values` then raises `OrderingConflict`, and validation reports it as an `ordering` finding (see [design-shapes.md](design-shapes.md)).
 
 Settling it is an explicit call:
 

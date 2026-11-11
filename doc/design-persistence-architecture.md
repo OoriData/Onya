@@ -378,7 +378,7 @@ part of the token, so the graph appearing changes it.
 
 The relational backends keep a counter in `onya_graph_rev (name, rev)`, bumped
 by the same transaction as every write (`put`, `add`, `remove`, `drop`), so a
-token can never describe a state other than the one committed with it. It is
+token can never describe a state other than the one committed with it. SQLite stores add the table on open, as does PostgreSQL for a role that can create tables; a role with data privileges only, on a schema from an earlier release, must run `sql/examples/postgres-schema.sql` as the schema's owner once. It is
 keyed by name and not removed with the graph, so a graph made again carries on
 from its old revision and no token is reused. A graph stored before the table
 existed reads as `'0'` until it is next written. The file backend returns the
@@ -443,12 +443,12 @@ user-facing PG 17 vs 19 fork.
 
 ## Backends
 
-| Backend | Module | Extra deps | GraphStore | AssertionStore | OverlayReadStore | SearchStore | GraphQueryStore |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Literate files | `onya.store.filesystem` | none | ✓ | — | — | ✓ | — |
-| SQLite | `onya.store.sqlite` | none (stdlib) | ✓ | ✓ | ✓ | ✓ | — |
-| PostgreSQL ≥ 17 | `onya.store.postgres` | `onya[postgres]` → asyncpg | ✓ | ✓ | ✓ | ✓ | — |
-| PostgreSQL ≥ 19 with SQL/PGQ | `onya.store.postgres` | `onya[postgres]` | ✓ | ✓ | ✓ | ✓ | ✓ |
+| Backend | Module | Extra deps | GraphStore | AssertionStore | OverlayReadStore | SearchStore | VersionedStore | GraphQueryStore |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| Literate files | `onya.store.filesystem` | none | ✓ | — | — | ✓ | ✓ | — |
+| SQLite | `onya.store.sqlite` | none (stdlib) | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| PostgreSQL ≥ 17 | `onya.store.postgres` | `onya[postgres]` → asyncpg | ✓ | ✓ | ✓ | ✓ | ✓ | — |
+| PostgreSQL ≥ 19 with SQL/PGQ | `onya.store.postgres` | `onya[postgres]` | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
 
 A 19 server is not enough for the last row: the server must also accept
 `CREATE PROPERTY GRAPH`, and the `postgres:19rc1` image does not (§ SQL/PGQ layer). A

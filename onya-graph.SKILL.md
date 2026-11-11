@@ -1,6 +1,6 @@
 ---
 name: onya-graph
-description: Author Onya knowledge graphs in the Onya Literate (.onya.md) Markdown format — docheader, node blocks, properties, edges, single/multi types, CURIEs, nested/reified assertions, assertion identifiers (@id), data-contract interpretations (@as), long text, graph merge/identity, validation by parsing, Mermaid/Graphviz export, and pointers to the onya.store persistence layer. Use when creating, editing, extracting, or reviewing Onya graphs (e.g. turning a document into a .onya knowledgebase, or hand-writing/fixing one).
+description: Author Onya knowledge graphs in the Onya Literate (.onya.md) Markdown format — docheader, node blocks, properties, edges, single/multi types, CURIEs, nested/reified assertions, assertion identifiers (@id), data-contract interpretations (@as), long text, graph merge/identity, validation by parsing, Mermaid/Graphviz export, and pointers to the other layers: shapes (validation), circumstances/sidecars (tables beside the graph), content digest, and the onya.store persistence layer. Use when creating, editing, extracting, or reviewing Onya graphs (e.g. turning a document into a .onya knowledgebase, or hand-writing/fixing one).
 ---
 
 # Authoring Onya Graphs
@@ -305,7 +305,27 @@ Keep the graph to concepts: entities, relationships, rules, current state and sh
 * @label: Billing database
 ```
 
-A property with a value **per period** (or per grade, per region) declares the nested label that tells the values apart with `@qualifier -> period`, and a nested label that merely rides along with `@attribute -> unit` (each declared as its own `@Property` with `@as`). The qualifiers are the table key, so the same amount can recur; two different values for one key is a conflict for a person, not an overwrite. In `.onya`: `* compensation: 5000` with nested `* period: 2026-Q1` and `* unit: month`. Details: [design-circum, Ledgers](https://github.com/OoriData/Onya/blob/main/doc/design-circum.md#ledgers-several-values-per-node-told-apart-by-a-qualifier).
+A property with a value **per period** (or per grade, per region) declares the nested label that tells the values apart with `@qualifier`, and one that merely rides along with `@attribute`, each its own `@Property` with `@as`. The qualifiers are the table key, so the same amount can recur; two different values for one key is a conflict for a person, not an overwrite:
+
+```
+# compensation [@Property]
+* @appliesTo -> Person
+* @as: number
+* @cardinality: 0..*
+* @circumQuery -> payroll
+* @qualifier -> period
+* @attribute -> unit
+
+# period [@Property]
+* @as: text
+
+# adat [Person]
+* compensation: 5000
+  * period: 2026-Q1
+  * unit: month
+```
+
+Details: [design-circum, Ledgers](https://github.com/OoriData/Onya/blob/main/doc/design-circum.md#ledgers-several-values-per-node-told-apart-by-a-qualifier).
 
 `@queryDetail` (nested under `@circumQuery`) is an opaque token handed to the application's resolver, never SQL: a graph travels, so never write query text, credentials or connection strings in one. Don't author `@method` or `@asOf` on these values either; `onya.circum` stamps them on what it reads in.
 
@@ -402,6 +422,7 @@ async def save():
     # sqlite: (stdlib, zero extra deps) | postgresql:// (pip install "onya[postgres]")
     # PostgreSQL behind a pooler: connect(url, max_size=3); an existing asyncpg pool: PostgresStore.from_pool(pool)
     # Has it changed? `await store.version(name)` is a cheap token to compare; `versions([names])` for an overlay
+    # A PostgreSQL role with data privileges only needs sql/examples/postgres-schema.sql re-run once for 0.6.2 (new onya_graph_rev table)
     async with await connect('sqlite:kb.db') as store:
         await store.put(r.doc_iri, r.graph)      # merge=True: unions with any stored graph
         again = await store.get(r.doc_iri)
@@ -417,7 +438,7 @@ Downstream code shouldn't hand-roll "find the node the user named" or reverse-ed
 - **CURIEs are for authoring and for data tied to one vocabulary convention**: `.onya` files themselves, view specs kept beside the documents they describe, REPL exploration. A parsed graph keeps its docheader prefixes as `g.prefixes`, and label arguments to `getprop`/`getedge`/`any_prop_value`/`any_edge_target`/`select`/`typematch`/`inbound`/`search` accept a full IRI, a CURIE (`'schema:name'`), or a bare `@schema` name (`'name'`). An undeclared prefix raises `UnknownPrefixError` rather than guessing. To read what an assertion says, `n.values(label)` and `n.targets(label)` return all values/targets (sorted, deterministic, not meaningfully ordered), and `n.one(label)` / `n.one_target(label)` return the single one, `None`, or raise `CardinalityError` if there are several: prefer them to `any_prop_value`, which silently picks one. Edit a value in place with `prop.value = x` (nested assertions and `@id` stay attached).
 - **Ranked search.** `g.search('ada lovelac', labels=[SCHEMA('name')], types=[SCHEMA('Person')], limit=5)` → `list[SearchHit]` (`node_id`, `node`, `label`, `value`, `tier`, `score`). Tiers: `exact` > `prefix` (word-boundary) > `word` > `fuzzy`; tier beats score. Default labels: properties with no `@as` or `@as: text`. It never picks for you — `hits[0]` plus `SearchHit.is_clear_winner(hits)` is the usual pattern. `similarity='rapidfuzz'` (needs `onya[fuzzy]`) is a faster opt-in scorer. Keep a reference to the graph while using its nodes' CURIE accessors — nodes hold their graph only weakly.
 - **Inbound edges.** `g.inbound(node_or_id, label=None)` (index-backed; `node.reverse(label, g)` wraps it).
-- **Showing a node.** Avoid hand-writing per-type renderers; instead declare a view: `view.project(g, node, view.load(toml_data))` with specs like `{type='schema:Person', fields=['name', {label='email', many=true}], follow=[{edge='worksFor', as='employer', show=['name'], edge_props=['startDate']}, {inbound='author', as='works', show=['name'], order_by='-datePublished', limit=10}]}`. Output is ordered plain data (`title`, then `fields` as `(name, value)` pairs); missing data is omitted, never an error. `many=false` shows one value: the least, unless the field ranks its values with `prefer` (patterns over each value's own nested assertions: `prefer={label='ex:use', target='ex:Primary'}`, `{label='ex:primary', value=true}`, or a list tried in order) and/or `order_by='ex:priority'` (a nested value, typed via `@as`). Follows take `prefer` too, matched against the link's own nested assertions, e.g. `prefer={label='ex:current', value=true}, limit=1`. In specs, `label` always means an assertion label; the display string is `title=` (the old view-level `label=` still works but is deprecated until 0.6.0). `view.project_from_store(store, name, node_id, specs)` fetches only the needed neighborhood.
+- **Showing a node.** Avoid hand-writing per-type renderers; instead declare a view: `view.project(g, node, view.load(toml_data))` with specs like `{type='schema:Person', fields=['name', {label='email', many=true}], follow=[{edge='worksFor', as='employer', show=['name'], edge_props=['startDate']}, {inbound='author', as='works', show=['name'], order_by='-datePublished', limit=10}]}`. Output is ordered plain data (`title`, then `fields` as `(name, value)` pairs); missing data is omitted, never an error. `many=false` shows one value: the least, unless the field ranks its values with `prefer` (patterns over each value's own nested assertions: `prefer={label='ex:use', target='ex:Primary'}`, `{label='ex:primary', value=true}`, or a list tried in order) and/or `order_by='ex:priority'` (a nested value, typed via `@as`). Follows take `prefer` too, matched against the link's own nested assertions, e.g. `prefer={label='ex:current', value=true}, limit=1`. In specs, `label` always means an assertion label; the display string is `title=` (the older view-level `label=` spelling is deprecated: always write `title=`). `view.project_from_store(store, name, node_id, specs)` fetches only the needed neighborhood.
 - **In a store.** `await store.search(name, query, labels=[full IRIs], ...)` and `store.nodes_by_type(name, type_iri)` work on every backend without loading the graph (PostgreSQL uses a `pg_trgm` index; its fuzzy scores are trigram-based, so fuzzy hits near `min_score` can differ from other backends — tiers and non-fuzzy hits don't). Store arguments are full IRIs — a store has no prefix map.
 
 ## Common pitfalls

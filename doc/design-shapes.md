@@ -55,6 +55,8 @@ It is a layer in the sense of SPEC § Reserved vocabulary. The terms below are d
 | `@ordered: true` | property | The label's values are ordered, and validation checks the `@ordering` stamps (the [ordering layer](design-ordering.md)). |
 | `@severity: s` | either | `error` (default) or `warning`: the severity of findings the declaration produces. |
 
+Other layers add terms to the same declarations. The circum layer reads `@circumQuery` (the values are held in a sidecar), `@qualifier` and `@attribute` (nested labels that tell a property's values apart, or ride along), and `@table` / `@column` (names); see [design-circum.md](design-circum.md). Shapes themselves ignore them.
+
 **One `@Property` for values and edges.** `@range` makes it an edge; `@as` or `@oneOf` make it a value; declaring both is a malformed declaration. That follows Onya's property/edge duality and avoids a class explosion of property kinds.
 
 **`@as` replaces `@range -> @text`.** A range naming an interpretation would resolve to `onya:text`, not `onya:interp/text`, which is a trap. `@as` already means "read as". A property's `@as` is a *default* for that label: an assertion's own `@as` wins, and is checked as always. (At the top level of a node, `@as` has nothing to annotate, so the parser keeps it as a property holding the resolved interpretation IRI; `write` prints it back as `@as: integer`.)

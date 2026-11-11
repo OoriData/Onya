@@ -60,7 +60,7 @@ link from a text value that happens to look like one (as does an `@as: iri` valu
 compacted display string. Everything is JSON-serializable except typed `@as` values like
 `Decimal`/`datetime` — `jsonable()` converts those losslessly where it can.
 
-Deprecated in 0.5.1, removed in 0.6.0: the display-string spec key `label =` (now `title =`),
+Deprecated in 0.5.1, removed in 0.7.0: the display-string spec key `label =` (now `title =`),
 and the output key `'label'` (now `'title'`; still emitted as a copy unless
 `project(legacy_label=False)`, and reading it from Python warns).
 '''
@@ -86,7 +86,7 @@ __all__ = ['View', 'Field', 'Follow', 'Pattern', 'load', 'project', 'project_fro
            'DEFAULT_MAX_DEPTH']
 
 DEFAULT_MAX_DEPTH = 3
-# `label` stays reserved while the deprecated output key is still emitted (until 0.6.0).
+# `label` stays reserved while the deprecated output key is still emitted (until 0.7.0).
 RESERVED_KEYS = frozenset({'id', 'type', 'title', 'label', 'fields', 'edge', 'truncated'})
 
 
@@ -98,12 +98,12 @@ def _deprecated(msg: str) -> None:
 class _Item(dict):
     '''
     An output item: a plain dict (JSON, iteration, and equality see every key), except that
-    reading the deprecated `'label'` key from Python warns. Removed in 0.6.0 with that key.
+    reading the deprecated `'label'` key from Python warns. Removed in 0.7.0 with that key.
     '''
     def __getitem__(self, k):
         if k == 'label':
             _deprecated("Projection key 'label' is deprecated; use 'title' (the 'label' key is "
-                        'removed in onya 0.6.0; project(legacy_label=False) drops it now)')
+                        'removed in onya 0.7.0; project(legacy_label=False) drops it now)')
         return super().__getitem__(k)
 
     def get(self, k, default=None):
@@ -166,7 +166,7 @@ class Follow:
 
     @property
     def label_spec(self):
-        _deprecated('Follow.label_spec is deprecated; use Follow.title (removed in onya 0.6.0)')
+        _deprecated('Follow.label_spec is deprecated; use Follow.title (removed in onya 0.7.0)')
         return self.title
 
 
@@ -181,7 +181,7 @@ class View:
 
     @property
     def label_spec(self):
-        _deprecated('View.label_spec is deprecated; use View.title (removed in onya 0.6.0)')
+        _deprecated('View.label_spec is deprecated; use View.title (removed in onya 0.7.0)')
         return self.title
 
 
@@ -248,12 +248,12 @@ def _load_field(d) -> Field:
 
 
 def _load_title(d: Mapping, where: str) -> tuple[str, ...] | None:
-    '''The display-title candidates, accepting the deprecated `label =` spelling (until 0.6.0).'''
+    '''The display-title candidates, accepting the deprecated `label =` spelling (until 0.7.0).'''
     if 'label' in d:
         if 'title' in d:
             raise ValueError(f'{where}: give `title` only (`label` is its deprecated spelling here)')
         _deprecated(f'{where}: the display key `label =` is deprecated; use `title =` (in a view '
-                    'spec, `label` means an assertion label). Removed in onya 0.6.0.')
+                    'spec, `label` means an assertion label). Removed in onya 0.7.0.')
         return _as_tuple(d['label'])
     return None if 'title' not in d else _as_tuple(d['title'])
 
@@ -594,7 +594,7 @@ class _Projector:
                 out['type'] = compact_iri(str(self.res(matched)), self.g.prefixes, fallback='full')
         out['title'] = self.title(obj, title_spec, fields)
         if self.legacy_label:
-            out['label'] = out['title']  # deprecated copy; removed in 0.6.0
+            out['label'] = out['title']  # deprecated copy; removed in 0.7.0
         if obj.id is not None and obj.id in path:
             out['truncated'] = 'cycle'
             return out
@@ -710,8 +710,8 @@ def project(g: graph, node_or_id, specs, *, spec: View | Mapping | None = None,
       step); beyond it an item is marked `truncated: 'depth'`. A node already on the current
       path isn't re-expanded (`truncated: 'cycle'`).
     - `raw`: keep every value as its stored string, ignoring `@as`.
-    - `legacy_label`: also emit the deprecated `'label'` copy of `'title'` (default, through
-      0.5.x). Pass False to get the 0.6.0 shape now.
+    - `legacy_label`: also emit the deprecated `'label'` copy of `'title'` (the default for now).
+      Pass False to get the 0.7.0 shape now.
     '''
     views = load(specs)
     p = _Projector(g, views, predicates=predicates, max_depth=max_depth, raw=raw, registry=registry,

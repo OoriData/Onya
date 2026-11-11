@@ -6,7 +6,7 @@ For interim changes not yet earmarked for a particular release, can use this hea
 ## [Unreleased]
 -->
 
-## [0.6.2] 2026-11-10: `PostgresStore.from_pool`, and a way to size the pool.
+## [0.6.2] 2026-11-10: `PostgresStore.from_pool`, and a way to size the pool. Cheap change token: `await store.version(name)`. `validate(fragment, shapes=…, against=base)`. `drop_document_nodes(g)`: a helper to remove the document nodes, instead of a read flag. Qualifiers on circum values, and ledger-shaped sidecars.
 
 ### Added
 
@@ -19,6 +19,7 @@ For interim changes not yet earmarked for a particular release, can use this hea
 
 ### Changed
 
+- **Documentation pass.** The tutorial gains a section on search, `inbound` and views (README and skill had them, the tutorial did not), a note on PostgreSQL pool options, `from_pool` and `version`, and a ledgers section; its Mermaid image now loads (it had a wrong path and caption). The persistence design's backend table lists `VersionedStore`; the skill's description names the other layers (shapes, circumstances, digest) so an agent finds them; and a few stale phrases (`@interp` as a "working name", "once the shape layer exists", a view `label=` deprecation dated to 0.6.0, which had not been removed) now match the code. The deprecated view `label` spellings (the `label =` spec key, the `'label'` output copy, `label_spec`) are now scheduled for removal in 0.7.0, not the already-passed 0.6.0; `project(legacy_label=False)` drops the copy now.
 - **The PostgreSQL schema gains a table, `onya_graph_rev`** (#77). A store opened with a role that can create tables adds it itself. A role with **data privileges only**, on a schema provisioned by an earlier release, now gets the "schema is incomplete" `StoreError` until the schema is provisioned again: run `sql/examples/postgres-schema.sql` (every statement is idempotent) as the schema's owner. SQLite stores upgrade on open.
 
 ## [0.6.1] 2026-11-07: Resolvers and writers derived from a projection

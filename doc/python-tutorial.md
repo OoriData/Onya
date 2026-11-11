@@ -39,7 +39,7 @@ onya convert test/resource/schemaorg/thingsfallapart.onya > out.mmd
 
 Then use a site such as https://mermaid.live/ to generate a diagram such as:
 
-![Running MLX-LM generate within Python](test/resource/schemaorg/thingsfallapart.png)
+![Onya graph of Things Fall Apart, rendered via Mermaid](https://github.com/OoriData/Onya/blob/main/test/resource/schemaorg/thingsfallapart.png)
 
 ## Basic Python Usage
 
@@ -470,6 +470,27 @@ interp.set_value(chuks, 'https://schema.org/height', Decimal('1.85'),
 # same as: chuks.add_property('https://schema.org/height', '1.85', interp=ONYA_INTERP('number'))
 ```
 
+# Finding nodes, and showing them
+
+Label arguments take a full IRI, a CURIE or a bare `@schema` name. `g.search()` is a ranked, typo-tolerant lookup by property value, and `g.inbound()` answers "what points here?" from a reverse index instead of a scan:
+
+```python
+hits = g.search('chukwuemka', types=['Person'])        # tiers: exact > prefix > word > fuzzy
+hits[0].node_id, hits[0].tier, hits[0].score           # ranked; whether the top hit is clear is your call
+[e.origin.id for e in g.inbound(ify, label='knows')]   # nodes with a `knows` edge to Ify
+```
+
+`onya.view` turns "show me this thing" into plain data (which fields, which links to follow, in what order) and leaves the rendering to you:
+
+```python
+from onya import view
+
+specs = view.load([{'type': 'Person', 'fields': ['name'], 'follow': [{'edge': 'knows', 'show': ['name']}]}])
+view.project(g, chuks, specs)      # {'id': ..., 'title': ..., 'fields': [('name', ...)], 'knows': [{...}]}
+```
+
+Stores have the same lookups without loading a graph (`await store.search(name, 'chukwuemka', labels=[...])`, `store.nodes_by_type(name, type_iri)`, `await view.project_from_store(store, name, node_id, specs)`). Search and view specs are described in full in the [skill](https://github.com/OoriData/Onya/blob/main/onya-graph.SKILL.md).
+
 # Copies and neighborhoods
 
 `graph.union(other)` *consumes* `other`: its nodes are adopted, and it must not be used afterwards. When you need to keep a graph, or want to try a rewrite you may throw away, work on a copy:
@@ -545,10 +566,6 @@ hatch:
 ```python
 from onya.store import GraphQueryStore
 
-# A cache can ask `await store.version(name)` (a token to compare) instead of refetching to see if the graph changed.
-# connect(url, max_size=3) passes pool options to asyncpg (behind a pooler with a connection cap).
-# Already have an asyncpg pool? `await PostgresStore.from_pool(pool)` (from onya.store.postgres) makes a store
-# on it and leaves the pool yours; `ensure=False` creates nothing, for a role with data privileges only.
 async def pg_demo():
     async with await connect('postgresql://user:pass@localhost/onya') as store:
         await store.put(name, graph)
@@ -559,6 +576,12 @@ async def pg_demo():
                     COLUMNS (a.id AS src, b.id AS dst))
             ''')
 ```
+
+Three PostgreSQL practicalities:
+
+- **Pool size.** `connect(url, max_size=3)` passes options to `asyncpg.create_pool`, for a pooler that caps connections.
+- **Your own pool.** `await PostgresStore.from_pool(pool)` (from `onya.store.postgres`) builds a store on a pool you made, and leaves the pool yours when the store closes. `from_pool(pool, ensure=False)` creates nothing, for a role with data privileges only on a schema someone else provisioned (run `sql/examples/postgres-schema.sql` as the schema's owner; it is idempotent, and needed again after upgrading to 0.6.2, which adds the `onya_graph_rev` table).
+- **Has the graph changed?** `await store.version(name)` is a cheap token to compare, so a cache can skip refetching: `if await store.version(name) != last: g = await store.get(name)`. `versions([names])` gives one token for several graphs (say an overlay's authored and runtime graphs).
 
 Merge semantics in action — two overlapping extractions collapse into one:
 

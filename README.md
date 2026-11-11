@@ -223,8 +223,8 @@ view.project(g, chuks, specs)
 # {'id': '.../Chuks', 'type': 'Person', 'title': 'Chukwuemeka Okafor',
 #  'fields': [('name', 'Chukwuemeka Okafor')],
 #  'knows': [{'id': '.../Ify', 'title': 'Ifeoma Obasi', 'fields': [('name', 'Ifeoma Obasi')]}]}
-# (Through 0.5.x each item also carries a deprecated 'label' copy of 'title';
-#  pass legacy_label=False for the 0.6.0 shape.)
+# (Each item still carries a deprecated 'label' copy of 'title';
+#  pass legacy_label=False to drop it.)
 ```
 
 Stores offer the same lookup without loading a graph (`await store.search(name, 'chukwuemka',
@@ -257,7 +257,7 @@ for f in validate(g).findings:       # shapes in g itself, or validate(g, shapes
     print(f.severity, f.kind, f.node, f.label, f.detail)    # e.g. error cardinality ... has 0, declared 1
 ```
 
-Shapes only report: they never infer a type or change a value, and nothing runs until you ask (`onya validate kg/ --shapes=shapes/`). Other layers read the same declarations, which is why the next section needs no column list. See [doc/design-shapes.md](doc/design-shapes.md).
+Shapes only report: they never infer a type or change a value, and nothing runs until you ask (`onya validate kg/ --shapes=shapes/`). To check a proposed change before merging it, `validate(fragment, against=base)` resolves the fragment's types and cardinality through the base graph. Other layers read the same declarations, which is why the next section needs no column list. See [doc/design-shapes.md](doc/design-shapes.md).
 
 ## Ordered values and the content digest
 
@@ -301,6 +301,8 @@ async def main():
 asyncio.run(main())
 ```
 
+`connect(url, max_size=3)` passes options to asyncpg for a pooler with a connection cap, `PostgresStore.from_pool(pool)` builds a store on a pool you already have, and `await store.version(name)` is a cheap token a cache can compare to see whether a graph changed.
+
 A blocking facade (`from onya.store.sync import connect`) mirrors the API with
 `with`/plain calls for scripts and REPL use. Design and schema details are in
 [doc/design-persistence-architecture.md](doc/design-persistence-architecture.md).
@@ -333,6 +335,8 @@ reg.writers.update(table_writers(p))
 view = await augment(g, registry=reg, conn=conn)     # a new graph, with table values marked @method / @asOf
 await emit(g, ['https://example.org/dede'], registry=reg, conn=conn)   # a node's table values: graph -> table
 ```
+
+A property with a value per period (compensation by quarter, say) adds `@qualifier -> period` to its declaration, and the qualifier becomes the table's key. See [Ledgers](doc/design-circum.md#ledgers-several-values-per-node-told-apart-by-a-qualifier).
 
 A view is never stored, `strip(view)` gets the original graph back exactly, and Redis, MongoDB or any other store plugs in with a resolver you write. Walkthrough: [doc/python-tutorial.md](doc/python-tutorial.md#circumstances-tables-beside-the-graph); design: [doc/design-circum.md](doc/design-circum.md).
 
