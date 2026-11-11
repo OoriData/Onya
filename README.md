@@ -223,8 +223,6 @@ view.project(g, chuks, specs)
 # {'id': '.../Chuks', 'type': 'Person', 'title': 'Chukwuemeka Okafor',
 #  'fields': [('name', 'Chukwuemeka Okafor')],
 #  'knows': [{'id': '.../Ify', 'title': 'Ifeoma Obasi', 'fields': [('name', 'Ifeoma Obasi')]}]}
-# (Each item still carries a deprecated 'label' copy of 'title';
-#  pass legacy_label=False to drop it.)
 ```
 
 Stores offer the same lookup without loading a graph (`await store.search(name, 'chukwuemka',
@@ -234,7 +232,7 @@ fetches just the neighborhood a view needs, so "search → project" is a handful
 
 ## Shapes: what should a graph look like?
 
-A **shape** says what a class of node is expected to carry. Shapes are ordinary nodes in the same document: `# Person [@Class]` declares a class, and `# name [@Property]` declares a property label, with `@appliesTo` (which class), `@as` (how to read its values), `@cardinality` (`1`, `0..1`, `1..*`, `n..m`), `@range` (which class an edge points to) and `@oneOf` (a closed set). The label's declaration node has the label's own IRI as its id.
+A **shape** says what a class of node is expected to carry. Shapes are ordinary nodes in the same document: `# Person [@Class]` declares a class, and `# name [@Property]` declares a property label, with `@appliesTo` (which class), `@as` (how to read its values), `@cardinality` (`1`, `0..1`, `1..*`, `n..m`), `@range` (which class an edge points to), `@oneOf` (a closed set) and `@deprecated` (retire a term, with the guidance to follow, optionally `@replacedBy` its successor). The label's declaration node has the label's own IRI as its id.
 
 ```
 # Person [@Class]

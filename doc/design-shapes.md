@@ -54,6 +54,8 @@ It is a layer in the sense of SPEC § Reserved vocabulary. The terms below are d
 | `@cardinality: m` | property | How many distinct values or targets a node has: `1`, `0..1`, `1..*`, `0..*`, `*` (= `0..*`) or `n..m`. |
 | `@ordered: true` | property | The label's values are ordered, and validation checks the `@ordering` stamps (the [ordering layer](design-ordering.md)). |
 | `@severity: s` | either | `error` (default) or `warning`: the severity of findings the declaration produces. |
+| `@deprecated: text` | either | The class or label is deprecated; the text is the guidance (what to use instead, and why). |
+| `@replacedBy -> X` | either | What supersedes it: a `@Class` or `@Property` (repeat for several). On its own, it also marks the declaration deprecated. |
 
 Other layers add terms to the same declarations. The circum layer reads `@circumQuery` (the values are held in a sidecar), `@qualifier` and `@attribute` (nested labels that tell a property's values apart, or ride along), and `@table` / `@column` (names); see [design-circum.md](design-circum.md). Shapes themselves ignore them.
 
@@ -64,6 +66,29 @@ Other layers add terms to the same declarations. The circum layer reads `@circum
 **One `@cardinality`, not `@cardinality` plus `@required`.** A boolean beside a multiplicity can contradict itself. Identical values count once, as they would after a merge. A minimum is enforced on every node of the class, including one that doesn't use the label at all; a property with no `@appliesTo` only has its maximum checked.
 
 **Ordering.** `@ordered: true` makes missing, non-integer and conflicting stamps findings. It does *not* number anything: parsing never reads shapes, so stamps still come from the docheader's `@ordered` stanza or by hand.
+
+## Deprecating a term
+
+A class or property that should no longer be used says so, with the guidance a person needs, so the guidance lives with the declaration instead of in a table beside it:
+
+```
+# nickname [@Property]
+* @appliesTo -> Person
+* @deprecated: Use preferredName instead; nickname loses the language.
+* @replacedBy -> preferredName
+```
+
+`validate` then gives each node that uses `nickname` one `deprecated` finding (however many values it has), and each node *typed* with a deprecated class likewise:
+
+```
+warning deprecated: http://e.o/ada http://e.o/nickname: label http://e.o/nickname is deprecated: Use preferredName instead; nickname loses the language. Replaced by http://e.o/preferredName. (at ...)
+```
+
+- It is always a **warning**, whatever `@severity` says: `@severity` is how serious the declaration's other findings are, and a term that is merely going away isn't an error. `onya validate` prints it with the other warnings, and `--strict` makes it fail the run.
+- Either term marks the declaration deprecated, so `@replacedBy` alone is enough, and `@deprecated` alone is too. More than one `@deprecated` is a `bad_shape`.
+- A subclass of a deprecated class is not itself deprecated: only nodes typed with the class are reported. Deprecating a subclass is the subclass's own declaration.
+- Nothing is changed or inferred: the deprecated term keeps validating exactly as before, and `@replacedBy` isn't checked to exist (a forward reference is normal in an open graph). Only a node's own assertions are checked, as elsewhere in this layer, so a deprecated label nested under an assertion isn't reported.
+- `Shapes` exposes it as `deprecated` (the guidance, `''` if only `@replacedBy` was given, `None` if not deprecated) and `replaced_by` on `PropertyShape` and `ClassShape`.
 
 ## Where declarations live, and what they match
 
@@ -90,6 +115,7 @@ for f in report.findings:
 | `as` | `age: "a year"` fails `@as: integer`; also an assertion's own `@as`, at any depth |
 | `ordering` | a missing, non-integer or conflicting `@ordering` on an `@ordered: true` label |
 | `undeclared_label` | on a node of a `@closed: true` class |
+| `deprecated` | a node uses a `@deprecated` label, or is typed with a `@deprecated` class (always a *warning*) |
 | `unknown_reserved_term` | `@Calss` (a *warning*) |
 | `dangling` | an edge target nothing declares (with `dangling=True`; `allow=` for external IRIs) |
 | `bad_shape` | a declaration that can't be read: `@cardinality: lots`, `@severity: loud` |

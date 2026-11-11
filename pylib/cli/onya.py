@@ -208,7 +208,7 @@ def validate(filespec: str,
     Args:
         filespec: Path, directory (recursive; `.onya` and `.onya.md`), glob, or '-' for stdin.
         shapes: Where the `@Class` / `@Property` declarations are, as a filespec; by default, the input itself.
-        strict: Fail on warnings too (a typo'd `@term`, a `@severity: warning` shape).
+        strict: Fail on warnings too (a typo'd `@term`, a `@severity: warning` shape, a use of a `@deprecated` term).
         dangling: Also report edge targets that no node block declares.
         allow: Targets that may stay undeclared: an IRI prefix, or several separated by commas.
         against: Treat the input as a proposed change (a fragment) and check it as if merged into this base, a

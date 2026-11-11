@@ -37,8 +37,8 @@ from onya.locations import describe
 from onya.ordering import OrderingError, ordered
 from onya.terms import (
     ONYA, ONYA_APPLIESTO, ONYA_AS, ONYA_ATTRIBUTE, ONYA_CARDINALITY, ONYA_CIRCUMQUERY, ONYA_CLASS, ONYA_CLOSED,
-    ONYA_DOCUMENT, ONYA_LABEL, ONYA_ONEOF, ONYA_ORDERED, ONYA_PROPERTY, ONYA_QUALIFIER, ONYA_RANGE, ONYA_SEVERITY,
-    ONYA_SUBCLASSOF,
+    ONYA_DEPRECATED, ONYA_DOCUMENT, ONYA_LABEL, ONYA_ONEOF, ONYA_ORDERED, ONYA_PROPERTY, ONYA_QUALIFIER, ONYA_RANGE,
+    ONYA_REPLACEDBY, ONYA_SEVERITY, ONYA_SUBCLASSOF,
     unknown_reserved_terms,
 )
 
@@ -69,7 +69,7 @@ def parse_cardinality(text: str) -> tuple[int, int | None]:
 class Finding:
     '''One place a graph departs from its shapes (or one declaration that can't be read). Data, never an exception.'''
     severity: str  # 'error' | 'warning'
-    kind: str  # applies_to | cardinality | range | one_of | as | ordering | dangling | undeclared_label | ...
+    kind: str  # applies_to | cardinality | range | one_of | as | ordering | dangling | undeclared_label | deprecated
     node: object  # id of the node concerned
     label: object = None  # the label concerned, if any
     detail: str = ''
@@ -109,6 +109,8 @@ class ClassShape:
     parents: set = field(default_factory=set)  # ids of the classes named by @subClassOf
     closed: bool = False
     severity: str = 'error'
+    deprecated: str | None = None  # `@deprecated`'s guidance ('' if only `@replacedBy` was given); None: not deprecated
+    replaced_by: tuple = ()  # ids named by `@replacedBy`
 
 
 @dataclass
@@ -125,6 +127,8 @@ class PropertyShape:
     circum: bool = False  # its values are held in a sidecar (`@circumQuery`): see `onya.circum`
     qualifiers: tuple = ()  # label IRIs (declaration order) nested under each value that tell values apart: the key
     attributes: tuple = ()  # label IRIs nested under each value that ride along, and are not part of the key
+    deprecated: str | None = None  # `@deprecated`'s guidance ('' if only `@replacedBy` was given); None: not deprecated
+    replaced_by: tuple = ()  # ids named by `@replacedBy`
 
 
 class Shapes:
@@ -184,18 +188,27 @@ def load_shapes(g) -> Shapes:
             problem(n, 'bad_shape', term, f'{str(term)[len(str(ONYA)):]} must be true or false, not {found}')
         return found == ['true']
 
+    def deprecation(n) -> tuple:
+        '''`(guidance or None, replacements)`: either term marks the declaration deprecated.'''
+        notes, replaced = n.values(ONYA_DEPRECATED), _targets_in_order(n, ONYA_REPLACEDBY)
+        if len(notes) > 1:
+            problem(n, 'bad_shape', ONYA_DEPRECATED, f'a declaration has at most one @deprecated, found {notes}')
+        return (notes[0] if notes else '') if (notes or replaced) else None, replaced
+
     for n in g.nodes.values():
         types = {str(t) for t in n.types}
         labels = n.values(ONYA_LABEL)
         if str(ONYA_CLASS) in types:
             sh.classes[str(n.id)] = ClassShape(
-                n.id, labels[0] if labels else None, _targets(n, ONYA_SUBCLASSOF), flag(n, ONYA_CLOSED), severity(n))
+                n.id, labels[0] if labels else None, _targets(n, ONYA_SUBCLASSOF), flag(n, ONYA_CLOSED), severity(n),
+                *deprecation(n))
         if str(ONYA_PROPERTY) in types:
             p = PropertyShape(n.id, labels[0] if labels else None, _targets(n, ONYA_APPLIESTO), _targets(n, ONYA_RANGE),
                               severity=severity(n), ordered=flag(n, ONYA_ORDERED), one_of=set(n.values(ONYA_ONEOF)),
                               circum=any(True for _ in n.getedge(ONYA_CIRCUMQUERY)),
                               qualifiers=_targets_in_order(n, ONYA_QUALIFIER),
                               attributes=_targets_in_order(n, ONYA_ATTRIBUTE))
+            p.deprecated, p.replaced_by = deprecation(n)
             if both := set(p.qualifiers) & set(p.attributes):
                 problem(n, 'bad_shape', ONYA_QUALIFIER, f'{sorted(both)} is both a @qualifier and an @attribute')
             as_ = n.values(ONYA_AS)
@@ -215,6 +228,13 @@ def load_shapes(g) -> Shapes:
                 problem(n, 'bad_shape', ONYA_RANGE, '@range makes a property an edge, which has no @as or @oneOf')
             sh.properties[str(n.id)] = p
     return sh
+
+
+def _deprecation_detail(what: str, shape) -> str:
+    '''`label X is deprecated: the guidance. Replaced by Y.`: what a deprecated finding says.'''
+    out = f'{what} is deprecated' + (f': {shape.deprecated}' if shape.deprecated else '')
+    return out + (f'{"" if out.endswith(".") else "."} Replaced by {", ".join(sorted(shape.replaced_by))}.'
+                  if shape.replaced_by else '')
 
 
 def _count(found) -> int:
@@ -275,6 +295,9 @@ def validate(g, shapes=None, *, registry: InterpretationRegistry = DEFAULT, dang
         if {str(t) for t in n.types} & _META:
             continue
         closure = sh.closure(n.types)
+        for t in sorted(map(str, n.types)):  # a class itself marked deprecated, not one that merely inherits from it
+            if t in sh.classes and sh.classes[t].deprecated is not None:
+                add('warning', 'deprecated', n, None, _deprecation_detail(f'class {t}', sh.classes[t]))
         used: dict = {}  # label -> its assertions on this node
         for a in (*n.properties, *n.edges):
             used.setdefault(a.label, []).append(a)
@@ -284,6 +307,8 @@ def validate(g, shapes=None, *, registry: InterpretationRegistry = DEFAULT, dang
             p = sh.properties.get(str(label))
             if p is None:
                 continue
+            if p.deprecated is not None:  # always a warning: @severity speaks to the shape's other findings
+                add('warning', 'deprecated', n, label, _deprecation_detail(f'label {label}', p), found[0])
             if p.applies_to and not closure & p.applies_to:
                 add(p.severity, 'applies_to', n, label,
                     f'declared for {sorted(p.applies_to)}, but this node is {sorted(closure) or "untyped"}', found[0])

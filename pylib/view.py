@@ -60,15 +60,13 @@ link from a text value that happens to look like one (as does an `@as: iri` valu
 compacted display string. Everything is JSON-serializable except typed `@as` values like
 `Decimal`/`datetime` — `jsonable()` converts those losslessly where it can.
 
-Deprecated in 0.5.1, removed in 0.7.0: the display-string spec key `label =` (now `title =`),
-and the output key `'label'` (now `'title'`; still emitted as a copy unless
-`project(legacy_label=False)`, and reading it from Python warns).
+Removed in 0.7.0 (deprecated since 0.5.1): the display-string spec key `label =` is `title =`, and the
+output key `'label'` is `'title'`.
 '''
 
 from __future__ import annotations
 
 import re
-import warnings
 from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field as dc_field
 from datetime import date, datetime, time
@@ -86,28 +84,7 @@ __all__ = ['View', 'Field', 'Follow', 'Pattern', 'load', 'project', 'project_fro
            'DEFAULT_MAX_DEPTH']
 
 DEFAULT_MAX_DEPTH = 3
-# `label` stays reserved while the deprecated output key is still emitted (until 0.7.0).
-RESERVED_KEYS = frozenset({'id', 'type', 'title', 'label', 'fields', 'edge', 'truncated'})
-
-
-def _deprecated(msg: str) -> None:
-    # Attribute the warning to the caller's code, not to frames inside this module.
-    warnings.warn(msg, DeprecationWarning, skip_file_prefixes=(__file__,))
-
-
-class _Item(dict):
-    '''
-    An output item: a plain dict (JSON, iteration, and equality see every key), except that
-    reading the deprecated `'label'` key from Python warns. Removed in 0.7.0 with that key.
-    '''
-    def __getitem__(self, k):
-        if k == 'label':
-            _deprecated("Projection key 'label' is deprecated; use 'title' (the 'label' key is "
-                        'removed in onya 0.7.0; project(legacy_label=False) drops it now)')
-        return super().__getitem__(k)
-
-    def get(self, k, default=None):
-        return self[k] if k in self else default
+RESERVED_KEYS = frozenset({'id', 'type', 'title', 'fields', 'edge', 'truncated'})
 
 
 # --- spec model -----------------------------------------------------------------------
@@ -164,11 +141,6 @@ class Follow:
     desc: bool = False
     prefer: tuple[Pattern, ...] = ()
 
-    @property
-    def label_spec(self):
-        _deprecated('Follow.label_spec is deprecated; use Follow.title (removed in onya 0.7.0)')
-        return self.title
-
 
 @dataclass(frozen=True)
 class View:
@@ -179,14 +151,10 @@ class View:
     title: tuple[str, ...] | None = None
     follow: tuple[Follow, ...] = ()
 
-    @property
-    def label_spec(self):
-        _deprecated('View.label_spec is deprecated; use View.title (removed in onya 0.7.0)')
-        return self.title
 
-
-def _check_keys(d: Mapping, allowed: set, what: str) -> None:
-    unknown = set(d) - allowed
+def _check_keys(d: Mapping, allowed: set, what: str, old: frozenset | set = frozenset()) -> None:
+    '''`old`: keys that are let through to a caller that gives its own, better message (`_load_title`).'''
+    unknown = set(d) - allowed - old
     if unknown:
         raise ValueError(f'Unknown {what} key(s) {sorted(unknown)}; allowed: {sorted(allowed)}')
 
@@ -248,13 +216,10 @@ def _load_field(d) -> Field:
 
 
 def _load_title(d: Mapping, where: str) -> tuple[str, ...] | None:
-    '''The display-title candidates, accepting the deprecated `label =` spelling (until 0.7.0).'''
+    '''The display-title candidates. `label =` was the old spelling (removed in 0.7.0): refused, by name.'''
     if 'label' in d:
-        if 'title' in d:
-            raise ValueError(f'{where}: give `title` only (`label` is its deprecated spelling here)')
-        _deprecated(f'{where}: the display key `label =` is deprecated; use `title =` (in a view '
-                    'spec, `label` means an assertion label). Removed in onya 0.7.0.')
-        return _as_tuple(d['label'])
+        raise ValueError(f'{where}: `label =` is now `title =` (in a view spec, `label` means an assertion label; '
+                         'the old display-string spelling was removed in onya 0.7.0)')
     return None if 'title' not in d else _as_tuple(d['title'])
 
 
@@ -317,8 +282,8 @@ def _describe_view(d: Mapping) -> str:
 def _load_follow(d) -> Follow:
     if isinstance(d, Follow):
         return d
-    _check_keys(d, {'edge', 'inbound', 'as', 'show', 'title', 'label', 'follow', 'edge_props', 'limit',
-                    'order_by', 'prefer'}, 'follow')
+    _check_keys(d, {'edge', 'inbound', 'as', 'show', 'title', 'follow', 'edge_props', 'limit', 'order_by', 'prefer'},
+                'follow', old={'label'})
     if ('edge' in d) == ('inbound' in d):
         raise ValueError(f'A follow takes exactly one of `edge` or `inbound`: {d!r}')
     inbound = 'inbound' in d
@@ -348,7 +313,7 @@ def _load_follow(d) -> Follow:
 def _load_view(d) -> View:
     if isinstance(d, View):
         return d
-    _check_keys(d, {'type', 'when', 'fields', 'title', 'label', 'follow'}, 'view')
+    _check_keys(d, {'type', 'when', 'fields', 'title', 'follow'}, 'view', old={'label'})
     follow = tuple(_load_follow(f) for f in d.get('follow', ()))
     _check_names(follow, _describe_view(d))
     return View(types=_as_tuple(d.get('type')), when=d.get('when'),
@@ -417,7 +382,7 @@ class _Projector:
     '''One projection pass over a graph. `tracker` (store mode) records what was missing.'''
 
     def __init__(self, g: graph, views: tuple[View, ...], *, predicates, max_depth: int, raw: bool,
-                 registry: InterpretationRegistry, tracker=None, legacy_label: bool = True):
+                 registry: InterpretationRegistry, tracker=None):
         self.g = g
         self.views = views
         self.predicates = predicates or {}
@@ -425,7 +390,6 @@ class _Projector:
         self.raw = raw
         self.registry = registry
         self.tracker = tracker
-        self.legacy_label = legacy_label
         self._resolved: dict = {}
         self._targets: dict = {}
 
@@ -587,14 +551,12 @@ class _Projector:
              type_of: View | None = None, link=None, edge_props=()) -> dict:
         self.need(obj)
         oid = _iri(obj.id) if obj.id is not None else None
-        out = _Item(id=oid)
+        out = dict(id=oid)
         if type_of is not None and type_of.types:
             matched = next((t for t in type_of.types if self.res(t) in obj.types), None)
             if matched is not None:  # (a forced `spec=` may not match the node's types)
                 out['type'] = compact_iri(str(self.res(matched)), self.g.prefixes, fallback='full')
         out['title'] = self.title(obj, title_spec, fields)
-        if self.legacy_label:
-            out['label'] = out['title']  # deprecated copy; removed in 0.7.0
         if obj.id is not None and obj.id in path:
             out['truncated'] = 'cycle'
             return out
@@ -698,7 +660,7 @@ def _node_of(g: graph, node_or_id):
 
 def project(g: graph, node_or_id, specs, *, spec: View | Mapping | None = None,
             predicates: Mapping[str, Callable] | None = None, max_depth: int = DEFAULT_MAX_DEPTH,
-            raw: bool = False, registry: InterpretationRegistry = DEFAULT, legacy_label: bool = True) -> dict:
+            raw: bool = False, registry: InterpretationRegistry = DEFAULT) -> dict:
     '''
     Project a node (object or id) of `g` through the view specs (`load()` output, or raw
     data `load()` accepts). The first spec, in declaration order, whose `type` matches one of
@@ -710,12 +672,9 @@ def project(g: graph, node_or_id, specs, *, spec: View | Mapping | None = None,
       step); beyond it an item is marked `truncated: 'depth'`. A node already on the current
       path isn't re-expanded (`truncated: 'cycle'`).
     - `raw`: keep every value as its stored string, ignoring `@as`.
-    - `legacy_label`: also emit the deprecated `'label'` copy of `'title'` (the default for now).
-      Pass False to get the 0.7.0 shape now.
     '''
     views = load(specs)
-    p = _Projector(g, views, predicates=predicates, max_depth=max_depth, raw=raw, registry=registry,
-                   legacy_label=legacy_label)
+    p = _Projector(g, views, predicates=predicates, max_depth=max_depth, raw=raw, registry=registry)
     obj = _node_of(g, node_or_id)
     return p.project(obj, None if spec is None else load(spec)[0])
 
@@ -751,7 +710,7 @@ def _static_reach(follows: Iterable[Follow], max_depth: int) -> int:
 async def project_from_store(store, name, node_id, specs, *, prefixes: Mapping[str, str] | None = None,
                              spec: View | Mapping | None = None, predicates: Mapping[str, Callable] | None = None,
                              max_depth: int = DEFAULT_MAX_DEPTH, raw: bool = False,
-                             registry: InterpretationRegistry = DEFAULT, legacy_label: bool = True) -> dict:
+                             registry: InterpretationRegistry = DEFAULT) -> dict:
     '''
     `project`, fetching only the neighborhood the view needs instead of `get()`-ing the whole
     graph. On an `AssertionStore` (SQLite, PostgreSQL): one `subgraph(roots={node_id},
@@ -775,7 +734,7 @@ async def project_from_store(store, name, node_id, specs, *, prefixes: Mapping[s
         g = await store.get(name)
         g.add_prefixes(prefixes)
         return project(g, nid, views, spec=forced, predicates=predicates, max_depth=max_depth,
-                       raw=raw, registry=registry, legacy_label=legacy_label)
+                       raw=raw, registry=registry)
 
     local = graph(prefixes=prefixes)
     tracker = _Tracker()
@@ -789,7 +748,7 @@ async def project_from_store(store, name, node_id, specs, *, prefixes: Mapping[s
     while True:
         tracker.missing, tracker.missing_inbound = set(), set()
         p = _Projector(local, views, predicates=predicates, max_depth=max_depth, raw=raw,
-                       registry=registry, tracker=tracker, legacy_label=legacy_label)
+                       registry=registry, tracker=tracker)
         result = p.project(local[nid], forced)
         if not tracker.missing and not tracker.missing_inbound:
             return result
@@ -815,7 +774,7 @@ def to_text(proj: dict, indent: str = '  ') -> str:
 
     def emit(it: dict, depth: int):
         pad = indent * depth
-        head = dict.get(it, 'title') or dict.get(it, 'label') or it.get('id')
+        head = it.get('title') or it.get('id')
         if it.get('type'):
             head = f'{head} [{it["type"]}]'
         if it.get('truncated'):

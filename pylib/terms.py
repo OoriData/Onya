@@ -48,6 +48,8 @@ ONYA_CARDINALITY = ONYA('cardinality')  # @cardinality: 1 | 0..1 | 1..* | 0..* |
 ONYA_ONEOF = ONYA('oneOf')  # @oneOf: an allowed value (repeat for each)
 ONYA_CLOSED = ONYA('closed')  # @closed: true on a Class: undeclared labels are findings
 ONYA_SEVERITY = ONYA('severity')  # @severity: error | warning
+ONYA_DEPRECATED = ONYA('deprecated')  # @deprecated: guidance string, on a @Class or @Property: don't use it
+ONYA_REPLACEDBY = ONYA('replacedBy')  # @replacedBy -> a @Class or @Property that supersedes the declared one
 ONYA_TABLE = ONYA('table')  # @table: override a derived table name (onya.circum)
 ONYA_COLUMN = ONYA('column')  # @column: override a derived column name (onya.circum)
 # The circum layer's read side (see onya.circum): sidecars are declared as nodes, and circum properties point at them
@@ -88,7 +90,7 @@ reserve('core',
         'type')  # the type relation: reserved, with no behavior defined yet
 reserve('ordering', 'ordering', 'ordered')  # onya.ordering (not core: see SPEC, Reserved vocabulary)
 reserve('shape', 'Class', 'Property', 'label', 'subClassOf', 'appliesTo', 'range', 'cardinality', 'oneOf',
-        'closed', 'severity')  # onya.shape
+        'closed', 'severity', 'deprecated', 'replacedBy')  # onya.shape
 reserve('circum', 'table', 'column', 'Sidecar', 'System', 'system', 'circumQuery', 'queryDetail', 'sensitivity',
         'retention', 'qualifier', 'attribute')  # onya.circum
 

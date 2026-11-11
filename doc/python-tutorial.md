@@ -337,7 +337,7 @@ for f in report.findings:
 report.ok, report.errors, report.warnings
 ```
 
-Findings cover `applies_to`, `cardinality` (`1`, `0..1`, `1..*`, `0..*`, `n..m`), `range`, `one_of`, `as`, `ordering`, `undeclared_label` (only for a class marked `@closed: true`), a typo'd `@term`, and, with `dangling=True`, edge targets nothing declares. On the command line:
+Findings cover `applies_to`, `cardinality` (`1`, `0..1`, `1..*`, `0..*`, `n..m`), `range`, `one_of`, `as`, `ordering`, `undeclared_label` (only for a class marked `@closed: true`), `deprecated` (a warning for a use of a term declared `@deprecated: Use X instead`, optionally with `@replacedBy -> X`), a typo'd `@term`, and, with `dangling=True`, edge targets nothing declares. On the command line:
 
 ```
 onya validate kg/ --shapes=shapes/ --dangling --allow=https://orcid.org/ --strict

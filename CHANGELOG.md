@@ -6,6 +6,16 @@ For interim changes not yet earmarked for a particular release, can use this hea
 ## [Unreleased]
 -->
 
+## [0.7.0] 2026-11-10: Removal of deprecated (since 0.5.1) view `label` spellings.
+
+### Added
+
+- **`@deprecated` and `@replacedBy` on `@Property` and `@Class`** (#82). A declaration can retire a term and say what to do instead: `* @deprecated: Use preferredName instead; nickname loses the language.` and `* @replacedBy -> preferredName`. `validate` gives a `deprecated` finding, always a **warning**, for each node that uses a deprecated label and each node typed with a deprecated class, with the guidance and the replacement in its `detail`; `onya validate` prints it like other warnings, and `--strict` makes it fail. Either term alone marks the declaration deprecated; a subclass of a deprecated class is not itself deprecated; `@severity` does not change it; nothing is inferred or rewritten, and `@replacedBy` is not checked to exist. `PropertyShape` and `ClassShape` gain `deprecated` and `replaced_by`, and both terms are reserved in the shape layer, so `unknown_reserved_terms` does not flag them. This replaces a hand-kept table of discouraged terms. See `doc/design-shapes.md`.
+
+### Removed
+
+- **The deprecated view `label` spellings** (deprecated since 0.5.1; once promised for 0.6.0, then moved to 0.7.0). The display-string spec key `label =` (in a view or a follow) is now `title =` only, and `load` refuses `label =` with a message saying so. Projected items no longer carry the `'label'` copy of `'title'`, and `View.label_spec` and `Follow.label_spec` are gone, so `project`, `project_from_store` and `View`'s internals lose the `legacy_label` option (it was already `False` in the 0.6.0 shape; drop the argument). `label` is no longer a reserved output name, so a follow can be named `label`. In a spec, `label` still means an assertion label inside `fields`, `prefer` and the like; only the display-string meaning went. To migrate: change `label =` to `title =` on views and follows, and read `item['title']`.
+
 ## [0.6.2] 2026-11-10: `PostgresStore.from_pool`, and a way to size the pool. Cheap change token: `await store.version(name)`. `validate(fragment, shapes=…, against=base)`. `drop_document_nodes(g)`: a helper to remove the document nodes, instead of a read flag. Qualifiers on circum values, and ledger-shaped sidecars.
 
 ### Added

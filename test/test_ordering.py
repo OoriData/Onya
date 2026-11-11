@@ -388,7 +388,7 @@ VIEW_DOC = HEAD + '* @ordered: sourceField\n' + '''
 
 
 def _fields(g, *fields):
-    out = view.project(g, A, {'type': 'Mapping', 'fields': list(fields)}, legacy_label=False)
+    out = view.project(g, A, {'type': 'Mapping', 'fields': list(fields)})
     return dict(out['fields'])
 
 
