@@ -258,3 +258,73 @@ async def test_table_resolvers_and_writers_through_asyncpg():
     finally:
         await pool.close()
         await _drop(dsn, p)
+
+
+LEDGER = '''# @docheader
+* @document: http://e.o/doc
+* @nodebase: http://e.o/
+* @schema: http://e.o/
+
+# Person [@Class]
+# compensation [@Property]
+* @appliesTo -> Person
+* @as: number
+* @cardinality: 0..*
+* @circumQuery -> payroll
+* @qualifier -> period
+* @attribute -> unit
+# period [@Property]
+* @as: text
+# unit [@Property]
+* @as: text
+# payroll [@Sidecar]
+* @table: person
+# adat [Person]
+BODY
+'''
+Q1, Q2, HOURLY = ('* compensation: 5000\n  * period: 2026-Q1\n  * unit: month\n',
+                  '* compensation: 5000\n  * period: 2026-Q2\n  * unit: month\n',
+                  '* compensation: 60\n  * unit: hour\n')
+
+
+@pytest.mark.asyncio
+async def test_a_qualified_ledger_through_asyncpg():
+    import asyncpg
+    from onya.circum import CircumError, Registry, augment, emit, strip, table_resolvers, table_writers
+    dsn = os.environ['ONYA_TEST_PG_DSN']
+    graph_of = lambda body: read(LEDGER.replace('BODY', body)).graph  # noqa: E731
+    p = from_shapes(graph_of(Q1 + Q2 + HOURLY), 'http://e.o/Person')
+    reg = Registry()
+    reg.resolvers.update(table_resolvers(p))
+    reg.writers.update(table_writers(p))
+    await _drop(dsn, p)
+    pool = await asyncpg.create_pool(dsn)
+    stored = ("SELECT value::text, period, unit FROM person_compensation WHERE person_id = 'http://e.o/adat' "
+              'ORDER BY period')
+    try:
+        g = graph_of(Q1 + Q2 + HOURLY)
+        await _setup(pool, p, graph_of(''))
+        assert len((await emit(g, registry=reg, conn=pool)).moved) == 3
+        async with pool.acquire() as c:
+            assert [tuple(r) for r in await c.fetch(stored)] == [('60', '', 'hour'), ('5000', '2026-Q1', 'month'),
+                                                               ('5000', '2026-Q2', 'month')]
+        view = await augment(graph_of(''), registry=reg, conn=pool)
+        assert sorted((a.value, tuple(c.value for c in a.getprop('http://e.o/period')))
+                      for a in view['http://e.o/adat'].getprop('http://e.o/compensation')) == [
+            ('5000', ('2026-Q1',)), ('5000', ('2026-Q2',)), ('60', ())]
+        assert digest(strip(view)) == digest(graph_of(''))
+        # a changed amount under an existing key is a conflict, and writes nothing
+        changed = graph_of('* compensation: 5100\n  * period: 2026-Q1\n  * unit: month\n' + Q2.replace('Q2', 'Q3'))
+        with pytest.raises(CircumError, match='for a person to decide'):
+            await emit(changed, registry=reg, conn=pool)
+        async with pool.acquire() as c:
+            assert len(await c.fetch(stored)) == 3
+    finally:
+        await pool.close()
+        await _drop(dsn, p)
+
+
+async def _setup(pool, p, g):
+    '''Create the projection's tables (empty graph), and give back the pool for `conn=`.'''
+    await materialize(pool, p, g)
+    return pool

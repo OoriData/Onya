@@ -684,6 +684,36 @@ len(report.moved), report.review               # (2, []): review lists what it l
 
 `emit` is idempotent and never deletes. A new row is created only if the table can take it: if other columns are `NOT NULL`, the call raises a `CircumError` naming them, because a node that breaks its own `@cardinality: 1` has nothing valid to insert.
 
+### Ledgers: one value per period
+
+A property can hold several values for a node, told apart by a nested label. Declare the label with `@qualifier` (it becomes the key) and any that just rides along with `@attribute`:
+
+```
+# compensation [@Property]
+* @appliesTo -> Person
+* @as: number
+* @cardinality: 0..*
+* @circumQuery -> payroll
+* @qualifier -> period
+* @attribute -> unit
+
+# period [@Property]
+* @as: text
+
+# unit [@Property]
+* @as: text
+
+# adat [Person]
+* compensation: 5000
+  * period: 2026-Q1
+  * unit: month
+* compensation: 5000
+  * period: 2026-Q2
+  * unit: month
+```
+
+The projection's `person_compensation` table is keyed `(person_id, period)`, so the same amount in two periods is two rows, and a value with no `period` is one row with `''`. `augment` shows the values with their nested `period` and `unit`, and `emit` moves them. A value whose nested assertions are anything else (a note, say) stays in the graph for review. A key given two different values is a `CircumError` rather than an overwrite, because a changed amount is something a person should look at. In a hand-written resolver or writer the same data is `Text.qualifiers` and `Text.attributes` (`{label IRI: text}`).
+
 ### When the derived functions aren't enough
 
 `table_resolvers` and `table_writers` only know tables that `from_shapes` built. A sidecar in Redis, MongoDB or someone else's database gets a function you write, registered by the property's IRI. It receives every requested node at once and returns `{subject IRI: [Edge | Text]}`:

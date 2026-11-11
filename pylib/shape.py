@@ -36,8 +36,9 @@ from onya.interp import DEFAULT, InterpretationRegistry, validate as validate_in
 from onya.locations import describe
 from onya.ordering import OrderingError, ordered
 from onya.terms import (
-    ONYA, ONYA_APPLIESTO, ONYA_AS, ONYA_CARDINALITY, ONYA_CIRCUMQUERY, ONYA_CLASS, ONYA_CLOSED, ONYA_DOCUMENT,
-    ONYA_LABEL, ONYA_ONEOF, ONYA_ORDERED, ONYA_PROPERTY, ONYA_RANGE, ONYA_SEVERITY, ONYA_SUBCLASSOF,
+    ONYA, ONYA_APPLIESTO, ONYA_AS, ONYA_ATTRIBUTE, ONYA_CARDINALITY, ONYA_CIRCUMQUERY, ONYA_CLASS, ONYA_CLOSED,
+    ONYA_DOCUMENT, ONYA_LABEL, ONYA_ONEOF, ONYA_ORDERED, ONYA_PROPERTY, ONYA_QUALIFIER, ONYA_RANGE, ONYA_SEVERITY,
+    ONYA_SUBCLASSOF,
     unknown_reserved_terms,
 )
 
@@ -122,6 +123,8 @@ class PropertyShape:
     ordered: bool = False
     severity: str = 'error'
     circum: bool = False  # its values are held in a sidecar (`@circumQuery`): see `onya.circum`
+    qualifiers: tuple = ()  # label IRIs (declaration order) nested under each value that tell values apart: the key
+    attributes: tuple = ()  # label IRIs nested under each value that ride along, and are not part of the key
 
 
 class Shapes:
@@ -151,6 +154,11 @@ class Shapes:
 
 def _targets(n, term) -> set:
     return {str(e.target.id) for e in n.getedge(term) if hasattr(e.target, 'types')}
+
+
+def _targets_in_order(n, term) -> tuple:
+    '''Like `_targets`, in declaration order and without repeats: for things where order is a column order.'''
+    return tuple(dict.fromkeys(str(e.target.id) for e in n.getedge(term) if hasattr(e.target, 'types')))
 
 
 def load_shapes(g) -> Shapes:
@@ -185,7 +193,11 @@ def load_shapes(g) -> Shapes:
         if str(ONYA_PROPERTY) in types:
             p = PropertyShape(n.id, labels[0] if labels else None, _targets(n, ONYA_APPLIESTO), _targets(n, ONYA_RANGE),
                               severity=severity(n), ordered=flag(n, ONYA_ORDERED), one_of=set(n.values(ONYA_ONEOF)),
-                              circum=any(True for _ in n.getedge(ONYA_CIRCUMQUERY)))
+                              circum=any(True for _ in n.getedge(ONYA_CIRCUMQUERY)),
+                              qualifiers=_targets_in_order(n, ONYA_QUALIFIER),
+                              attributes=_targets_in_order(n, ONYA_ATTRIBUTE))
+            if both := set(p.qualifiers) & set(p.attributes):
+                problem(n, 'bad_shape', ONYA_QUALIFIER, f'{sorted(both)} is both a @qualifier and an @attribute')
             as_ = n.values(ONYA_AS)
             if len(as_) > 1:
                 problem(n, 'bad_shape', ONYA_AS, f'a property has at most one @as, found {as_}')

@@ -83,7 +83,9 @@ class Column:
     '''
     name -- the column name
     type -- `text`, `integer`, `numeric`, `timestamptz` or `boolean`
-    kind -- `id` (the node's IRI), `value` (a property), `edge` (a link's target id) or `ordinal` (an `@ordering` stamp)
+    kind -- `id` (the node's IRI), `value` (a property), `edge` (a link's target id), `ordinal` (an `@ordering` stamp),
+        `qualifier` (a nested value that tells a child table's rows apart: part of its key) or `attribute` (a
+        nested value that rides along with the row)
     label -- the assertion label IRI the column is read from (None for `id`)
     ref -- for an edge: the table whose `id` it references, if there is exactly one
     interp -- the interpretation IRI the value is read with, when the column's type came from one
@@ -106,8 +108,9 @@ class Table:
     '''
     A root table has one row per node of class `cls` (and of `also`, its subclasses), and one column per
     single-valued property. A child table (`parent` set) has one row per value or edge of one label of
-    those nodes: its columns are the owner's `id`, then a value or edge column, then `ordinal` if the label is
-    ordered. `required` means every owner must have at least one row.
+    those nodes: its columns are the owner's `id`, then a value or edge column, then its `qualifier` and
+    `attribute` columns, or an `ordinal` if the label is ordered. `required` means every owner must have at least
+    one row.
     '''
     name: str
     cls: str
@@ -124,12 +127,21 @@ class Table:
 
     @property
     def key(self) -> tuple:
-        '''Names of the primary key columns: `id`; or owner plus ordinal (ordered) or owner plus value.'''
+        '''
+        Names of the primary key columns: `id`; or owner plus ordinal (ordered), owner plus qualifiers (when it
+        has any: the same value can recur under another qualifier), or owner plus value.
+        '''
         if self.parent is None:
             return (self.columns[0].name,)
         if self.ordered:
             return (self.columns[0].name, next(c.name for c in self.columns if c.kind == 'ordinal'))
-        return (self.columns[0].name, self.columns[1].name)
+        quals = tuple(c.name for c in self.columns if c.kind == 'qualifier')
+        return (self.columns[0].name, *quals) if quals else (self.columns[0].name, self.columns[1].name)
+
+    @property
+    def extras(self) -> list:
+        '''The qualifier and attribute columns (empty for a table that has none).'''
+        return [c for c in self.columns if c.kind in ('qualifier', 'attribute')]
 
 
 @dataclass
@@ -205,6 +217,11 @@ def from_shapes(g, cls, *, shapes=None, array_columns: bool = False) -> Projecti
     C's table, which is included too; `@ordered: true` adds an `ordinal`. A property with no
     `@appliesTo` names no class, so it gives no column. `@table` and `@column` on a declaration
     override the derived names. A `@oneOf` becomes a CHECK.
+
+    A property with several values may declare `@qualifier -> q` (a nested label that tells its values apart)
+    and `@attribute -> a` (one that rides along): each becomes a column of its child table, typed from its
+    own `@as`. The qualifiers, not the value, are then the key, so the same value can recur under another
+    qualifier. A qualifier a value lacks is the empty string (text qualifiers only); an attribute it lacks is NULL.
     '''
     sg = shapes if isinstance(shapes, graph) else g
     sh = shapes if isinstance(shapes, Shapes) else load_shapes(sg)
@@ -237,6 +254,23 @@ def _name_of(sg, ident, term, default) -> str:
     return found[0] if found else default
 
 
+def _extra_columns(sg, sh, p, pid) -> list:
+    '''The qualifier columns, then the attribute columns, a property's declarations ask for.'''
+    out = []
+    for kind, ids in (('qualifier', p.qualifiers), ('attribute', p.attributes)):
+        for qid in ids:
+            q = sh.properties.get(qid)
+            if q is None:
+                raise CircumError(f'{_local(pid)}: @{kind} -> {_local(qid)}, which is not declared as a @Property')
+            if q.range:
+                raise CircumError(f'{_local(pid)}: @{kind} {_local(qid)} has a @range: a {kind} is a value')
+            name = _name_of(sg, qid, ONYA_COLUMN, _snake(q.label or _local(qid)))
+            ctype = TYPES.get(str(q.interp), 'text') if q.interp is not None else 'text'
+            out.append(Column(name, ctype, kind == 'attribute', kind, qid, None,
+                              str(q.interp) if q.interp is not None else None))
+    return out
+
+
 def _class_tables(sg, sh, cls, array_columns):
     '''The root table for `cls`, and a child table for each of its properties with several values.'''
     tname = _name_of(sg, cls, ONYA_TABLE, _snake(_local(cls)))
@@ -258,6 +292,10 @@ def _class_tables(sg, sh, cls, array_columns):
             ctype = TYPES.get(str(p.interp), 'text') if p.interp is not None else 'text'
             proto = Column(cname, ctype, lo == 0, 'value', pid, None, str(p.interp) if p.interp is not None else None,
                            tuple(sorted(p.one_of)) if hi == 1 and ctype == 'text' else ())
+        extras = _extra_columns(sg, sh, p, pid)
+        if extras and (hi == 1 or p.ordered or (array_columns and not p.range)):
+            raise CircumError(f'{_local(pid)}: @qualifier and @attribute need a property that holds several values '
+                              'in a child table (a @cardinality above 1, not ordered, and no array_columns)')
         if hi == 1:
             cols.append(proto)
         elif array_columns and not p.range:
@@ -267,6 +305,7 @@ def _class_tables(sg, sh, cls, array_columns):
             payload = Column('target_id' if p.range else 'value', proto.type, False, proto.kind, pid, proto.ref,
                              proto.interp)
             kids = [Column(f'{tname}_id', 'text', False, 'id'), payload]
+            kids += extras
             if p.ordered:
                 kids.append(Column('ordinal', 'integer', False, 'ordinal'))
             children.append(Table(f'{tname}_{cname}', cls, kids, pid, tname, p.ordered, lo >= 1,
@@ -426,6 +465,29 @@ def rows(p: Projection, g, *, nodes=None, registry=DEFAULT) -> dict:
                 out[t.name].append(tuple(row))
                 continue
             payload = t.columns[1]
+            if t.extras:
+                found = [a for a in (*n.getprop(t.label), *n.getedge(t.label))]
+                if t.required and not found:
+                    bad(n, None, t.label, 'required (at least one), but the node has none')
+                names = [c.name for c in t.columns]
+                seen = {}  # key -> the row it holds
+                for a in found:
+                    v = one(n, payload, a)
+                    if v is None:
+                        continue
+                    try:
+                        row = (str(n.id), v, *(_nested_value(g, registry, c, a) for c in t.extras))
+                    except (InterpretationError, ValueError) as e:
+                        bad(n, a, t.label, str(getattr(e, 'message', None) or e))
+                        continue
+                    k = tuple(row[names.index(x)] for x in t.key)
+                    if k not in seen:
+                        seen[k] = row
+                    elif seen[k] != row:  # the same key, different content: a human decides which is right
+                        bad(n, a, t.label, f'conflict: {_key_text(t, k)} holds {_content(t, seen[k])} '
+                                           f'and {_content(t, row)}')
+                out[t.name] += list(seen.values())
+                continue
             found = _claims(n, t.label)
             if t.required and not found:
                 bad(n, None, t.label, 'required (at least one), but the node has none')
@@ -446,6 +508,35 @@ def rows(p: Projection, g, *, nodes=None, registry=DEFAULT) -> dict:
     if wanted is None and p.foreign_keys:
         _check_targets(p, out, g)
     return out
+
+
+def _nested_value(g, registry, col, a):
+    '''
+    What the value assertion `a` says in qualifier or attribute column `col`: a Python value. Absent is NULL for
+    an attribute, and for a text qualifier the empty string (a key can't be NULL); a typed qualifier can't be absent.
+    '''
+    if any(True for _ in a.getedge(col.label)):
+        raise ValueError(f'{_local(col.label)} is an edge, not a value')
+    found = {c.value: c for c in a.getprop(col.label)}
+    if len(found) > 1:
+        raise ValueError(f'{_local(col.label)} has {len(found)} different values on one value')
+    if not found:
+        if col.kind == 'attribute':
+            return None
+        if col.type == 'text':
+            return ''
+        raise ValueError(f'{_local(col.label)} is missing: a {col.type} qualifier is part of the key, so required')
+    return _read(g, registry, col, next(iter(found.values())))
+
+
+def _content(t: Table, row: tuple) -> tuple:
+    '''A child row without its owner and key: the value and attributes, which are what can disagree.'''
+    return tuple(v for c, v in zip(t.columns, row) if c.name not in t.key)
+
+
+def _key_text(t: Table, key: tuple) -> str:
+    '''`period='2026', unit='hour'`: a child table's key, past the owner, as a reader would say it.'''
+    return ', '.join(f'{n}={v!r}' for n, v in zip(t.key[1:], key[1:]))
 
 
 def _ordered_or_sorted(n, col, found, bad):
@@ -887,18 +978,27 @@ class Node:
 
 @dataclass
 class Edge:
-    '''A circum edge to `target` (a full IRI), with the `Node` to create when the graph doesn't have it yet.'''
+    '''
+    A circum edge to `target` (a full IRI), with the `Node` to create when the graph doesn't have it yet.
+    `qualifiers` and `attributes` map a label IRI to a text value: the nested assertions the property declares with
+    `@qualifier` (they tell values apart) and `@attribute` (they ride along). `augment` writes them under the edge;
+    `emit` hands them to the writer.
+    '''
     target: str
     node: Node | None = None
     as_of: object = None  # a datetime, date or ISO 8601 string: when the sidecar says this was true
+    qualifiers: dict = field(default_factory=dict)
+    attributes: dict = field(default_factory=dict)
 
 
 @dataclass
 class Text:
-    '''A circum value, with an optional interpretation IRI.'''
+    '''A circum value, with an optional interpretation IRI, and its `qualifiers` and `attributes` (see `Edge`).'''
     value: str
     as_of: object = None
     interp: object = None
+    qualifiers: dict = field(default_factory=dict)
+    attributes: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -1101,17 +1201,25 @@ def _apply(view, prop: CircumProperty, subjects, found, default_stamp) -> None:
                           f'{stray[:3]}, which it was not asked about')
     sc = _sidecar_node(view, prop.sidecar.id)
 
-    def mark(a, stamp):
+    def mark(a, stamp, item=None):
         a.add_edge(ONYA_METHOD_REL, sc)
         a.add_property(ONYA_ASOF, stamp)
+        for label, v in {**getattr(item, 'qualifiers', {}), **getattr(item, 'attributes', {})}.items():
+            a.add_property(view.resolve(label), v)  # nested under the value, beside @method and @asOf
+
+    def qualified(a, item) -> bool:
+        '''Is `a` already the value `item` is: the same qualifiers (an authored one under another period isn't).'''
+        keys = {str(view.resolve(k)) for k in item.qualifiers} | set(prop.shape.qualifiers if prop.shape else ())
+        have = {str(c.label): c.value for c in a.properties if str(c.label) in keys}
+        return have == {str(view.resolve(k)): v for k, v in item.qualifiers.items()}
 
     for subject, items in found.items():
         n = view.nodes[str(subject)]
         for item in items:
             stamp = _asof(item.as_of) if item.as_of is not None else default_stamp
             if isinstance(item, Text):
-                if not any(p.value == item.value for p in n.getprop(prop.label)):  # already authored: leave it
-                    mark(n.add_property(prop.label, item.value, interp=item.interp), stamp)
+                if not any(p.value == item.value and qualified(p, item) for p in n.getprop(prop.label)):
+                    mark(n.add_property(prop.label, item.value, interp=item.interp), stamp, item)  # else: authored
                 continue
             tid = I(str(item.target))
             target = view.nodes.get(tid)
@@ -1119,8 +1227,8 @@ def _apply(view, prop: CircumProperty, subjects, found, default_stamp) -> None:
                 target = target or view.node(tid)
                 target.types |= {I(view.resolve(t)) for t in (item.node.types if item.node else ())}
                 target.add_edge(ONYA_METHOD_REL, sc)
-            if not any(e.target.id == tid for e in n.getedge(prop.label)):
-                mark(n.add_edge(prop.label, target), stamp)
+            if not any(e.target.id == tid and qualified(e, item) for e in n.getedge(prop.label)):
+                mark(n.add_edge(prop.label, target), stamp, item)
             for label, values in (item.node.props if item.node else {}).items():
                 label = view.resolve(label)
                 for v in [values] if isinstance(values, str) else values:
@@ -1191,9 +1299,27 @@ class EmitReport:
         return f'{len(self.moved)} moved, {len(self.review)} for review'
 
 
-def _emittable(a) -> bool:
-    '''No `@id`, and nothing nested but the parser's own `@source`: removing it takes nothing else along.'''
-    return a.id is None and not any(c.label != ONYA_SOURCE_REL for c in (*a.properties, *a.edges))
+def _nested_of(prop: CircumProperty, a) -> tuple | None:
+    '''
+    `(qualifiers, attributes)`, each `{label IRI: text}`, if `a` can move to its sidecar, else None. It can if it has
+    no `@id` and nothing nested but the parser's own `@source` and the qualifiers and attributes the property declares
+    (each a plain value, once): removing it then takes nothing else along. Anything else nested is for a person.
+    '''
+    if a.id is not None:
+        return None
+    sh = prop.shape
+    quals, attrs = set(sh.qualifiers if sh else ()), set(sh.attributes if sh else ())
+    found = ({}, {})
+    for c in (*a.properties, *a.edges):
+        if c.label == ONYA_SOURCE_REL:
+            continue
+        key = str(c.label)
+        where = found[0] if key in quals else found[1] if key in attrs else None
+        if (where is None or key in found[0] or key in found[1] or hasattr(c, 'target') or c.id is not None
+                or any(x.label != ONYA_SOURCE_REL for x in (*c.properties, *c.edges))):
+            return None
+        where[key] = c.value
+    return found
 
 
 async def emit(g, touched=None, *, registry: Registry, viewer=None, shapes=None, conn=None) -> EmitReport:
@@ -1205,7 +1331,9 @@ async def emit(g, touched=None, *, registry: Registry, viewer=None, shapes=None,
     in `g`, and a retry writes the same rows again.
 
     `g` is edited in place; pass `g.copy()` for a dry run. Left in place, and named in `report.review`: an
-    assertion with an `@id` or nested assertions, and (silently) anything that already came from a sidecar.
+    assertion with an `@id`, or with nested assertions other than the `@qualifier`s and `@attribute`s its
+    property declares (those travel with the value, in `Text.qualifiers` and `Text.attributes`), and (silently)
+    anything that already came from a sidecar.
     Raises `CircumAccessDenied` if the policy refuses the viewer, and `CircumError` for a circum label with
     no writer, both before anything is written.
     '''
@@ -1224,18 +1352,20 @@ async def emit(g, touched=None, *, registry: Registry, viewer=None, shapes=None,
             for a in (*n.getprop(prop.label), *n.getedge(prop.label)):
                 if _method_of(a, sids):
                     continue  # it came from the sidecar
-                if not _emittable(a):
+                if (nested := _nested_of(prop, a)) is None:
                     report.review.append(f'{n.id}: {prop.label} has an id or nested assertions; unchanged')
                     continue
+                quals, attrs = nested
                 if hasattr(a, 'target'):
                     t = a.target
                     props = {str(p.label): [] for p in getattr(t, 'properties', ())}
                     for p in getattr(t, 'properties', ()):
                         props[str(p.label)].append(p.value)
                     node_ = Node(tuple(map(str, t.types)), props) if hasattr(t, 'types') else None
-                    batch.setdefault(str(n.id), []).append(Edge(str(t.id), node_))
+                    batch.setdefault(str(n.id), []).append(Edge(str(t.id), node_, qualifiers=quals, attributes=attrs))
                 else:
-                    batch.setdefault(str(n.id), []).append(Text(a.value, interp=a.interp))
+                    batch.setdefault(str(n.id), []).append(Text(a.value, interp=a.interp, qualifiers=quals,
+                                                                attributes=attrs))
                 taken.append((n, a))
         if batch:
             plan.append((prop, batch, taken))
@@ -1323,6 +1453,8 @@ def _resolver(p: Projection, t: Table, col: Column):
     root = _root_of(p, t)
     classes = {x.name: x.cls for x in p.tables if x.parent is None}  # table name -> class IRI
     ordinal = next((i for i, c in enumerate(t.columns) if c.kind == 'ordinal'), None)
+    quals = [(i, c) for i, c in enumerate(t.columns) if c.kind == 'qualifier']
+    attrs = [(i, c) for i, c in enumerate(t.columns) if c.kind == 'attribute']
 
     async def resolve(subjects, ctx):
         _check_sidecar(ctx, root)
@@ -1334,7 +1466,8 @@ def _resolver(p: Projection, t: Table, col: Column):
             order = lambda r: r[0]  # noqa: E731
         else:
             at = 1
-            order = (lambda r: (r[0], r[ordinal])) if ordinal is not None else (lambda r: (r[0], str(r[1])))
+            order = ((lambda r: (r[0], r[ordinal])) if ordinal is not None
+                     else (lambda r: (r[0], *(str(r[i]) for i, _ in quals), str(r[1]))))
         out: dict = {}
         for r in sorted(found, key=order):
             when = _norm(_UPDATED_COLUMN, r[-1])  # the row's own time; None leaves the default
@@ -1346,6 +1479,9 @@ def _resolver(p: Projection, t: Table, col: Column):
                     item = Edge(str(v), Node((cls,)) if cls else None, as_of=when)
                 else:
                     item = Text(_text_of(col, v), as_of=when, interp=col.interp)
+                # a text qualifier that is '' is "none given"; an attribute that is NULL likewise: neither is asserted
+                item.qualifiers = {str(c.label): _text_of(c, r[i]) for i, c in quals if r[i] not in (None, '')}
+                item.attributes = {str(c.label): _text_of(c, r[i]) for i, c in attrs if r[i] is not None}
                 out.setdefault(r[0], []).append(item)
         return out
     return resolve
@@ -1394,6 +1530,30 @@ def _column_value(col: Column, item, subject):
         raise CircumError(f'{subject}: {_local(col.label)}: {getattr(e, "message", None) or e}') from e
 
 
+def _extra_values(t: Table, item, subject) -> tuple:
+    '''
+    The values for `t`'s qualifier and attribute columns, from a writer's `item`: absent is `''` for a text
+    qualifier and NULL for an attribute. A label the table has no such column for is refused, not dropped: a writer
+    that was given it would otherwise lose it silently.
+    '''
+    given = {'qualifier': {str(k): v for k, v in item.qualifiers.items()},
+             'attribute': {str(k): v for k, v in item.attributes.items()}}
+    for kind, d in given.items():
+        if stray := sorted(set(d) - {str(c.label) for c in t.extras if c.kind == kind}):
+            raise CircumError(f'{subject}: {_local(t.label or "")}: table {t.name} has no {kind} column for '
+                              f'{[_local(x) for x in stray]}')
+    out = []
+    for c in t.extras:
+        v = given[c.kind].get(str(c.label))
+        if v is None or (v == '' and c.kind == 'qualifier'):
+            if c.kind == 'qualifier' and c.type != 'text':
+                raise CircumError(f'{subject}: {_local(c.label)} is part of the key of {t.name} and has no value')
+            out.append('' if c.kind == 'qualifier' else None)
+        else:
+            out.append(_column_value(c, Text(v), subject))
+    return tuple(out)
+
+
 async def _check_targets_exist(be, p: Projection, col: Column, ids) -> None:
     '''An edge column is a foreign key: its target needs a row in the referenced table.'''
     if col.kind != 'edge' or not col.ref or not p.foreign_keys:
@@ -1416,11 +1576,14 @@ def _writer(p: Projection, t: Table, col: Column):
                 await _check_schema(be, p, [root] if t is root else [root, t])
                 subjects = sorted(map(str, rows))
                 values = {s: [_column_value(col, i, s) for i in rows[s]] for s in subjects}
+                extras = {s: [_extra_values(t, i, s) for i in rows[s]] for s in subjects}
                 await _check_targets_exist(be, p, col, [v for vs in values.values() for v in vs])
                 missing = await _missing_owners(be, root, subjects)
                 _refuse_new_rows(root, missing, col.label if t is root else None)
                 if t.parent is None:
                     await _write_root(be, root, col, values, missing, stamp)
+                elif t.extras:
+                    await _write_keyed(be, root, t, values, extras, missing, stamp)
                 else:
                     await _write_child(be, root, t, values, missing, stamp)
     return write
@@ -1463,14 +1626,51 @@ async def _write_child(be, root, t, values, missing, stamp) -> None:
                              f'VALUES ({", ".join(_marks(be, 3))})', new)
 
 
+async def _write_keyed(be, root, t, values, extras, missing, stamp) -> None:
+    '''
+    Add the rows a qualified child table lacks, one per (owner, qualifiers). A row that is already there is left
+    alone if it says the same, and is a conflict if it doesn't (a changed amount is for a person to see), as is
+    one batch giving a key two different contents. Nothing is written when there is a conflict, and nothing is deleted.
+    '''
+    names = [c.name for c in t.columns]
+    cols = {c.name: c for c in t.columns}
+    kix = [names.index(k) for k in t.key]
+    norm = lambda r: tuple(_norm(cols[n], v) for n, v in zip(names, r))  # noqa: E731
+    have = {tuple(norm(r)[i] for i in kix): norm(r) for r in await _fetch_in(be, t, list(values))}
+    new, seen, conflicts = [], {}, []
+    for s in sorted(values):
+        for v, ex in zip(values[s], extras[s]):
+            row = (s, v, *ex)
+            r = norm(row)
+            k = tuple(r[i] for i in kix)
+            held = seen.get(k) or have.get(k)
+            if held is None:
+                new.append(row)
+            elif held[:len(names)] != r:
+                conflicts.append(f'{s}: {_local(t.label)}: {_key_text(t, k)} holds {_content(t, held)}, '
+                                 f'not {_content(t, r)}: a changed value is for a person to decide')
+            seen[k] = held if held is not None else r
+    if conflicts:
+        raise CircumError(conflicts)
+    if missing:  # the owners need a row of their own first
+        await be.executemany(f'INSERT INTO {_q(root.name)} ({_q(root.columns[0].name)}, {_q(UPDATED)}) '
+                             f'VALUES ({", ".join(_marks(be, 2))})', [(s, stamp) for s in sorted(missing)])
+    if new:
+        await be.executemany(f'INSERT INTO {_q(t.name)} ({", ".join(map(_q, [*names, UPDATED]))}) '
+                             f'VALUES ({", ".join(_marks(be, len(names) + 1))})',
+                             [(*(be.encode(cols[n], v) for n, v in zip(names, row)), stamp) for row in new])
+
+
 def table_writers(p: Projection) -> dict:
     '''
     `{label IRI: writer}` for the properties `emit` can write into the projection's tables: the inverse of
     `table_resolvers`. A writer sets a single-valued column (or adds the missing rows of a child table),
-    stamps what it changes with `updated`, is idempotent, and never deletes. A node with no row gets one only
-    if every other column may be NULL; otherwise `CircumError` names the columns it would need. An edge to a
-    node that has no row in the referenced table is refused. Properties whose order matters (an ordered child
-    table or array) get no writer: `emit` leaves ordered values in the graph for review.
+    stamps what it changes with `updated`, is idempotent, and never deletes. A child table with `@qualifier`s
+    adds a row per (owner, qualifiers), and a key that already holds a different value or attribute is a
+    `CircumError` naming it (a changed amount is for a person to decide), with nothing written. A node with no
+    row gets one only if every other column may be NULL; otherwise `CircumError` names the columns it would need.
+    An edge to a node that has no row in the referenced table is refused. Properties whose order matters (an
+    ordered child table or array) get no writer: `emit` leaves ordered values in the graph for review.
     '''
     return {label: _writer(p, *where[0]) if len(where) == 1 else _ambiguous(label, where)
             for label, where in _places(p).items() if not any(t.ordered or col.ordered for t, col in where)}

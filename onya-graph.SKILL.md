@@ -27,7 +27,7 @@ Before inventing a convention for something below, check for the built-in. Each 
 | Sequence matters (steps, authors, address lines) | **Ordered values**: `@ordered` in the docheader, `@ordering` stamps | `onya.ordering`, `node.ordered_values()`; [design-ordering](https://github.com/OoriData/Onya/blob/main/doc/design-ordering.md) |
 | Where a claim came from, how sure, and when it was true | **Provenance**: nested `@source`, `@method`, `@confidence`, `@asOf` | `onya.provenance`; [SPEC § Optional assertion provenance](https://github.com/OoriData/Onya/blob/main/SPEC.md#optional-assertion-provenance-source-method-confidence-asof) |
 | A claim you must refer to or dispute | **Assertion ids** (`[=id]` / `@id`), not an invented node | [SPEC § Assertion Identifiers](https://github.com/OoriData/Onya/blob/main/SPEC.md#assertion-identifiers) |
-| Records and volume that don't belong in the graph | **Circumstances**: `@circumQuery` + `@Sidecar`, tables derived from shapes, `augment` / `emit` | `onya.circum`, `onya project`, `onya catalog`; [design-sidecars](https://github.com/OoriData/Onya/blob/main/doc/design-sidecars.md) (the pattern), [design-circum](https://github.com/OoriData/Onya/blob/main/doc/design-circum.md) (the mechanism); see *Graph vs sidecar* |
+| Records and volume that don't belong in the graph | **Circumstances**: `@circumQuery` + `@Sidecar`, tables derived from shapes, `augment` / `emit`; ledgers keyed by a `@qualifier` such as `period` | `onya.circum`, `onya project`, `onya catalog`; [design-sidecars](https://github.com/OoriData/Onya/blob/main/doc/design-sidecars.md) (the pattern), [design-circum](https://github.com/OoriData/Onya/blob/main/doc/design-circum.md) (the mechanism); see *Graph vs sidecar* |
 | Did the graph change? Are two graphs the same? | **Content digest**, per graph or per node | `onya.digest`; [design-digest](https://github.com/OoriData/Onya/blob/main/doc/design-digest.md) |
 | Find the node a user means; reverse edges; a neighborhood | `g.search`, `g.inbound`, `g.subgraph`, `g.copy` | `onya.graph`, `onya.query` |
 | Show a node to people | **Views**: declarative specs, no per-type renderers | `onya.view` |
@@ -304,6 +304,8 @@ Keep the graph to concepts: entities, relationships, rules, current state and sh
 # billing-db [@System]
 * @label: Billing database
 ```
+
+A property with a value **per period** (or per grade, per region) declares the nested label that tells the values apart with `@qualifier -> period`, and a nested label that merely rides along with `@attribute -> unit` (each declared as its own `@Property` with `@as`). The qualifiers are the table key, so the same amount can recur; two different values for one key is a conflict for a person, not an overwrite. In `.onya`: `* compensation: 5000` with nested `* period: 2026-Q1` and `* unit: month`. Details: [design-circum, Ledgers](https://github.com/OoriData/Onya/blob/main/doc/design-circum.md#ledgers-several-values-per-node-told-apart-by-a-qualifier).
 
 `@queryDetail` (nested under `@circumQuery`) is an opaque token handed to the application's resolver, never SQL: a graph travels, so never write query text, credentials or connection strings in one. Don't author `@method` or `@asOf` on these values either; `onya.circum` stamps them on what it reads in.
 
