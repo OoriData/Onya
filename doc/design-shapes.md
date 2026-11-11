@@ -94,6 +94,40 @@ for f in report.findings:
 
 `Report` has `findings`, `ok`, `errors` and `warnings`. Findings are data: validation never raises for one, never runs implicitly, and never changes parsing. They carry a `location` when the read tracked locations (the CLI always does). Nodes typed `@Class`, `@Property` or `@Document` are declarations, not data, and are not checked. Shapes apply to a node's own assertions; nested assertions are checked only for their own `@as`.
 
+## Validating a change: `against=`
+
+A proposed change is often a *fragment*: a few nodes, with no declarations and none of the targets they point at. Alone, every target looks untyped (`range` findings), and a value added to a node that already has one never meets its `@cardinality`. `against` checks the fragment as if it were merged into a base graph:
+
+```python
+frag = read(proposed).graph                  # `ify knows -> chuks`, and nothing else
+report = validate(frag, against=base)        # shapes from the base, unless shapes= is given
+```
+
+- **Types resolve through the base.** `chuks` is a `Student` in the base, so `knows -> chuks` satisfies `@range -> Person`; a target that is an `Org` there does not.
+- **Cardinality counts the base's values.** A fragment giving `chuks` a second `name`, when `name` is `@cardinality: 1`, is a finding. A fragment that gives `chuks` nothing a Student requires is not: the base already holds it.
+- **Only the fragment's own nodes are reported.** A node the fragment names, whether new or already in the base, is checked on its merged assertions. The base's problems on other nodes, including neighbors that were copied in only to resolve a type, are never reported.
+- **The cost follows the fragment.** Only the nodes the fragment names, its edge targets, and their neighbors are copied from the base (`graph.subgraph`), never the whole base. Pass a loaded `Shapes` (`load_shapes(base)`) when checking many fragments, so the declarations are read once.
+- **Neither graph changes.** A fragment that can't merge into the base (the same assertion `@id` with different content) raises `GraphMergeError`, as a `put` would. A finding names no line, since it is about the merged copy.
+
+Only additions can be expressed in a fragment, so there is nothing to check for a removal.
+
+**A base in a store.** `validate` is synchronous, so a stored base has its own coroutine, with the same rules:
+
+```python
+from onya.shape import validate_against_store
+
+report = await validate_against_store(frag, store, ['http://e.o/authored', 'http://e.o/runtime'])
+```
+
+On SQLite and PostgreSQL only the neighborhood the fragment touches is read (`subgraph`, or `subgraph_across` for several graphs), and, when `shapes=` isn't given, only the stored `@Class` and `@Property` nodes, so the base is never loaded whole. A name with no graph yet (a runtime graph nothing has written to) is skipped. The file store has no `subgraph`, so it reads each named graph: correct, but not bounded by the fragment.
+
+**On the command line**, `--against=FILESPEC` takes the base as files, and `--store=URL --graph=NAME[,NAME]` as a store:
+
+```
+onya validate proposed.onya --against=kg/
+onya validate proposed.onya --store=sqlite:kg.db --graph=http://example.org/kg
+```
+
 ## The command line
 
 ```

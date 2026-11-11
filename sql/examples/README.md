@@ -8,7 +8,7 @@ against the live schema.
 
 | File | What it is |
 |------|------------|
-| `postgres-schema.sql` | The full PostgreSQL store schema: core tables and indexes, the version keys onya checks on open, the `onya_graph_prefix` table, and the `pg_trgm` search objects, plus commented-out grant examples. Every statement is idempotent, so it doubles as an upgrade script. Leaves out the SQL/PGQ property graphs onya creates on PostgreSQL 19+. |
+| `postgres-schema.sql` | The full PostgreSQL store schema: core tables and indexes, the version keys onya checks on open, the `onya_graph_prefix` and `onya_graph_rev` tables, and the `pg_trgm` search objects, plus commented-out grant examples. Every statement is idempotent, so it doubles as an upgrade script. Leaves out the SQL/PGQ property graphs onya creates on PostgreSQL 19+. |
 | `regenerate.py` | Rewrites `postgres-schema.sql` from onya's own schema definition. Run it after installing the onya version you want the example to match: `python sql/examples/regenerate.py`. |
 
 ## Applying it

@@ -33,7 +33,7 @@ from onya.graph import GraphMergeError, edge, graph, warn_prefix_clashes
 from onya.util import namespace_for_curie
 from onya.query import DEFAULT_MIN_SCORE, SearchHit, normalize as query_normalize, rank, score_candidates
 from onya.store import _relational as rel
-from onya.store.base import refuse_circum_derived
+from onya.store.base import combined_version, refuse_circum_derived
 from onya.store._relational import (
     POSTGRES, SCHEMA_VERSION, SKELETON_HASH_VERSION, classify_anonymous, ddl_statements,
     iter_records, skeleton_hash,
@@ -51,8 +51,9 @@ class PostgresStore:
 
     dialect = POSTGRES
 
-    def __init__(self, pool, server_major: int, *, has_trgm: bool = False):
+    def __init__(self, pool, server_major: int, *, has_trgm: bool = False, owns_pool: bool = True):
         self._pool = pool
+        self._owns_pool = owns_pool  # closing the store closes the pool only if the store made it
         self.server_major = server_major
         self.has_trgm = has_trgm  # pg_trgm available -> indexed search; else in-process fallback
         # Fast path (INSERT ... ON CONFLICT DO SELECT) is a PG19 feature; feature-detected by
@@ -64,28 +65,62 @@ class PostgresStore:
     # --- construction / lifecycle ---------------------------------------------------
 
     @classmethod
-    async def from_url(cls, url: str) -> 'PostgresStore':
+    async def from_url(cls, url: str, *, min_size: int | None = None, max_size: int | None = None,
+                       **pool_options) -> 'PostgresStore':
+        '''
+        Open a pool on ``url`` (``min_size`` / ``max_size`` and any other ``asyncpg.create_pool`` option are
+        passed through: behind a session-mode pooler, ``max_size`` must stay under its cap) and a store on it.
+        The store owns the pool and closes it.
+        '''
         try:
             import asyncpg
         except ImportError as e:  # extras-gated; feature-detected, not silently degraded
             raise ImportError(_IMPORT_HINT) from e
 
-        pool = await asyncpg.create_pool(url)
+        if max_size is not None and min_size is None:
+            min_size = min(max_size, 10)  # asyncpg's default min_size is 10, which would refuse any smaller max_size
+        sizes = {k: v for k, v in (('min_size', min_size), ('max_size', max_size)) if v is not None}
+        pool = await asyncpg.create_pool(url, **sizes, **pool_options)
+        try:
+            return await cls.from_pool(pool, owns_pool=True)
+        except BaseException:
+            await pool.close()  # a pool we made must not outlive a failed open
+            raise
+
+    @classmethod
+    async def from_pool(cls, pool, *, ensure: bool = True, owns_pool: bool = False) -> 'PostgresStore':
+        '''
+        A store on an asyncpg pool the caller made, for when ``connect`` can't build the pool (a size the
+        pooler allows, its own ``init`` or ``ssl`` settings). The caller keeps the pool: closing the store
+        leaves it open, unless ``owns_pool=True``.
+
+        ensure -- True (default) creates what is missing, as ``connect`` does: the schema, the search
+            objects and, on PostgreSQL 19 where the server accepts it, the property graphs. False only
+            looks: for a role with data privileges on a schema someone else provisioned. Missing core
+            tables raise ``StoreError`` naming them; missing search objects or property graphs just
+            leave ``has_trgm`` False and the ``GraphQueryStore`` capability off.
+        '''
         async with pool.acquire() as conn:
             ver = conn.get_server_version()
             major = ver[0] if isinstance(ver, tuple) else ver.major
-            async with conn.transaction():
-                await _ensure_schema(conn)
-                has_trgm = await _ensure_search(conn)
-                has_pgq = await _ensure_pgq(conn) if major >= 19 else False
+            if ensure:
+                async with conn.transaction():
+                    await _ensure_schema(conn)
+                    has_trgm = await _ensure_search(conn)
+                    has_pgq = await _ensure_pgq(conn) if major >= 19 else False
+            else:
+                await _check_schema(conn)
+                has_trgm = await _detect_search(conn)
+                has_pgq = major >= 19 and not await _missing_relations(conn, ['onya_base', 'onya_reified'])
         store_cls = PostgresGraphQueryStore if has_pgq else cls
-        return store_cls(pool, major, has_trgm=has_trgm)
+        return store_cls(pool, major, has_trgm=has_trgm, owns_pool=owns_pool)
 
     async def __aenter__(self) -> 'PostgresStore':
         return self
 
     async def __aexit__(self, *exc) -> None:
-        await self._pool.close()
+        if self._owns_pool:
+            await self._pool.close()
 
     async def _reset_for_tests(self) -> None:
         '''Empty every graph (used by the conformance fixture); leaves the schema in place.'''
@@ -115,6 +150,20 @@ class PostgresStore:
             if gpk is None:
                 raise KeyError(str(name))
             await conn.execute('DELETE FROM onya_graph WHERE graph_pk = $1', gpk)
+            await conn.execute(rel.bump_rev_sql('$1'), str(name))  # outlives the graph: see onya_graph_rev
+
+    # --- VersionedStore -------------------------------------------------------------
+
+    async def version(self, name: I | str) -> str:
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow('SELECT r.rev FROM onya_graph g LEFT JOIN onya_graph_rev r ON r.name = g.name'
+                                      ' WHERE g.name = $1', str(name))
+        if row is None:
+            raise KeyError(str(name))
+        return str(row['rev'] or 0)  # stored before revisions were kept: 0 until it is written
+
+    async def versions(self, names) -> str:
+        return await combined_version(self, names)
 
     async def names(self):
         async with self._pool.acquire() as conn:
@@ -249,6 +298,7 @@ class PostgresStore:
                 await _add_one(conn, str(name), str(origin), str(label), str(target_or_value),
                                kind=kind, interp=None if interp is None else str(interp),
                                id_=None if id_ is None else str(id_))
+                await conn.execute(rel.bump_rev_sql('$1'), str(name))
 
     async def remove(self, name, origin, label, target_or_value, *, kind) -> None:
         payload = str(target_or_value)
@@ -257,9 +307,11 @@ class PostgresStore:
             gpk = await _graph_pk(conn, str(name))
             if gpk is None:
                 return
-            await conn.execute(
-                'DELETE FROM onya_assertion WHERE graph_pk = $1 AND skeleton_hash = $2'
-                ' AND ident_pk IS NULL', gpk, sk)
+            async with conn.transaction():
+                await conn.execute(
+                    'DELETE FROM onya_assertion WHERE graph_pk = $1 AND skeleton_hash = $2'
+                    ' AND ident_pk IS NULL', gpk, sk)
+                await conn.execute(rel.bump_rev_sql('$1'), str(name))
 
 
     # --- SearchStore ------------------------------------------------------------------
@@ -386,6 +438,25 @@ async def _ensure_schema(conn) -> None:
             await conn.execute('INSERT INTO onya_meta (key, value) VALUES ($1, $2)', key, expected)
         elif val != expected:
             raise UnknownSchemaVersion(found=val, expected=expected)
+
+
+async def _check_schema(conn) -> None:
+    '''`_ensure_schema` without the DDL: every core table must exist and carry the version this build speaks.'''
+    missing = await _missing_relations(conn, _core_objects())
+    if missing:
+        raise StoreError(f'The onya store schema is incomplete (missing: {", ".join(missing)}), and from_pool('
+                         f'ensure=False) creates nothing. {_SQL_EXAMPLE_HINT}')
+    for key, expected in (('schema_version', SCHEMA_VERSION), ('skeleton_hash_version', SKELETON_HASH_VERSION)):
+        val = await conn.fetchval('SELECT value FROM onya_meta WHERE key = $1', key)
+        if val != expected:
+            raise UnknownSchemaVersion(found=val, expected=expected)
+
+
+async def _detect_search(conn) -> bool:
+    '''`_ensure_search` without the DDL: is indexed search usable (the extension and the function)?'''
+    return bool(await conn.fetchval(
+        "SELECT to_regprocedure('onya_normalize(text)') IS NOT NULL "
+        "AND EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm')"))
 
 
 # Mirror of `onya.query.normalize` in SQL: lowercase, collapse non-alphanumeric runs to one
@@ -679,6 +750,7 @@ async def _write_graph(conn, name: str, g, *, merge: bool) -> list:
             if apk is not None:
                 pk_by_obj[id(rec.obj)] = apk
 
+    await conn.execute(rel.bump_rev_sql('$1'), name)
     return await _write_prefixes(conn, gpk, getattr(g, 'prefixes', None))
 
 

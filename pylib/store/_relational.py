@@ -107,6 +107,13 @@ def ddl_statements(d: Dialect) -> list[str]:
         ' namespace TEXT NOT NULL,'
         ' PRIMARY KEY (graph_pk, prefix))',
 
+        # A graph's revision, bumped by every transaction that writes it (`VersionedStore.version`). Keyed by name
+        # and left in place when the graph is dropped or replaced, so a graph made again carries on from its old
+        # revision and a token is never reused.
+        'CREATE TABLE IF NOT EXISTS onya_graph_rev ('
+        ' name TEXT PRIMARY KEY,'
+        ' rev BIGINT NOT NULL)',
+
         'CREATE TABLE IF NOT EXISTS onya_node ('
         f' node_pk {pk},'
         ' ident_pk BIGINT NOT NULL UNIQUE REFERENCES onya_ident(ident_pk) ON DELETE CASCADE)',
@@ -283,6 +290,16 @@ def ensure_schema(cur, dialect: Dialect) -> None:
 
 # --- write path (synchronous, DB-API cursor) ----------------------------------------
 
+def bump_rev_sql(placeholder: str) -> str:
+    '''The upsert that counts one more write to a graph; ``placeholder`` is the dialect's (``?`` or ``$1``).'''
+    return (f'INSERT INTO onya_graph_rev (name, rev) VALUES ({placeholder}, 1)'
+            ' ON CONFLICT (name) DO UPDATE SET rev = onya_graph_rev.rev + 1')
+
+
+def bump_rev(cur, name: str) -> None:
+    cur.execute(bump_rev_sql('?'), (str(name),))
+
+
 def _get_or_create_graph(cur, name: str) -> int:
     cur.execute('SELECT graph_pk FROM onya_graph WHERE name = ?', (name,))
     row = cur.fetchone()
@@ -418,6 +435,7 @@ def write_graph(cur, name: str, g, *, merge: bool, dialect: Dialect = SQLITE) ->
             if apk is not None:
                 pk_by_obj[id(rec.obj)] = apk
 
+    bump_rev(cur, name)
     return write_prefixes(cur, graph_pk, getattr(g, 'prefixes', None))
 
 

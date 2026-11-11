@@ -28,13 +28,14 @@ The [shape layer](design-shapes.md) already says what a class's properties are, 
 | `@range -> Class` | `<label>_id`, a foreign key to that class's table. The class is projected too. |
 | `@ordered: true` | an `ordinal` column in the child table, from `@ordering` |
 | `@oneOf` (single text value) | a `CHECK (col IN (...))` |
+| `@qualifier -> q`, `@attribute -> a` | a column of the child table for each, and the qualifiers become its key: see *Ledgers* below |
 | `@table`, `@column` on a declaration | the table or column name, in place of the one derived from the class or label |
 
 Names are the local part of the IRI in `snake_case` (`addressLine` is `address_line`); a reserved word is quoted. Two properties that derive the same column name are an error, answered with `@column`. A property with no `@appliesTo` names no class, so it gives no column. Properties of a superclass are columns of its subclasses' tables, and a subclass's nodes are rows of the superclass's table, as `@subClassOf` is closed over for validation. A `@range` with more than one class gives a plain text column and no foreign key.
 
 Foreign key order is **derived from the references**, not from the order of the file: `ddl` and `materialize` create each table after the ones it references. All foreign keys are `DEFERRABLE INITIALLY DEFERRED`, so row order inside a run doesn't matter and a table can reference itself. Tables that reference each other in a cycle are an error, unless the projection is built with `foreign_keys=False`.
 
-A projection can still be written by hand, for exceptions: `Projection([Table(...)])`, with `Column`s of kind `id`, `value`, `edge` or `ordinal`.
+A projection can still be written by hand, for exceptions: `Projection([Table(...)])`, with `Column`s of kind `id`, `value`, `edge`, `ordinal`, `qualifier` or `attribute`.
 
 ## Rows
 
@@ -44,6 +45,7 @@ A projection can still be written by hand, for exceptions: `Projection([Table(..
 - a required value (`@cardinality: 1` or `1..*`) the node lacks;
 - a single-valued label (including one with no declared `@cardinality`) with more than one value;
 - stamps that conflict, under an ordered label;
+- (a property with `@qualifier`s) one key, such as one person and period, given two different values or attributes;
 - an edge to a node that is in no table (checked on a full projection; with `nodes=`, the database's foreign key decides).
 
 ## Writing
@@ -123,7 +125,7 @@ report = await emit(g, touched=[iri], registry=reg)    # report.moved, report.re
 
 For each touched node, `emit` hands the assertions whose label has a `@circumQuery` to the property's registered **writer** as `{subject IRI: [Edge | Text]}`, then removes them from `g`: sidecar first, graph second, so a fact is never in neither place. Writers must be idempotent, since a crash between the two steps leaves a fact in both and the retry writes it again. Nothing is removed until every writer has succeeded.
 
-It leaves in place, naming them in `report.review`, assertions with an `@id` or nested assertions (removing one would take them along, and a row elsewhere may point at it), and ignores what came from a sidecar. A circum label with no writer, or a viewer the policy refuses, raises before anything is written. `g` is edited in place: pass `g.copy()` for a dry run. A target node an emitted edge pointed at stays in the graph.
+It leaves in place, naming them in `report.review`, assertions with an `@id` or nested assertions (removing one would take them along, and a row elsewhere may point at it), and ignores what came from a sidecar. The nested assertions that a property declares as its `@qualifier`s and `@attribute`s are the exception: they travel with the value (see *Ledgers*), and anything else nested still goes to review, so a stray one is never lost silently. A circum label with no writer, or a viewer the policy refuses, raises before anything is written. `g` is edited in place: pass `g.copy()` for a dry run. A target node an emitted edge pointed at stays in the graph.
 
 ### Resolvers and writers for the tables `materialize` built
 
@@ -184,6 +186,70 @@ async def counselled_by(subjects, ctx):
     found = await ctx.conn.mget([f'counsellor:{s}' for s in subjects])      # e.g. redis.asyncio
     return {s: [Edge(v)] for s, v in zip(subjects, found) if v}
 ```
+
+## Ledgers: several values per node, told apart by a qualifier
+
+Some circumstances come in series: a person's compensation per period, a rate per grade. Each value is a row keyed by the node *and* something that tells the rows apart (`period`), so the same amount can recur. In the graph that something is a nested assertion on the value, which a property declares:
+
+```
+# compensation [@Property]
+* @appliesTo -> Person
+* @as: number
+* @cardinality: 0..*
+* @circumQuery -> payroll
+* @qualifier -> period                # tells values apart: part of the key
+* @attribute -> unit                  # rides along with each value: not part of the key
+
+# period [@Property]
+* @as: text                           # how it is typed, and so its column
+
+# unit [@Property]
+* @as: text
+```
+
+```
+# adat [Person]
+* compensation: 5000
+  * period: 2026-Q1
+  * unit: month
+* compensation: 5000                  # the same amount in another period is another row
+  * period: 2026-Q2
+  * unit: month
+* compensation: 60                    # no period: one unqualified row
+  * unit: hour
+```
+
+`from_shapes` gives `compensation` a child table `person_compensation(person_id, value, period, unit)` with `PRIMARY KEY (person_id, period)`: the qualifiers, not the value, are the key. Each qualifier and attribute is typed from its own `@as` and may be renamed with `@column`. A qualifier is `NOT NULL`: a value that has none is stored with `''` (so a periodless value is one row, and `rows()` reports no problem), which is why a qualifier that isn't text must always be given. An attribute may be missing (NULL). Only a property that holds several values in a child table can have them (not a single-valued or ordered one, and not an `array_columns` array).
+
+What flows through the contract:
+
+- `Text` and `Edge` have `qualifiers` and `attributes`, each `{label IRI: text}`. A resolver returns them and `augment` writes them as nested assertions under the value, beside `@method` and `@asOf`; the derived resolver omits a qualifier stored as `''` and an attribute stored as NULL. An authored value counts as the one the sidecar holds only if its qualifiers match, so an authored `5000` in `2025-Q4` doesn't hide the stored one for `2026-Q1`.
+- `emit` moves a value whose nested assertions are only its declared qualifiers and attributes (and the parser's `@source`), and hands the writer both dicts. A value with an `@id`, an undeclared nested assertion, a repeated qualifier, or a qualifier that is itself qualified, stays for review. After the move, `strip(view)` removes the nested assertions with the value, so `digest(strip(view)) == digest(base)` still holds.
+- **A changed value is a conflict, not an overwrite.** Two values for one key in a graph is a `CircumError` from `rows()` (node and line, and the key: `period='2026-Q1' holds (5000, 'month') and (5100, None)`). The derived writer does the same against what the table already holds, and for two items in one batch: nothing is written, and the graph keeps the values, since a changed amount is something a person should look at. Re-emitting the same values changes nothing and leaves `updated` alone. A writer given a label its table has no column for is refused rather than dropping it. Like every writer it never deletes.
+
+A ledger that no projection built (someone else's table, a key-value store) uses only the contract: a hand-written resolver returns qualifiers and a writer receives them.
+
+```python
+@reg.resolver(COMPENSATION)
+async def compensation(subjects, ctx):
+    found = {}
+    for owner, amount, period, unit in ctx.conn.execute(
+            f'SELECT person, amount, period, unit FROM pay WHERE person IN ({", ".join("?" * len(subjects))})',
+            list(subjects)):
+        found.setdefault(owner, []).append(
+            Text(str(amount), qualifiers={PERIOD: period} if period else {}, attributes={UNIT: unit}))
+    return found
+
+@reg.writer(COMPENSATION)
+async def write_compensation(rows, ctx):
+    for owner, items in rows.items():
+        for t in items:                # t.qualifiers == {PERIOD: '2026-Q1'}, t.attributes == {UNIT: 'month'}
+            ctx.conn.execute('INSERT OR REPLACE INTO pay VALUES (?, ?, ?, ?)',
+                             (owner, t.value, t.qualifiers.get(PERIOD, ''), t.attributes.get(UNIT)))
+    ctx.conn.commit()
+```
+
+Limits: qualifiers and attributes are flat text values (a nested edge, or one with assertions of its own, is for review); and a qualified property is separate from the shared-label case above (a label held in several tables still needs hand-written functions).
 
 ## What this layer does not do
 

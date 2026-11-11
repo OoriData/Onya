@@ -58,6 +58,8 @@ ONYA_CIRCUMQUERY = ONYA('circumQuery')  # on a @Property: -> the @Sidecar holdin
 ONYA_QUERYDETAIL = ONYA('queryDetail')  # nested under @circumQuery: opaque to Onya, passed to the resolver
 ONYA_SENSITIVITY = ONYA('sensitivity')  # @sensitivity on a sidecar: what a policy decides access by
 ONYA_RETENTION = ONYA('retention')  # @retention on a sidecar: how long its rows are kept
+ONYA_QUALIFIER = ONYA('qualifier')  # on a @Property: -> a nested label that tells its values apart (part of the key)
+ONYA_ATTRIBUTE = ONYA('attribute')  # on a @Property: -> a nested label that rides along with each value (not a key)
 
 # Reserved vocabulary. Every `@x` in Onya Literate is the IRI `onya:x` (http://purl.org/onya/vocab/x).
 # RESERVED maps each reserved local name to the layer that defines it: 'core' for the terms above, and
@@ -88,7 +90,7 @@ reserve('ordering', 'ordering', 'ordered')  # onya.ordering (not core: see SPEC,
 reserve('shape', 'Class', 'Property', 'label', 'subClassOf', 'appliesTo', 'range', 'cardinality', 'oneOf',
         'closed', 'severity')  # onya.shape
 reserve('circum', 'table', 'column', 'Sidecar', 'System', 'system', 'circumQuery', 'queryDetail', 'sensitivity',
-        'retention')  # onya.circum
+        'retention', 'qualifier', 'attribute')  # onya.circum
 
 
 def unknown_reserved_terms(g) -> dict:

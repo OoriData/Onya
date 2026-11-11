@@ -27,7 +27,7 @@ from amara.iri import I
 from onya.graph import edge, graph, warn_prefix_clashes
 from onya.query import DEFAULT_MIN_SCORE, normalize as query_normalize, rank, score_candidates
 from onya.store import _relational as rel
-from onya.store.base import refuse_circum_derived
+from onya.store.base import combined_version, refuse_circum_derived
 from onya.store._relational import Dialect, SQLITE
 
 _BATCH = 512  # fetchmany batch size for streaming match()
@@ -116,9 +116,25 @@ class SqliteStore:
             if gpk is None:
                 raise KeyError(str(name))
             cur.execute('DELETE FROM onya_graph WHERE graph_pk = ?', (gpk,))
+            rel.bump_rev(cur, str(name))  # the revision outlives the graph: a graph made again carries on from it
             conn.commit()
 
         await self._run(_drop)
+
+    # --- VersionedStore -------------------------------------------------------------
+
+    async def version(self, name: I | str) -> str:
+        def _version(conn):
+            row = conn.execute('SELECT r.rev FROM onya_graph g LEFT JOIN onya_graph_rev r ON r.name = g.name'
+                               ' WHERE g.name = ?', (str(name),)).fetchone()
+            if row is None:
+                raise KeyError(str(name))
+            return str(row[0] or 0)  # a graph stored before revisions were kept reads as 0 until it is written
+
+        return await self._run(_version)
+
+    async def versions(self, names) -> str:
+        return await combined_version(self, names)
 
     async def names(self):
         def _names(conn):
@@ -194,6 +210,7 @@ class SqliteStore:
                 _add_blocking(cur, str(name), str(origin), str(label), target_or_value,
                               kind=kind, interp=None if interp is None else str(interp),
                               id_=None if id_ is None else str(id_))
+                rel.bump_rev(cur, str(name))
                 conn.commit()
             except Exception:
                 conn.rollback()
@@ -205,7 +222,8 @@ class SqliteStore:
                      *, kind: str) -> None:
         def _remove(conn):
             cur = conn.cursor()
-            _remove_blocking(cur, str(name), str(origin), str(label), target_or_value, kind=kind)
+            if _remove_blocking(cur, str(name), str(origin), str(label), target_or_value, kind=kind):
+                rel.bump_rev(cur, str(name))
             conn.commit()
 
         await self._run(_remove)
@@ -587,10 +605,11 @@ def _add_blocking(cur, name, origin, label, target_or_value, *, kind, interp, id
 def _remove_blocking(cur, name, origin, label, target_or_value, *, kind):
     gpk = _graph_pk(cur, name)
     if gpk is None:
-        return
+        return False
     payload = str(target_or_value)
     sk = rel.skeleton_hash(kind, str(origin), str(label), payload)
     cur.execute(
         'DELETE FROM onya_assertion WHERE graph_pk = ? AND skeleton_hash = ? AND ident_pk IS NULL',
         (gpk, sk),
     )
+    return True  # the graph exists: this was a write, whether or not the assertion was there

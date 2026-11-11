@@ -85,3 +85,25 @@ async def test_data_only_role_gets_clear_error_when_schema_missing(app_role):
     msg = str(e.value)
     assert 'missing: onya_meta, onya_graph' in msg
     assert 'may not create it' in msg and 'sql/examples/postgres-schema.sql' in msg
+
+
+async def test_from_pool_without_ensure_opens_what_is_provisioned_and_creates_nothing(app_role):
+    asyncpg = pytest.importorskip('asyncpg')
+    from onya.store.postgres import PostgresStore
+    role, pw, schema = app_role
+    pool = await asyncpg.create_pool(_dsn_as(role, pw), min_size=1, max_size=2)
+    try:
+        async with await PostgresStore.from_pool(pool, ensure=False) as st:
+            assert st.has_trgm                                   # detected, not created
+            await st.put(NAME, literate.read(DOC).graph)
+            await st.drop(NAME)
+    finally:
+        await pool.close()
+    # and against an empty schema it says what is missing instead of creating it
+    pool = await asyncpg.create_pool(_dsn_as(role, pw, f'search_path={schema}'), min_size=1, max_size=2)
+    try:
+        with pytest.raises(StoreError, match='missing: onya_meta, onya_graph'):
+            await PostgresStore.from_pool(pool, ensure=False)
+        assert await pool.fetchval("SELECT to_regclass('onya_meta')") is None
+    finally:
+        await pool.close()

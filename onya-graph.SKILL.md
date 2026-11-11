@@ -22,17 +22,18 @@ Before inventing a convention for something below, check for the built-in. Each 
 
 | Need | Use | Where |
 |---|---|---|
-| Schema constraints: what a class carries, how many, of what kind, closed sets | **Shapes**: `@Class` / `@Property` nodes with `@appliesTo`, `@as`, `@cardinality`, `@range`, `@oneOf`, `@closed`. Report-only; run on demand | `onya.shape.validate`, `onya validate`; [design-shapes](https://github.com/OoriData/Onya/blob/main/doc/design-shapes.md) |
+| Schema constraints: what a class carries, how many, of what kind, closed sets | **Shapes**: `@Class` / `@Property` nodes with `@appliesTo`, `@as`, `@cardinality`, `@range`, `@oneOf`, `@closed`. Report-only; run on demand. `validate(fragment, against=base)` (or `await validate_against_store(fragment, store, names)`, or `onya validate --against=`) checks a proposed change as if merged into a base | `onya.shape.validate`, `onya validate`; [design-shapes](https://github.com/OoriData/Onya/blob/main/doc/design-shapes.md) |
 | Values that aren't plain text (numbers, dates, booleans, IRIs) | **Interpretations**: `@as`, or per-label defaults in the docheader. The value stays a string; the contract is checked on demand | `onya.interp`; [design-interpretations-literate](https://github.com/OoriData/Onya/blob/main/doc/design-interpretations-literate.md), [-pylib](https://github.com/OoriData/Onya/blob/main/doc/design-interpretations-pylib.md) |
 | Sequence matters (steps, authors, address lines) | **Ordered values**: `@ordered` in the docheader, `@ordering` stamps | `onya.ordering`, `node.ordered_values()`; [design-ordering](https://github.com/OoriData/Onya/blob/main/doc/design-ordering.md) |
 | Where a claim came from, how sure, and when it was true | **Provenance**: nested `@source`, `@method`, `@confidence`, `@asOf` | `onya.provenance`; [SPEC § Optional assertion provenance](https://github.com/OoriData/Onya/blob/main/SPEC.md#optional-assertion-provenance-source-method-confidence-asof) |
 | A claim you must refer to or dispute | **Assertion ids** (`[=id]` / `@id`), not an invented node | [SPEC § Assertion Identifiers](https://github.com/OoriData/Onya/blob/main/SPEC.md#assertion-identifiers) |
-| Records and volume that don't belong in the graph | **Circumstances**: `@circumQuery` + `@Sidecar`, tables derived from shapes, `augment` / `emit` | `onya.circum`, `onya project`, `onya catalog`; [design-sidecars](https://github.com/OoriData/Onya/blob/main/doc/design-sidecars.md) (the pattern), [design-circum](https://github.com/OoriData/Onya/blob/main/doc/design-circum.md) (the mechanism); see *Graph vs sidecar* |
+| Records and volume that don't belong in the graph | **Circumstances**: `@circumQuery` + `@Sidecar`, tables derived from shapes, `augment` / `emit`; ledgers keyed by a `@qualifier` such as `period` | `onya.circum`, `onya project`, `onya catalog`; [design-sidecars](https://github.com/OoriData/Onya/blob/main/doc/design-sidecars.md) (the pattern), [design-circum](https://github.com/OoriData/Onya/blob/main/doc/design-circum.md) (the mechanism); see *Graph vs sidecar* |
 | Did the graph change? Are two graphs the same? | **Content digest**, per graph or per node | `onya.digest`; [design-digest](https://github.com/OoriData/Onya/blob/main/doc/design-digest.md) |
 | Find the node a user means; reverse edges; a neighborhood | `g.search`, `g.inbound`, `g.subgraph`, `g.copy` | `onya.graph`, `onya.query` |
 | Show a node to people | **Views**: declarative specs, no per-type renderers | `onya.view` |
 | Persist across sessions; combine named graphs | **Stores** (file, SQLite, PostgreSQL), `union` and `overlay` | `onya.store`; [design-persistence-architecture](https://github.com/OoriData/Onya/blob/main/doc/design-persistence-architecture.md) |
 | Diagrams and analytics | Mermaid, Graphviz, networkx | `onya.viz`, `onya convert` |
+| Remove the `onya:Document` bookkeeping nodes a read (or a store) leaves in a graph | `onya.graph.drop_document_nodes(g)` | `onya.graph` |
 | Catch typos and find the offending line | Dangling-edge check, `unknown_reserved_terms`, `track_locations` | `onya.terms`, `onya.locations`; see *Validate by parsing* |
 
 Rules of thumb: constraints go in shapes, not prose or a bespoke checker. Typed values use `@as`, not a typed model. Dated or sourced claims use provenance sub-assertions, not compound labels. Volume goes to a sidecar. When a feature is core to the task, read its design doc first.
@@ -304,6 +305,8 @@ Keep the graph to concepts: entities, relationships, rules, current state and sh
 * @label: Billing database
 ```
 
+A property with a value **per period** (or per grade, per region) declares the nested label that tells the values apart with `@qualifier -> period`, and a nested label that merely rides along with `@attribute -> unit` (each declared as its own `@Property` with `@as`). The qualifiers are the table key, so the same amount can recur; two different values for one key is a conflict for a person, not an overwrite. In `.onya`: `* compensation: 5000` with nested `* period: 2026-Q1` and `* unit: month`. Details: [design-circum, Ledgers](https://github.com/OoriData/Onya/blob/main/doc/design-circum.md#ledgers-several-values-per-node-told-apart-by-a-qualifier).
+
 `@queryDetail` (nested under `@circumQuery`) is an opaque token handed to the application's resolver, never SQL: a graph travels, so never write query text, credentials or connection strings in one. Don't author `@method` or `@asOf` on these values either; `onya.circum` stamps them on what it reads in.
 
 - **When extracting a KG from a document**, route ledger-like content (amounts, dated events, logs) to sidecar rows instead of node properties, and put anything you can't classify on a review list rather than guessing.
@@ -397,6 +400,8 @@ r = read(open('classics/things-fall-apart.onya'))
 async def save():
     # file: (one .onya file per graph — the default, doubles as the testing fake)
     # sqlite: (stdlib, zero extra deps) | postgresql:// (pip install "onya[postgres]")
+    # PostgreSQL behind a pooler: connect(url, max_size=3); an existing asyncpg pool: PostgresStore.from_pool(pool)
+    # Has it changed? `await store.version(name)` is a cheap token to compare; `versions([names])` for an overlay
     async with await connect('sqlite:kb.db') as store:
         await store.put(r.doc_iri, r.graph)      # merge=True: unions with any stored graph
         again = await store.get(r.doc_iri)

@@ -228,6 +228,16 @@ r.results    # {Path: ParseResult}: each file's own doc IRI, prefixes and nodeba
 
 A spec that matches nothing raises `FileNotFoundError` instead of silently reading nothing, and a parse error names its file. `onya convert` expands directories the same way.
 
+Each `@document` also becomes a node typed `onya:Document` in the graph (as does one read back from a store). When that node is just bookkeeping, for instance in an export you are about to apply to another graph, remove them:
+
+```python
+from onya.graph import drop_document_nodes
+
+drop_document_nodes(r.graph)      # [I('http://e.o/doc1'), ...]: the ids removed
+```
+
+A document node that carries real assertions (metadata written on the docheader), or that an edge points at, is left in place and is absent from the returned list; `force=True` removes it anyway. The digest ignores these nodes, so it is the same either way.
+
 ### Catching typo'd edge targets
 
 An edge to an id that has no node block of its own still parses: Onya Literate allows forward references, and external resources such as an ORCID URL are normal. But a typo (`-> public.unrestriced`) fails the same way, quietly, by minting an empty node. Onya tells the two cases apart by recording which nodes were *declared* (given a block, a type or an assertion, or created with `graph.node()`) and which exist only because an edge named them:
@@ -321,6 +331,7 @@ Declare classes and properties as nodes (a declaration's id is the class or labe
 from onya.shape import validate
 
 report = validate(g)               # shapes in g itself; or validate(g, shapes=shapes_graph)
+report = validate(fragment, against=base)   # a proposed change, checked as if merged into base (see below)
 for f in report.findings:
     print(f.severity, f.kind, f.node, f.label, f.detail, f.location)   # e.g. one_of ... 'dormant' is not one of [...]
 report.ok, report.errors, report.warnings
@@ -331,6 +342,15 @@ Findings cover `applies_to`, `cardinality` (`1`, `0..1`, `1..*`, `0..*`, `n..m`)
 ```
 onya validate kg/ --shapes=shapes/ --dangling --allow=https://orcid.org/ --strict
 ```
+
+To check a **proposed change** (a few nodes, with no declarations and none of the nodes they point at), pass the graph it would join as `against`. Types and cardinality then resolve through the base, and only the findings on the fragment's own nodes come back:
+
+```python
+frag = read('# ify [Person]\n* knows -> chuks\n', ...).graph       # alone: `chuks` looks untyped
+report = validate(frag, against=base)                              # chuks is a Student in base: no finding
+```
+
+When the base lives in a store, `await validate_against_store(frag, store, name)` (from `onya.shape`) reads only the part of it the fragment touches, and `onya validate proposed.onya --against=kg/` (or `--store=sqlite:kg.db --graph=NAME`) does the same from the command line.
 
 Exit status is 2 on errors (warnings too with `--strict`). The vocabulary, rules, and a mapping to SHACL are in [doc/design-shapes.md](https://github.com/OoriData/Onya/blob/main/doc/design-shapes.md).
 
@@ -525,6 +545,10 @@ hatch:
 ```python
 from onya.store import GraphQueryStore
 
+# A cache can ask `await store.version(name)` (a token to compare) instead of refetching to see if the graph changed.
+# connect(url, max_size=3) passes pool options to asyncpg (behind a pooler with a connection cap).
+# Already have an asyncpg pool? `await PostgresStore.from_pool(pool)` (from onya.store.postgres) makes a store
+# on it and leaves the pool yours; `ensure=False` creates nothing, for a role with data privileges only.
 async def pg_demo():
     async with await connect('postgresql://user:pass@localhost/onya') as store:
         await store.put(name, graph)
@@ -659,6 +683,36 @@ len(report.moved), report.review               # (2, []): review lists what it l
 ```
 
 `emit` is idempotent and never deletes. A new row is created only if the table can take it: if other columns are `NOT NULL`, the call raises a `CircumError` naming them, because a node that breaks its own `@cardinality: 1` has nothing valid to insert.
+
+### Ledgers: one value per period
+
+A property can hold several values for a node, told apart by a nested label. Declare the label with `@qualifier` (it becomes the key) and any that just rides along with `@attribute`:
+
+```
+# compensation [@Property]
+* @appliesTo -> Person
+* @as: number
+* @cardinality: 0..*
+* @circumQuery -> payroll
+* @qualifier -> period
+* @attribute -> unit
+
+# period [@Property]
+* @as: text
+
+# unit [@Property]
+* @as: text
+
+# adat [Person]
+* compensation: 5000
+  * period: 2026-Q1
+  * unit: month
+* compensation: 5000
+  * period: 2026-Q2
+  * unit: month
+```
+
+The projection's `person_compensation` table is keyed `(person_id, period)`, so the same amount in two periods is two rows, and a value with no `period` is one row with `''`. `augment` shows the values with their nested `period` and `unit`, and `emit` moves them. A value whose nested assertions are anything else (a note, say) stays in the graph for review. A key given two different values is a `CircumError` rather than an overwrite, because a changed amount is something a person should look at. In a hand-written resolver or writer the same data is `Text.qualifiers` and `Text.attributes` (`{label IRI: text}`).
 
 ### When the derived functions aren't enough
 
