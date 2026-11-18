@@ -56,6 +56,7 @@ It is a layer in the sense of SPEC § Reserved vocabulary. The terms below are d
 | `@severity: s` | either | `error` (default) or `warning`: the severity of findings the declaration produces. |
 | `@deprecated: text` | either | The class or label is deprecated; the text is the guidance (what to use instead, and why). |
 | `@replacedBy -> X` | either | What supersedes it: a `@Class` or `@Property` (repeat for several). On its own, it also marks the declaration deprecated. |
+| `@sensitivity: level` | property | How sensitive its values are: a string from the application's own vocabulary (`partner`, `clinical`). Nothing in validation reads it; [`redact`](#withholding-sensitive-properties-redact) asks a policy about it. The same term the circum layer puts on a `@Sidecar`. |
 
 Other layers add terms to the same declarations. The circum layer reads `@circumQuery` (the values are held in a sidecar), `@qualifier` and `@attribute` (nested labels that tell a property's values apart, or ride along), and `@table` / `@column` (names); see [design-circum.md](design-circum.md). Shapes themselves ignore them.
 
@@ -89,6 +90,32 @@ warning deprecated: http://e.o/ada http://e.o/nickname: label http://e.o/nicknam
 - A subclass of a deprecated class is not itself deprecated: only nodes typed with the class are reported. Deprecating a subclass is the subclass's own declaration.
 - Nothing is changed or inferred: the deprecated term keeps validating exactly as before, and `@replacedBy` isn't checked to exist (a forward reference is normal in an open graph). Only a node's own assertions are checked, as elsewhere in this layer, so a deprecated label nested under an assertion isn't reported.
 - `Shapes` exposes it as `deprecated` (the guidance, `''` if only `@replacedBy` was given, `None` if not deprecated) and `replaced_by` on `PropertyShape` and `ClassShape`.
+
+## Withholding sensitive properties: `redact`
+
+A property can say how sensitive its values are, and a viewer-based filter can withhold them while they stay in the graph (a staged migration, or one graph served to several audiences):
+
+```
+# salary [@Property]
+* @appliesTo -> Person
+* @sensitivity: partner
+```
+
+```python
+from onya.redact import redact
+
+policy = lambda viewer, sensitivity: viewer.is_partner or sensitivity == 'public'   # true to allow
+shown = redact(g, viewer, policy)         # a new graph; shapes from g, or pass shapes=
+```
+
+The policy has the signature of a circum `Registry`'s, so one function answers "may this viewer read this sidecar?" and "may this viewer see this property?". `redact` asks it once per distinct `@sensitivity`, and returns a **new graph** (`g` is untouched):
+
+- Every assertion whose label is declared `@sensitivity` and refused is gone, with everything nested under it, at any depth: a sensitive label nested under an allowed value goes too. A label no `@Property` declares, or with no `@sensitivity`, is always kept.
+- A node left with only its id and types stays, so edges to it don't dangle.
+- **The copy is lossy, so it is marked.** Each node that lost an assertion gets `@transient` with `@reason: redacted`, and a store's `put` refuses it (see [the SPEC](../SPEC.md#do-not-persist-marker-transient-reason)). The mark says nothing about what was withheld, but it does say that something was: a viewer can tell a node was redacted.
+- **Validate the original.** A withheld value will look missing in the copy.
+- **The declarations stay in the copy**, `@sensitivity` included, since a viewer needs them to read the graph. If the schema itself is confidential, redact a graph that holds only the data, with `shapes=` given separately.
+- **Not a security boundary for everything.** `redact` filters one graph in memory. It does not cover search over a store, edges into the graph from other graphs, or a digest of the original. A property held in a sidecar is decided by the sidecar's own `@sensitivity` and the registry's policy, not here.
 
 ## Where declarations live, and what they match
 

@@ -356,6 +356,18 @@ To audit an **open world** instead, `inventory(g, shapes)` lists the labels and 
 
 Exit status is 2 on errors (warnings too with `--strict`). The vocabulary, rules, and a mapping to SHACL are in [doc/design-shapes.md](https://github.com/OoriData/Onya/blob/main/doc/design-shapes.md).
 
+### Withholding what a viewer may not see: `@sensitivity` and `redact`
+
+A `@Property` can carry `@sensitivity: partner` (your own vocabulary of levels), and `redact` returns a copy of a graph without the values a viewer's policy refuses:
+
+```python
+from onya.redact import redact
+
+shown = redact(g, viewer, lambda viewer, level: viewer.is_partner or level == 'public')   # g is untouched
+```
+
+The policy is the same `policy(viewer, sensitivity)` a circum `Registry` takes. The copy is lossy, so every node that lost something carries `@transient` (a core do-not-persist marker, which survives being written out as text), and `store.put` refuses it. Validate the original, not the copy. It filters one graph; it is not a security boundary for search over a store, edges from other graphs, or digests. See [doc/design-shapes.md](https://github.com/OoriData/Onya/blob/main/doc/design-shapes.md#withholding-sensitive-properties-redact).
+
 ### Did the knowledge graph change? The content digest
 
 ```python
@@ -538,6 +550,8 @@ async def demo(url):
 asyncio.run(demo('file:/tmp/onya-graphs'))
 ```
 
+`put` refuses a graph marked `@transient` (`onya.transient.TransientError`): a circum view or a redacted copy, which would write back something that is not the original. Mark your own working copies the same way, with `onya.transient.mark(node, reason)` or `* @transient: true` and a nested `@reason`.
+
 Move to SQLite by changing nothing but the URL — stdlib, zero added
 dependencies, and it adds the `AssertionStore` capability (fine-grained access
 without materializing the whole graph):
@@ -682,7 +696,7 @@ view = await augment(g, registry=reg, conn=conn)     # g is untouched
 is_view(view), is_view(g)                            # (True, False)
 ```
 
-Everything the view adds carries `@method -> students-db` and an `@asOf` (the row's `updated`), so you can always tell it from what the graph says itself. `strip(view)` removes exactly that, and `digest(strip(view)) == digest(g)`. A view is never persisted: `store.put` refuses one.
+Everything the view adds carries `@method -> students-db` and an `@asOf` (the row's `updated`), so you can always tell it from what the graph says itself. `strip(view)` removes exactly that, and `digest(strip(view)) == digest(g)`. A view is never persisted: `store.put` refuses one, because the view marks itself `@transient` (the same do-not-persist marker a redacted graph carries).
 
 A view can be incomplete in a way the pure graph can't. Dede has no row in the table, and `counselledBy` is `@cardinality: 1`:
 

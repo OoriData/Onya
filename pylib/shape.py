@@ -38,7 +38,7 @@ from onya.ordering import OrderingError, ordered
 from onya.terms import (
     ONYA, ONYA_APPLIESTO, ONYA_AS, ONYA_ATTRIBUTE, ONYA_CARDINALITY, ONYA_CIRCUMQUERY, ONYA_CLASS, ONYA_CLOSED,
     ONYA_DEPRECATED, ONYA_DOCUMENT, ONYA_LABEL, ONYA_ONEOF, ONYA_ORDERED, ONYA_PROPERTY, ONYA_QUALIFIER, ONYA_RANGE,
-    ONYA_REPLACEDBY, ONYA_SEVERITY, ONYA_SUBCLASSOF,
+    ONYA_REPLACEDBY, ONYA_SENSITIVITY, ONYA_SEVERITY, ONYA_SUBCLASSOF,
     unknown_reserved_terms,
 )
 
@@ -127,6 +127,7 @@ class PropertyShape:
     circum: bool = False  # its values are held in a sidecar (`@circumQuery`): see `onya.circum`
     qualifiers: tuple = ()  # label IRIs (declaration order) nested under each value that tell values apart: the key
     attributes: tuple = ()  # label IRIs nested under each value that ride along, and are not part of the key
+    sensitivity: str | None = None  # `@sensitivity`: what `onya.redact` asks a policy about before showing its values
     deprecated: str | None = None  # `@deprecated`'s guidance ('' if only `@replacedBy` was given); None: not deprecated
     replaced_by: tuple = ()  # ids named by `@replacedBy`
 
@@ -209,6 +210,11 @@ def load_shapes(g) -> Shapes:
                               qualifiers=_targets_in_order(n, ONYA_QUALIFIER),
                               attributes=_targets_in_order(n, ONYA_ATTRIBUTE))
             p.deprecated, p.replaced_by = deprecation(n)
+            sens = n.values(ONYA_SENSITIVITY)
+            if len(sens) > 1:
+                problem(n, 'bad_shape', ONYA_SENSITIVITY, f'a property has at most one @sensitivity, found {sens}')
+            elif sens:
+                p.sensitivity = sens[0]
             if both := set(p.qualifiers) & set(p.attributes):
                 problem(n, 'bad_shape', ONYA_QUALIFIER, f'{sorted(both)} is both a @qualifier and an @attribute')
             as_ = n.values(ONYA_AS)

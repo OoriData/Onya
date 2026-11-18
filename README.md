@@ -255,7 +255,7 @@ for f in validate(g).findings:       # shapes in g itself, or validate(g, shapes
     print(f.severity, f.kind, f.node, f.label, f.detail)    # e.g. error cardinality ... has 0, declared 1
 ```
 
-Shapes only report: they never infer a type or change a value, and nothing runs until you ask (`onya validate kg/ --shapes=shapes/`). `onya inventory kg/` lists the labels and types in use that no shape declares, and the declarations nothing uses. To check a proposed change before merging it, `validate(fragment, against=base)` resolves the fragment's types and cardinality through the base graph. Other layers read the same declarations, which is why the next section needs no column list. See [doc/design-shapes.md](doc/design-shapes.md).
+Shapes only report: they never infer a type or change a value, and nothing runs until you ask (`onya validate kg/ --shapes=shapes/`). A property declared `@sensitivity: partner` can be withheld per viewer with `onya.redact.redact(g, viewer, policy)`, which returns a lossy copy marked `@transient` (a store refuses to persist it). `onya inventory kg/` lists the labels and types in use that no shape declares, and the declarations nothing uses. To check a proposed change before merging it, `validate(fragment, against=base)` resolves the fragment's types and cardinality through the base graph. Other layers read the same declarations, which is why the next section needs no column list. See [doc/design-shapes.md](doc/design-shapes.md).
 
 ## Ordered values and the content digest
 

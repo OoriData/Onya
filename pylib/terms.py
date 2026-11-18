@@ -14,6 +14,8 @@ ONYA_TYPE_REL = ONYA('type')
 ONYA_SOURCE_REL = ONYA('source')  # @source provenance sub-property
 ONYA_METHOD_REL = ONYA('method')  # @method provenance sub-edge (points to a node identifying the method)
 ONYA_CONFIDENCE_REL = ONYA('confidence')  # @confidence provenance sub-property, nested under @method
+ONYA_TRANSIENT = ONYA('transient')  # @transient on a node: this copy is derived or lossy, and must not be persisted
+ONYA_REASON = ONYA('reason')  # @reason nested under @transient: why (text)
 ONYA_ASOF = ONYA('asOf')  # @asOf: ISO 8601 time an assertion was true at, nested under it (core: not only circum)
 ONYA_DOCUMENT = ONYA('Document')  # Type for document nodes created from @document directive
 ONYA_ASSERTION = ONYA('Assertion')  # Implicit type carried by every assertion (edge/property)
@@ -58,7 +60,7 @@ ONYA_SYSTEM = ONYA('System')  # type of the system a sidecar lives in
 ONYA_SYSTEM_REL = ONYA('system')  # @system -> System
 ONYA_CIRCUMQUERY = ONYA('circumQuery')  # on a @Property: -> the @Sidecar holding its values
 ONYA_QUERYDETAIL = ONYA('queryDetail')  # nested under @circumQuery: opaque to Onya, passed to the resolver
-ONYA_SENSITIVITY = ONYA('sensitivity')  # @sensitivity on a sidecar: what a policy decides access by
+ONYA_SENSITIVITY = ONYA('sensitivity')  # @sensitivity on a sidecar, or a @Property: what a policy decides access by
 ONYA_RETENTION = ONYA('retention')  # @retention on a sidecar: how long its rows are kept
 ONYA_QUALIFIER = ONYA('qualifier')  # on a @Property: -> a nested label that tells its values apart (part of the key)
 ONYA_ATTRIBUTE = ONYA('attribute')  # on a @Property: -> a nested label that rides along with each value (not a key)
@@ -87,6 +89,7 @@ reserve('core',
         'id', 'as',  # assertion directives
         'source', 'method', 'confidence', 'asOf',  # provenance
         'Document', 'Assertion',  # implicit types
+        'transient', 'reason',  # do-not-persist marker (onya.transient)
         'type')  # the type relation: reserved, with no behavior defined yet
 reserve('ordering', 'ordering', 'ordered')  # onya.ordering (not core: see SPEC, Reserved vocabulary)
 reserve('shape', 'Class', 'Property', 'label', 'subClassOf', 'appliesTo', 'range', 'cardinality', 'oneOf',

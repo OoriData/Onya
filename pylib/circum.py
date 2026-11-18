@@ -40,9 +40,10 @@ from onya.ordering import OrderingError, ordered
 from onya.shape import Finding, PropertyShape, Shapes, load_shapes
 from onya.terms import (
     ONYA_ASOF, ONYA_CIRCUMQUERY, ONYA_CLASS, ONYA_COLUMN, ONYA_DOCUMENT, ONYA_INTERP, ONYA_LABEL, ONYA_METHOD_REL,
-    ONYA_PROPERTY, ONYA_QUERYDETAIL, ONYA_RETENTION, ONYA_SENSITIVITY, ONYA_SIDECAR, ONYA_SOURCE_REL, ONYA_SYSTEM,
-    ONYA_SYSTEM_REL, ONYA_TABLE,
+    ONYA_PROPERTY, ONYA_QUERYDETAIL, ONYA_REASON, ONYA_RETENTION, ONYA_SENSITIVITY, ONYA_SIDECAR, ONYA_SOURCE_REL,
+    ONYA_SYSTEM, ONYA_SYSTEM_REL, ONYA_TABLE, ONYA_TRANSIENT,
 )
+from onya.transient import TransientError
 
 RUNS_TABLE = 'onya_circum_runs'
 UPDATED = 'updated'  # every projected table keeps one: when the row was last inserted or changed
@@ -881,7 +882,7 @@ class CircumAccessDenied(CircumError):
     '''A viewer is not allowed to read (or write) a sidecar. Raised before any resolver or writer runs.'''
 
 
-class CircumDerivedError(CircumError):
+class CircumDerivedError(CircumError, TransientError):
     '''A graph holding circum-derived assertions (a view) was offered for persistence.'''
 
 
@@ -1078,15 +1079,28 @@ def _method_of(a, sids) -> bool:
     return any(str(m.target.id) in sids for m in a.getedge(ONYA_METHOD_REL))
 
 
+def _view_marks(n) -> list:
+    '''The assertions on `n` saying a view consulted a sidecar: `@transient` (0.7.0 on), or a bare `@asOf` (before).'''
+    return [*n.getprop(ONYA_TRANSIENT), *n.getprop(ONYA_ASOF)]
+
+
+def _view_mark(n, sc, stamp) -> None:
+    '''Say on `n` that a view consulted sidecar `sc` at `stamp`: a `@transient` mark, with `@method` and `@asOf`.'''
+    a = n.add_property(ONYA_TRANSIENT, 'true')
+    a.add_property(ONYA_REASON, 'circum view')
+    a.add_edge(ONYA_METHOD_REL, sc)
+    a.add_property(ONYA_ASOF, stamp)
+
+
 def _consulted(g) -> set:
-    '''Ids of the sidecars `g` says it was augmented from: a node with an `@asOf` that is `@method` -> itself.'''
+    '''Ids of the sidecars `g` says it was augmented from: a node marked with a `@method` that is itself.'''
     return {str(n.id) for n in g.nodes.values()
-            if any(str(m.target.id) == str(n.id) for a in n.getprop(ONYA_ASOF) for m in a.getedge(ONYA_METHOD_REL))}
+            if any(str(m.target.id) == str(n.id) for a in _view_marks(n) for m in a.getedge(ONYA_METHOD_REL))}
 
 
 def asked(n) -> set:
-    '''Ids of the sidecars a view looked in for node `n` (its `@asOf` marks with a nested `@method`).'''
-    return {str(m.target.id) for a in n.getprop(ONYA_ASOF) for m in a.getedge(ONYA_METHOD_REL)}
+    '''Ids of the sidecars a view looked in for node `n` (its marks with a nested `@method`).'''
+    return {str(m.target.id) for a in _view_marks(n) for m in a.getedge(ONYA_METHOD_REL)}
 
 
 def is_view(g) -> bool:
@@ -1153,9 +1167,9 @@ async def augment(g, *, registry: Registry, viewer=None, ids=None, shapes=None, 
     # itself. That is how `validate` knows a missing value is a gap, and how `strip` and `store.put` know it's a view.
     for sid in sorted({p.sidecar.id for p in decl.properties.values()}):
         sc = _sidecar_node(view, sid)
-        for old in [a for a in sc.getprop(ONYA_ASOF) if _method_of(a, {str(sid)})]:
+        for old in [a for a in _view_marks(sc) if _method_of(a, {str(sid)})]:
             sc.remove_property(old)  # augmenting a view: this consultation replaces the earlier one
-        sc.add_property(ONYA_ASOF, default_stamp).add_edge(ONYA_METHOD_REL, sc)
+        _view_mark(sc, sc, default_stamp)
     done, failed = [], []  # the properties whose resolver succeeded, and those whose resolver failed
     for prop, subjects in plan:
         ctx = Context(prop.label, prop.sidecar, prop.detail, prop.shape, viewer, conn)
@@ -1166,7 +1180,7 @@ async def augment(g, *, registry: Registry, viewer=None, ids=None, shapes=None, 
             for subject in subjects:  # asked, whether or not a row came back: `validate` counts only these nodes
                 n = view.nodes[str(subject)]
                 if str(sc.id) not in asked(n):
-                    n.add_property(ONYA_ASOF, default_stamp).add_edge(ONYA_METHOD_REL, sc)
+                    _view_mark(n, sc, default_stamp)
             done.append(prop)
         except Exception as e:
             if on_error == 'raise':

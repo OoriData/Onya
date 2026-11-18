@@ -303,6 +303,7 @@ So an `@x` that no loaded specification defines is not an error, since some laye
 | `@id` | assertion directive: names its enclosing assertion | [Assertion Identifiers](#assertion-identifiers) |
 | `@as` | assertion directive: sets its enclosing assertion's interpretation | [`@as`](#as) |
 | `@source`, `@method`, `@confidence`, `@asOf` | provenance sub-assertions | [Optional assertion provenance](#optional-assertion-provenance-source-method-confidence-asof) |
+| `@transient`, `@reason` | do-not-persist marker on a node, and why | [Do-not-persist marker](#do-not-persist-marker-transient-reason) |
 | `@Document` | implicit type of the document node | [Document Header](#document-header) |
 | `@Assertion` | implicit type carried by every assertion | [Assertions](#assertions) |
 | `@type` | the type relation; reserved, with no behavior defined yet | (this section) |
@@ -736,6 +737,21 @@ A related but distinct need arises when *multiple methods* (a deterministic pars
 - `@asOf`: a **property** nested directly under the assertion it describes, with an ISO 8601 date or time as its value: *when this was true*, as distinct from when it was written down. A value read from a database can carry its own as-of time. Nothing in the core model reads it.
 
 Unlike `@source`, `@method`, `@confidence` and `@asOf` are **filled in by the caller**; there is no parser flag and no directive handling. They are ordinary reserved-vocabulary assertions, authorable directly in Onya Literate (exactly as shown above) or via `add_edge`/`add_property`, exactly like hand-authoring `@source` would work today. See `onya.provenance` for a small read-accessor surface (`list_provenance`, `highest_confidence`) mirroring `onya.interp.value_of()`'s stance: honored on demand, never ambiently, and asserting no canonical confidence scale.
+
+## Do-not-persist marker (`@transient`, `@reason`)
+
+Some graphs are copies that must never be written back to where the original lives: a view that carries values read from a sidecar would make the graph swallow them, and a graph with sensitive assertions withheld is missing data that a write would destroy. A graph says so itself, so the warning survives being written out as text and read back:
+
+```
+# chuks [Student]
+* @transient: true
+    * @reason: redacted for a partner viewer
+```
+
+- `@transient` is a **property on a node**, with the value `true`. It marks each node that makes the copy unsafe, so a subgraph taken from the copy still carries it.
+- `@reason` is a property nested under it: text saying why. It may be repeated. Anything else nested under `@transient` belongs to the layer that made the mark (a circum view nests its `@method` and `@asOf` there).
+- The core model reads nothing from it. It is a **contract with persistence**: a store's `put` raises `TransientError` for a graph with any `@transient` node, naming the nodes and the reasons, and `onya.transient.check_persistable(g)` does the same check for other writers. Nothing removes the mark but the layer that put it there (`onya.circum.strip` removes a view's); a lossy copy has no way back, so put the original.
+- Author it by hand when a graph you build is a working copy: `* @transient: true` on any node, with a `@reason`.
 
 ## Model Summary
 

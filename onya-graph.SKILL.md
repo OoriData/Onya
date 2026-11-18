@@ -22,7 +22,7 @@ Before inventing a convention for something below, check for the built-in. Each 
 
 | Need | Use | Where |
 |---|---|---|
-| Schema constraints: what a class carries, how many, of what kind, closed sets | **Shapes**: `@Class` / `@Property` nodes with `@appliesTo`, `@as`, `@cardinality`, `@range`, `@oneOf`, `@closed`, and `@deprecated` / `@replacedBy` to retire a term with guidance. Report-only; run on demand. `inventory(g, shapes)` (or `onya inventory`) lists what is used that no shape declares, and what is declared but unused, without closing any class. `validate(fragment, against=base)` (or `await validate_against_store(fragment, store, names)`, or `onya validate --against=`) checks a proposed change as if merged into a base | `onya.shape.validate`, `onya validate`; [design-shapes](https://github.com/OoriData/Onya/blob/main/doc/design-shapes.md) |
+| Schema constraints: what a class carries, how many, of what kind, closed sets | **Shapes**: `@Class` / `@Property` nodes with `@appliesTo`, `@as`, `@cardinality`, `@range`, `@oneOf`, `@closed`, and `@deprecated` / `@replacedBy` to retire a term with guidance. Report-only; run on demand. `@sensitivity` on a `@Property` with `onya.redact.redact(g, viewer, policy)` (a lossy copy, marked `@transient`; `put` refuses it). `inventory(g, shapes)` (or `onya inventory`) lists what is used that no shape declares, and what is declared but unused, without closing any class. `validate(fragment, against=base)` (or `await validate_against_store(fragment, store, names)`, or `onya validate --against=`) checks a proposed change as if merged into a base | `onya.shape.validate`, `onya validate`; [design-shapes](https://github.com/OoriData/Onya/blob/main/doc/design-shapes.md) |
 | Values that aren't plain text (numbers, dates, booleans, IRIs) | **Interpretations**: `@as`, or per-label defaults in the docheader. The value stays a string; the contract is checked on demand | `onya.interp`; [design-interpretations-literate](https://github.com/OoriData/Onya/blob/main/doc/design-interpretations-literate.md), [-pylib](https://github.com/OoriData/Onya/blob/main/doc/design-interpretations-pylib.md) |
 | Sequence matters (steps, authors, address lines) | **Ordered values**: `@ordered` in the docheader, `@ordering` stamps | `onya.ordering`, `node.ordered_values()`; [design-ordering](https://github.com/OoriData/Onya/blob/main/doc/design-ordering.md) |
 | Where a claim came from, how sure, and when it was true | **Provenance**: nested `@source`, `@method`, `@confidence`, `@asOf` | `onya.provenance`; [SPEC § Optional assertion provenance](https://github.com/OoriData/Onya/blob/main/SPEC.md#optional-assertion-provenance-source-method-confidence-asof) |
@@ -340,7 +340,7 @@ p = from_shapes(g, 'https://example.org/Client')    # tables derived from the sh
 await materialize(conn, p, g)                        # project the graph into them
 reg = Registry()                                     # tables onya built: derive both ends
 reg.resolvers.update(table_resolvers(p)); reg.writers.update(table_writers(p))
-view = await augment(g, registry=reg, conn=conn)     # new graph with table values, marked @method/@asOf; never persisted
+view = await augment(g, registry=reg, conn=conn)     # new graph with table values, marked @method/@asOf, and @transient; never persisted
 await emit(g, [iri], registry=reg, conn=conn)        # move a node's circum values graph -> table (idempotent, never deletes)
 ```
 
@@ -427,6 +427,8 @@ async def save():
         await store.put(r.doc_iri, r.graph)      # merge=True: unions with any stored graph
         again = await store.get(r.doc_iri)
 ```
+
+`put` raises `TransientError` for a graph with a `@transient` node (`* @transient: true`, nested `@reason`): a circum view, a `redact` copy, or a working copy you marked yourself. Never try to persist those; `strip` a view, and put the original instead of a redacted copy.
 
 The load-bearing guarantee: **a round trip through a store is identical to an in-memory graph union** — `put(merge=True)` applies exactly the merge rules above, so the same-ids/skeletons discipline from authoring is what controls how stored graphs combine. A blocking facade (`from onya.store.sync import connect`) mirrors the API for scripts. Backends, schema, and the SQL/PGQ layer are documented in [doc/design-persistence-architecture.md](https://github.com/OoriData/Onya/blob/main/doc/design-persistence-architecture.md); the walkthrough is in [doc/python-tutorial.md](https://github.com/OoriData/Onya/blob/main/doc/python-tutorial.md). The store emits `.onya` and reads `.onya`/`.onya.md`.
 
