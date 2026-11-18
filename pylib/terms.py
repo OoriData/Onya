@@ -22,7 +22,7 @@ ONYA_ASSERTION = ONYA('Assertion')  # Implicit type carried by every assertion (
 # Docheader directives:
 ONYA_DOCUMENT_REL = ONYA('document')  # @document
 ONYA_NODEBASE = ONYA('nodebase')  # @nodebase
-ONYA_BASE = ONYA('base')  # @base (alias of @nodebase)
+ONYA_BASE = ONYA('base')  # @base (deprecated alias of @nodebase; removed in 0.8.0)
 ONYA_SCHEMA = ONYA('schema')  # @schema
 ONYA_TYPEBASE = ONYA('typebase')  # @typebase
 ONYA_LANGUAGE = ONYA('language')  # @language

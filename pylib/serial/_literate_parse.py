@@ -258,6 +258,14 @@ def ensure_namespace_separator(name: str, base: str | None, *, strict: bool) -> 
     return base + '/'
 
 
+def _warn_base_alias() -> None:
+    '''`@base` is the old spelling of `@nodebase`; FutureWarning so a file's author sees it by default.'''
+    warnings.warn(
+        '`@base` is deprecated; write `@nodebase` instead (same meaning). `@base` will be removed in Onya 0.8.0.',
+        FutureWarning, stacklevel=2,
+    )
+
+
 def _register_iri_prefix(doc: doc_info, prefix: str, uri: str | None) -> None:
     if uri is None:
         return
@@ -1420,7 +1428,8 @@ def process_docheader(props, graph_obj, doc, parser: LiterateParser | None = Non
                 doc.lang = prop.value.verbatim if prop.value else None
                 directive_owner = None
             elif key == '@nodebase' or key == '@base':
-                # @base is retained as a legacy alias, but @nodebase is preferred.
+                if key == '@base':
+                    _warn_base_alias()
                 doc.nodebase = prop.value.verbatim if prop.value else None
                 directive_owner = None
             elif key == '@schema':
@@ -1458,6 +1467,8 @@ def process_docheader(props, graph_obj, doc, parser: LiterateParser | None = Non
             if directive_owner == '@iri':
                 k, uri = prop.key, prop.value.verbatim if prop.value else None
                 if k == '@nodebase' or k == '@base':
+                    if k == '@base':
+                        _warn_base_alias()
                     doc.nodebase = uri
                 elif k == '@schema':
                     doc.schemabase = uri

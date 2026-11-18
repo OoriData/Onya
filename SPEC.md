@@ -297,7 +297,7 @@ So an `@x` that no loaded specification defines is not an error, since some laye
 
 | Term | Kind | Defined in |
 |---|---|---|
-| `@document`, `@nodebase`, `@base`, `@schema`, `@typebase`, `@language` | docheader directive (`@base` is an alias of `@nodebase`) | [Document Header](#document-header) |
+| `@document`, `@nodebase`, `@base`, `@schema`, `@typebase`, `@language` | docheader directive (`@base` is a deprecated alias of `@nodebase`, to be removed in 0.8.0) | [Document Header](#document-header) |
 | `@iri` | docheader stanza: vocabulary prefixes | [Vocabulary prefixes](#vocabulary-prefixes-iri) |
 | `@interpretations` | docheader stanza: default interpretations | [`@interpretations`](#interpretations) |
 | `@id` | assertion directive: names its enclosing assertion | [Assertion Identifiers](#assertion-identifiers) |
