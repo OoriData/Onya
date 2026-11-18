@@ -7,10 +7,8 @@ values, follows (outbound / inbound / edge-on-edge), selection hooks, depth/cycl
     pytest -s test/test_view.py
 '''
 
-import functools
 import json
 import tomllib
-import warnings
 from decimal import Decimal
 
 import pytest
@@ -18,8 +16,7 @@ import pytest
 from onya import view
 from onya.serial import literate
 
-# The 0.6.0 output shape (no deprecated 'label' copy); the legacy default has its own tests below.
-project = functools.partial(view.project, legacy_label=False)
+project = view.project
 
 L = 'http://example.org/lib/'
 
@@ -237,9 +234,9 @@ def test_name_errors_explain_the_fix():
     assert msg.startswith("View `type = 'Person'`: follow `edge = \"worksFor\"` has `as = \"fields\"`")
     assert 'Pick another name, e.g. `as = "worksFor"`' in msg
     with pytest.raises(ValueError) as e:
-        view.load({'type': 'Person', 'follow': [{'edge': 'label'}]})
+        view.load({'type': 'Person', 'follow': [{'edge': 'title'}]})
     assert 'defaults to its label' in str(e.value) and 'Add an `as`' in str(e.value)
-    assert '`as = "label_links"`' in str(e.value)
+    assert '`as = "title_links"`' in str(e.value)
     with pytest.raises(ValueError) as e:
         view.load({'type': 'Person', 'follow': [{'edge': 'knows'}, {'edge': 'knows', 'show': ['name']}]})
     assert '`as = "knows_2"` on the second' in str(e.value)
@@ -425,31 +422,19 @@ def test_prefer_order_by_load_errors(bad, msg):
         view.load(bad)
 
 
-# --- deprecation shims (remove in 0.6.0) ---------------------------------------------------
+# --- removed in 0.7.0 --------------------------------------------------------------------
 
-def test_label_spec_key_deprecated_but_works(g):
-    with pytest.warns(DeprecationWarning, match='use `title =`'):
-        specs = view.load({'type': 'Person', 'label': '{name}!', 'fields': ['email']})
-    assert project(g, L + 'ada', specs)['title'] == 'Ada Lovelace!'
-    with pytest.warns(DeprecationWarning, match='use `title =`'):
-        specs = view.load({'type': 'Person', 'fields': ['name'],
-                           'follow': [{'edge': 'worksFor', 'label': 'url', 'show': ['name', 'url']}]})
-    assert project(g, L + 'ada', specs)['worksFor'][0]['title'] == 'http://example.org/aec'
-    with pytest.raises(ValueError, match='give `title` only'):
-        view.load({'type': 'Person', 'label': 'x', 'title': 'y'})
-    with pytest.warns(DeprecationWarning, match='View.title'):
-        assert specs[0].label_spec is None
+def test_the_old_label_spelling_is_refused_by_name(g):
+    with pytest.raises(ValueError, match='`label =` is now `title =`'):
+        view.load({'type': 'Person', 'label': '{name}!', 'fields': ['email']})
+    with pytest.raises(ValueError, match='`label =` is now `title =`'):
+        view.load({'type': 'Person', 'follow': [{'edge': 'worksFor', 'label': 'url', 'show': ['name']}]})
+    with pytest.raises(ValueError, match='Unknown view key'):  # other typos still get the generic message
+        view.load({'type': 'Person', 'lable': 'x'})
 
 
-def test_legacy_label_output_key(g, specs):
-    p = view.project(g, L + 'ada', specs)                       # default: legacy copy present
-    assert list(p)[:4] == ['id', 'type', 'title', 'label']
-    assert json.loads(json.dumps(p))['label'] == 'Ada Lovelace'  # JSON consumers unaffected
-    with warnings.catch_warnings():
-        warnings.simplefilter('error')
-        p['title'], dict(p), view.jsonable(p), view.to_text(p)  # no warning without touching 'label'
-    with pytest.warns(DeprecationWarning, match="use 'title'"):
-        assert p['label'] == 'Ada Lovelace'
-    with pytest.warns(DeprecationWarning):
-        assert p['employer'][0].get('label') == 'Analytical Engine Company'
-    assert 'label' not in view.project(g, L + 'ada', specs, legacy_label=False)
+def test_items_have_no_label_key(g, specs):
+    p = view.project(g, L + 'ada', specs)
+    assert list(p)[:3] == ['id', 'type', 'title'] and 'label' not in p
+    assert 'label' not in p['employer'][0]
+    assert type(p) is dict

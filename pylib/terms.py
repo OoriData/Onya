@@ -14,6 +14,8 @@ ONYA_TYPE_REL = ONYA('type')
 ONYA_SOURCE_REL = ONYA('source')  # @source provenance sub-property
 ONYA_METHOD_REL = ONYA('method')  # @method provenance sub-edge (points to a node identifying the method)
 ONYA_CONFIDENCE_REL = ONYA('confidence')  # @confidence provenance sub-property, nested under @method
+ONYA_TRANSIENT = ONYA('transient')  # @transient on a node: this copy is derived or lossy, and must not be persisted
+ONYA_REASON = ONYA('reason')  # @reason nested under @transient: why (text)
 ONYA_ASOF = ONYA('asOf')  # @asOf: ISO 8601 time an assertion was true at, nested under it (core: not only circum)
 ONYA_DOCUMENT = ONYA('Document')  # Type for document nodes created from @document directive
 ONYA_ASSERTION = ONYA('Assertion')  # Implicit type carried by every assertion (edge/property)
@@ -22,7 +24,7 @@ ONYA_ASSERTION = ONYA('Assertion')  # Implicit type carried by every assertion (
 # Docheader directives:
 ONYA_DOCUMENT_REL = ONYA('document')  # @document
 ONYA_NODEBASE = ONYA('nodebase')  # @nodebase
-ONYA_BASE = ONYA('base')  # @base (alias of @nodebase)
+ONYA_BASE = ONYA('base')  # @base (deprecated alias of @nodebase; removed in 0.8.0)
 ONYA_SCHEMA = ONYA('schema')  # @schema
 ONYA_TYPEBASE = ONYA('typebase')  # @typebase
 ONYA_LANGUAGE = ONYA('language')  # @language
@@ -48,6 +50,8 @@ ONYA_CARDINALITY = ONYA('cardinality')  # @cardinality: 1 | 0..1 | 1..* | 0..* |
 ONYA_ONEOF = ONYA('oneOf')  # @oneOf: an allowed value (repeat for each)
 ONYA_CLOSED = ONYA('closed')  # @closed: true on a Class: undeclared labels are findings
 ONYA_SEVERITY = ONYA('severity')  # @severity: error | warning
+ONYA_DEPRECATED = ONYA('deprecated')  # @deprecated: guidance string, on a @Class or @Property: don't use it
+ONYA_REPLACEDBY = ONYA('replacedBy')  # @replacedBy -> a @Class or @Property that supersedes the declared one
 ONYA_TABLE = ONYA('table')  # @table: override a derived table name (onya.circum)
 ONYA_COLUMN = ONYA('column')  # @column: override a derived column name (onya.circum)
 # The circum layer's read side (see onya.circum): sidecars are declared as nodes, and circum properties point at them
@@ -56,7 +60,7 @@ ONYA_SYSTEM = ONYA('System')  # type of the system a sidecar lives in
 ONYA_SYSTEM_REL = ONYA('system')  # @system -> System
 ONYA_CIRCUMQUERY = ONYA('circumQuery')  # on a @Property: -> the @Sidecar holding its values
 ONYA_QUERYDETAIL = ONYA('queryDetail')  # nested under @circumQuery: opaque to Onya, passed to the resolver
-ONYA_SENSITIVITY = ONYA('sensitivity')  # @sensitivity on a sidecar: what a policy decides access by
+ONYA_SENSITIVITY = ONYA('sensitivity')  # @sensitivity on a sidecar, or a @Property: what a policy decides access by
 ONYA_RETENTION = ONYA('retention')  # @retention on a sidecar: how long its rows are kept
 ONYA_QUALIFIER = ONYA('qualifier')  # on a @Property: -> a nested label that tells its values apart (part of the key)
 ONYA_ATTRIBUTE = ONYA('attribute')  # on a @Property: -> a nested label that rides along with each value (not a key)
@@ -85,10 +89,11 @@ reserve('core',
         'id', 'as',  # assertion directives
         'source', 'method', 'confidence', 'asOf',  # provenance
         'Document', 'Assertion',  # implicit types
+        'transient', 'reason',  # do-not-persist marker (onya.transient)
         'type')  # the type relation: reserved, with no behavior defined yet
 reserve('ordering', 'ordering', 'ordered')  # onya.ordering (not core: see SPEC, Reserved vocabulary)
 reserve('shape', 'Class', 'Property', 'label', 'subClassOf', 'appliesTo', 'range', 'cardinality', 'oneOf',
-        'closed', 'severity')  # onya.shape
+        'closed', 'severity', 'deprecated', 'replacedBy')  # onya.shape
 reserve('circum', 'table', 'column', 'Sidecar', 'System', 'system', 'circumQuery', 'queryDetail', 'sensitivity',
         'retention', 'qualifier', 'attribute')  # onya.circum
 

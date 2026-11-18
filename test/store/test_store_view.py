@@ -133,8 +133,8 @@ RANKED_SPEC = {'type': 'Person', 'title': '{name} <{email}>', 'fields': [
 
 async def test_prefer_and_order_by_from_store(store):
     await store.put(NAME, literate.read(RANKED_DOC).graph)
-    expected = view.project(literate.read(RANKED_DOC).graph, L + 'ada', RANKED_SPEC, legacy_label=False)
-    got = await view.project_from_store(store, NAME, L + 'ada', RANKED_SPEC, legacy_label=False)
+    expected = view.project(literate.read(RANKED_DOC).graph, L + 'ada', RANKED_SPEC)
+    got = await view.project_from_store(store, NAME, L + 'ada', RANKED_SPEC)
     assert got == expected
     assert got['title'] == 'Ada Lovelace <countess@example.org>'
     assert dict(got['fields'])['telephone'] == ['0001', '0000']

@@ -55,8 +55,8 @@ def demo_basic():
     outpath = 'demo_basic.mmd'
     with open(outpath, 'w', encoding='utf-8') as f:
         mermaid.write(g, out=f,
-                      base='http://example.org/',
-                      propertybase='http://schema.org/')
+                      nodebase='http://example.org/',
+                      schema='http://schema.org/')
 
     print(f'  Generated: {outpath}')
     print('  View by pasting into Mermaid Live Editor, or embedding with ```mermaid\n')
@@ -95,8 +95,8 @@ def demo_styled():
     outpath = 'demo_styled.mmd'
     with open(outpath, 'w', encoding='utf-8') as f:
         mermaid.write(g, out=f,
-                      base='http://example.org/',
-                      propertybase='http://schema.org/',
+                      nodebase='http://example.org/',
+                      schema='http://schema.org/',
                       rankdir='LR',
                       node_shapes={
                           'http://schema.org/Person': 'round',
@@ -134,8 +134,8 @@ def demo_reified():
     outpath = 'demo_reified.mmd'
     with open(outpath, 'w', encoding='utf-8') as f:
         mermaid.write(g, out=f,
-                      base='http://example.org/',
-                      propertybase='http://schema.org/',
+                      nodebase='http://example.org/',
+                      schema='http://schema.org/',
                       show_edge_annotations=True,
                       node_shapes={'http://schema.org/Person': 'round'})
 
@@ -162,8 +162,8 @@ def demo_minimal():
     outpath = 'demo_minimal.mmd'
     with open(outpath, 'w', encoding='utf-8') as f:
         mermaid.write(g, out=f,
-                      base='http://example.org/',
-                      propertybase='http://www.w3.org/2000/01/rdf-schema#',
+                      nodebase='http://example.org/',
+                      schema='http://www.w3.org/2000/01/rdf-schema#',
                       show_properties=False,
                       show_types=False,
                       rankdir='BT')
@@ -185,8 +185,8 @@ def demo_from_literate():
     outpath = 'demo_literate.mmd'
     with open(outpath, 'w', encoding='utf-8') as f:
         mermaid.write(g, out=f,
-                      base='http://example.org/',
-                      propertybase='https://schema.org/')
+                      nodebase='http://example.org/',
+                      schema='https://schema.org/')
 
     print(f'  Parsed: {docpath.name} (@document={result.doc_iri})')
     print(f'  Generated: {outpath}\n')

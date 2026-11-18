@@ -42,8 +42,8 @@ alice.add_edge('http://schema.org/knows', bob)
 
 with open('output.mmd', 'w', encoding='utf-8') as f:
     mermaid.write(g, out=f,
-                 base='http://example.org/',
-                 propertybase='http://schema.org/',
+                 nodebase='http://example.org/',
+                 schema='http://schema.org/',
                  rankdir='LR',
                  show_properties=True,
                  show_edge_annotations=True)
@@ -53,8 +53,8 @@ with open('output.mmd', 'w', encoding='utf-8') as f:
 
 `mermaid.write()` supports the same “core” knobs as the Graphviz emitter:
 
-- `base`: base IRI for abbreviating node display labels
-- `propertybase`: base IRI for abbreviating property/edge labels
+- `nodebase`: base IRI for abbreviating node display labels
+- `schema`: base IRI for abbreviating property/edge labels
 - `rankdir`: layout direction (`TB`, `LR`, `BT`, `RL`)
 - `show_properties` / `show_types`
 - `show_edge_labels` / `show_edge_annotations`

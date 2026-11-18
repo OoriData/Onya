@@ -37,8 +37,8 @@ from onya.locations import describe
 from onya.ordering import OrderingError, ordered
 from onya.terms import (
     ONYA, ONYA_APPLIESTO, ONYA_AS, ONYA_ATTRIBUTE, ONYA_CARDINALITY, ONYA_CIRCUMQUERY, ONYA_CLASS, ONYA_CLOSED,
-    ONYA_DOCUMENT, ONYA_LABEL, ONYA_ONEOF, ONYA_ORDERED, ONYA_PROPERTY, ONYA_QUALIFIER, ONYA_RANGE, ONYA_SEVERITY,
-    ONYA_SUBCLASSOF,
+    ONYA_DEPRECATED, ONYA_DOCUMENT, ONYA_LABEL, ONYA_ONEOF, ONYA_ORDERED, ONYA_PROPERTY, ONYA_QUALIFIER, ONYA_RANGE,
+    ONYA_REPLACEDBY, ONYA_SENSITIVITY, ONYA_SEVERITY, ONYA_SUBCLASSOF,
     unknown_reserved_terms,
 )
 
@@ -69,7 +69,7 @@ def parse_cardinality(text: str) -> tuple[int, int | None]:
 class Finding:
     '''One place a graph departs from its shapes (or one declaration that can't be read). Data, never an exception.'''
     severity: str  # 'error' | 'warning'
-    kind: str  # applies_to | cardinality | range | one_of | as | ordering | dangling | undeclared_label | ...
+    kind: str  # applies_to | cardinality | range | one_of | as | ordering | dangling | undeclared_label | deprecated
     node: object  # id of the node concerned
     label: object = None  # the label concerned, if any
     detail: str = ''
@@ -109,6 +109,8 @@ class ClassShape:
     parents: set = field(default_factory=set)  # ids of the classes named by @subClassOf
     closed: bool = False
     severity: str = 'error'
+    deprecated: str | None = None  # `@deprecated`'s guidance ('' if only `@replacedBy` was given); None: not deprecated
+    replaced_by: tuple = ()  # ids named by `@replacedBy`
 
 
 @dataclass
@@ -125,6 +127,9 @@ class PropertyShape:
     circum: bool = False  # its values are held in a sidecar (`@circumQuery`): see `onya.circum`
     qualifiers: tuple = ()  # label IRIs (declaration order) nested under each value that tell values apart: the key
     attributes: tuple = ()  # label IRIs nested under each value that ride along, and are not part of the key
+    sensitivity: str | None = None  # `@sensitivity`: what `onya.redact` asks a policy about before showing its values
+    deprecated: str | None = None  # `@deprecated`'s guidance ('' if only `@replacedBy` was given); None: not deprecated
+    replaced_by: tuple = ()  # ids named by `@replacedBy`
 
 
 class Shapes:
@@ -184,18 +189,32 @@ def load_shapes(g) -> Shapes:
             problem(n, 'bad_shape', term, f'{str(term)[len(str(ONYA)):]} must be true or false, not {found}')
         return found == ['true']
 
+    def deprecation(n) -> tuple:
+        '''`(guidance or None, replacements)`: either term marks the declaration deprecated.'''
+        notes, replaced = n.values(ONYA_DEPRECATED), _targets_in_order(n, ONYA_REPLACEDBY)
+        if len(notes) > 1:
+            problem(n, 'bad_shape', ONYA_DEPRECATED, f'a declaration has at most one @deprecated, found {notes}')
+        return (notes[0] if notes else '') if (notes or replaced) else None, replaced
+
     for n in g.nodes.values():
         types = {str(t) for t in n.types}
         labels = n.values(ONYA_LABEL)
         if str(ONYA_CLASS) in types:
             sh.classes[str(n.id)] = ClassShape(
-                n.id, labels[0] if labels else None, _targets(n, ONYA_SUBCLASSOF), flag(n, ONYA_CLOSED), severity(n))
+                n.id, labels[0] if labels else None, _targets(n, ONYA_SUBCLASSOF), flag(n, ONYA_CLOSED), severity(n),
+                *deprecation(n))
         if str(ONYA_PROPERTY) in types:
             p = PropertyShape(n.id, labels[0] if labels else None, _targets(n, ONYA_APPLIESTO), _targets(n, ONYA_RANGE),
                               severity=severity(n), ordered=flag(n, ONYA_ORDERED), one_of=set(n.values(ONYA_ONEOF)),
                               circum=any(True for _ in n.getedge(ONYA_CIRCUMQUERY)),
                               qualifiers=_targets_in_order(n, ONYA_QUALIFIER),
                               attributes=_targets_in_order(n, ONYA_ATTRIBUTE))
+            p.deprecated, p.replaced_by = deprecation(n)
+            sens = n.values(ONYA_SENSITIVITY)
+            if len(sens) > 1:
+                problem(n, 'bad_shape', ONYA_SENSITIVITY, f'a property has at most one @sensitivity, found {sens}')
+            elif sens:
+                p.sensitivity = sens[0]
             if both := set(p.qualifiers) & set(p.attributes):
                 problem(n, 'bad_shape', ONYA_QUALIFIER, f'{sorted(both)} is both a @qualifier and an @attribute')
             as_ = n.values(ONYA_AS)
@@ -215,6 +234,13 @@ def load_shapes(g) -> Shapes:
                 problem(n, 'bad_shape', ONYA_RANGE, '@range makes a property an edge, which has no @as or @oneOf')
             sh.properties[str(n.id)] = p
     return sh
+
+
+def _deprecation_detail(what: str, shape) -> str:
+    '''`label X is deprecated: the guidance. Replaced by Y.`: what a deprecated finding says.'''
+    out = f'{what} is deprecated' + (f': {shape.deprecated}' if shape.deprecated else '')
+    return out + (f'{"" if out.endswith(".") else "."} Replaced by {", ".join(sorted(shape.replaced_by))}.'
+                  if shape.replaced_by else '')
 
 
 def _count(found) -> int:
@@ -275,6 +301,9 @@ def validate(g, shapes=None, *, registry: InterpretationRegistry = DEFAULT, dang
         if {str(t) for t in n.types} & _META:
             continue
         closure = sh.closure(n.types)
+        for t in sorted(map(str, n.types)):  # a class itself marked deprecated, not one that merely inherits from it
+            if t in sh.classes and sh.classes[t].deprecated is not None:
+                add('warning', 'deprecated', n, None, _deprecation_detail(f'class {t}', sh.classes[t]))
         used: dict = {}  # label -> its assertions on this node
         for a in (*n.properties, *n.edges):
             used.setdefault(a.label, []).append(a)
@@ -284,6 +313,8 @@ def validate(g, shapes=None, *, registry: InterpretationRegistry = DEFAULT, dang
             p = sh.properties.get(str(label))
             if p is None:
                 continue
+            if p.deprecated is not None:  # always a warning: @severity speaks to the shape's other findings
+                add('warning', 'deprecated', n, label, _deprecation_detail(f'label {label}', p), found[0])
             if p.applies_to and not closure & p.applies_to:
                 add(p.severity, 'applies_to', n, label,
                     f'declared for {sorted(p.applies_to)}, but this node is {sorted(closure) or "untyped"}', found[0])
@@ -340,6 +371,99 @@ def validate(g, shapes=None, *, registry: InterpretationRegistry = DEFAULT, dang
                 if hasattr(e.target, 'types') and e.target.id in missing:
                     add('error', 'dangling', n, e.label, f'target {e.target.id} is referenced but never declared', e)
     return Report(out)
+
+
+@dataclass
+class Entry:
+    '''One undeclared label or type in an `Inventory`: how much it is used, by how many nodes, and a few instances.'''
+    count: int = 0  # assertions using the label (or nodes carrying the type)
+    nodes: int = 0  # distinct nodes holding it (for a nested label, the top-level node it hangs from)
+    examples: list = field(default_factory=list)  # (node id, value or target id) pairs; just node ids for a type
+
+
+@dataclass
+class Inventory:
+    '''
+    What a graph uses that its shapes don't declare, and what its shapes declare that the graph doesn't use.
+    Each table is ordered by count, then IRI, so two runs over the same graph print the same.
+    '''
+    labels: dict = field(default_factory=dict)  # label IRI (str) -> Entry, for node-level labels no @Property declares
+    types: dict = field(default_factory=dict)  # type IRI (str) -> Entry, for types no @Class declares
+    nested_labels: dict = field(default_factory=dict)  # as `labels`, for assertions nested under another assertion
+    declared_unused: dict = field(default_factory=lambda: {'labels': [], 'types': []})  # declared, never used
+
+    def __str__(self) -> str:
+        lines = []
+        for title, table in (('labels', self.labels), ('types', self.types), ('nested labels', self.nested_labels)):
+            if table:
+                lines.append(f'undeclared {title}:')
+            for iri, e in table.items():
+                lines.append(f'  {e.count:>6}  {iri}  ({e.nodes} node{"" if e.nodes == 1 else "s"})')
+                lines += [f'          e.g. {" ".join(ex) if isinstance(ex, tuple) else ex}' for ex in e.examples]
+        for title, iris in (('labels', self.declared_unused['labels']), ('types', self.declared_unused['types'])):
+            if iris:
+                lines.append(f'declared but unused {title}:')
+                lines += [f'  {iri}' for iri in iris]
+        return '\n'.join(lines) if lines else 'Inventory: nothing undeclared, nothing unused'
+
+
+def inventory(g, shapes=None, *, examples: int = 3) -> Inventory:
+    '''
+    List what `g` uses that no declaration covers, without making any class `@closed`: an open world has no
+    violations, only things worth knowing about. Never changes `g`, never raises for what it finds.
+
+    shapes -- where the declarations are: a graph, a `Shapes`, or None for `g` itself (as for `validate`).
+    examples -- how many instances to keep per entry (the first ones in node-id order).
+
+    A label is covered if some `@Property` declares it, whatever it applies to (a label on the wrong class is a
+    `validate` finding, not an undeclared one), or if it is nested under a value as a declared property's
+    `@qualifier` or `@attribute`. A type is covered if some `@Class` declares it. Reserved `@` terms, and nodes
+    typed `@Class` / `@Property` / `@Document`, are not inventoried, as `validate` does not check them.
+    `declared_unused` lists the declared labels and classes nothing uses: a class counts as used when a node's
+    type is it or a subclass of it, a label when it appears at any depth, and a label held in a sidecar
+    (`@circumQuery`) is never reported, since its values are not in the graph.
+    '''
+    sh = shapes if isinstance(shapes, Shapes) else load_shapes(g if shapes is None else shapes)
+    onya_ns = str(ONYA)
+    nested_ok = {str(q) for p in sh.properties.values() for q in (*p.qualifiers, *p.attributes)}
+    seen = {'labels': {}, 'types': {}, 'nested': {}}  # kind -> iri -> [Entry, set of node ids]
+    used_labels, used_types = set(), set()
+
+    def note(kind, iri, node_id, example):
+        entry, nodes = seen[kind].setdefault(iri, [Entry(), set()])
+        entry.count += 1
+        nodes.add(node_id)
+        entry.examples.append(example)
+
+    def walk(container, node_id, depth):
+        for a in (*container.properties, *container.edges):
+            label = str(a.label)
+            used_labels.add(label)
+            if not label.startswith(onya_ns) and label not in sh.properties and (depth == 0 or label not in nested_ok):
+                value = a.target.id if hasattr(a, 'target') else a.value
+                note('labels' if depth == 0 else 'nested', label, str(node_id), (str(node_id), str(value)))
+            walk(a, node_id, depth + 1)
+
+    for n in g.nodes.values():
+        if {str(t) for t in n.types} & _META:
+            continue
+        used_types |= sh.closure(n.types)
+        for t in map(str, n.types):
+            if not t.startswith(onya_ns) and t not in sh.classes:
+                note('types', t, str(n.id), str(n.id))
+        walk(n, n.id, 0)
+
+    def table(kind):
+        rows = []
+        for iri, (entry, nodes) in seen[kind].items():
+            entry.nodes = len(nodes)
+            entry.examples = sorted(entry.examples)[:max(examples, 0)]
+            rows.append((iri, entry))
+        return dict(sorted(rows, key=lambda r: (-r[1].count, r[0])))
+
+    unused = {'labels': sorted(pid for pid, p in sh.properties.items() if pid not in used_labels and not p.circum),
+              'types': sorted(c for c in sh.classes if c not in used_types)}
+    return Inventory(table('labels'), table('types'), table('nested'), unused)
 
 
 def _fragment_roots(fragment) -> set:

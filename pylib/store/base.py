@@ -316,10 +316,13 @@ class GraphQueryStore(Protocol):
         ...
 
 
-def refuse_circum_derived(g) -> None:
+def refuse_transient(g) -> None:
     '''
-    Raise ``onya.circum.CircumDerivedError`` if ``g`` holds assertions that came from a sidecar (a view
-    built by ``augment``): persisting one would make the graph swallow the sidecar. ``strip`` it first.
+    Raise if ``g`` must not be persisted. ``onya.circum.CircumDerivedError`` if it holds assertions that came from
+    a sidecar (a view built by ``augment``), which would make the graph swallow the sidecar: ``strip`` it first.
+    ``onya.transient.TransientError`` if any node is marked ``@transient``, as a redacted graph is, or such a view.
     '''
     from onya.circum import check_persistable  # lazy: onya.circum builds on the store layer's neighbours
+    from onya.transient import check_persistable as check_unmarked
     check_persistable(g)
+    check_unmarked(g)

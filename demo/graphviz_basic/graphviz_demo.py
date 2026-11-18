@@ -53,8 +53,8 @@ def demo_basic():
     # Export to DOT
     with open('demo_basic.dot', 'w') as f:
         graphviz.write(g, out=f,
-                      base='http://example.org/',
-                      propertybase='http://schema.org/')
+                      nodebase='http://example.org/',
+                      schema='http://schema.org/')
 
     print('  Generated: demo_basic.dot')
     print('  Render with: dot -Tpng demo_basic.dot -o demo_basic.png\n')
@@ -91,8 +91,8 @@ def demo_styled():
     # Export with custom styling
     with open('demo_styled.dot', 'w') as f:
         graphviz.write(g, out=f,
-                      base='http://example.org/',
-                      propertybase='http://schema.org/',
+                      nodebase='http://example.org/',
+                      schema='http://schema.org/',
                       rankdir='LR',  # Left-to-right layout
                       node_shapes={
                           'http://schema.org/Person': 'ellipse',
@@ -138,8 +138,8 @@ def demo_reified():
     # Export with edge annotations visible
     with open('demo_reified.dot', 'w') as f:
         graphviz.write(g, out=f,
-                      base='http://example.org/',
-                      propertybase='http://schema.org/',
+                      nodebase='http://example.org/',
+                      schema='http://schema.org/',
                       show_edge_annotations=True,
                       node_shapes={'http://schema.org/Person': 'ellipse'},
                       node_colors={'http://schema.org/Person': 'lightblue'})
@@ -170,8 +170,8 @@ def demo_minimal():
     # Export without properties, clean structure
     with open('demo_minimal.dot', 'w') as f:
         graphviz.write(g, out=f,
-                      base='http://example.org/',
-                      propertybase='http://www.w3.org/2000/01/rdf-schema#',
+                      nodebase='http://example.org/',
+                      schema='http://www.w3.org/2000/01/rdf-schema#',
                       show_properties=False,  # Hide properties
                       show_types=False,  # Hide types
                       rankdir='BT')  # Bottom-to-top (child to parent)
@@ -194,8 +194,8 @@ def demo_from_literate():
     outpath = 'demo_literate.dot'
     with open(outpath, 'w') as f:
         graphviz.write(g, out=f,
-                      base='http://example.org/',
-                      propertybase='https://schema.org/')
+                      nodebase='http://example.org/',
+                      schema='https://schema.org/')
 
     print(f'  Parsed: {docpath.name} (@document={result.doc_iri})')
     print(f'  Generated: {outpath}')

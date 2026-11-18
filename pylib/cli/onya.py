@@ -208,7 +208,7 @@ def validate(filespec: str,
     Args:
         filespec: Path, directory (recursive; `.onya` and `.onya.md`), glob, or '-' for stdin.
         shapes: Where the `@Class` / `@Property` declarations are, as a filespec; by default, the input itself.
-        strict: Fail on warnings too (a typo'd `@term`, a `@severity: warning` shape).
+        strict: Fail on warnings too (a typo'd `@term`, a `@severity: warning` shape, a use of a `@deprecated` term).
         dangling: Also report edge targets that no node block declares.
         allow: Targets that may stay undeclared: an IRI prefix, or several separated by commas.
         against: Treat the input as a proposed change (a fragment) and check it as if merged into this base, a
@@ -255,6 +255,31 @@ def validate(filespec: str,
     if failed:
         sys.stderr.write(f'{len(report.errors)} error(s), {len(report.warnings)} warning(s)\n')
         raise SystemExit(2)
+
+
+def inventory(filespec: str,
+              *,
+              shapes: str | None = None,
+              examples: int = 3,
+              encoding: str = 'utf-8'):
+    '''
+    Print what the input uses that no shape declares (labels, types, nested labels), most used first, and what the
+    shapes declare that nothing uses. An audit, not a check: classes need not be `@closed`, and the exit status is
+    always 0 unless the input does not parse. See doc/design-shapes.md.
+
+    Args:
+        filespec: Path, directory (recursive; `.onya` and `.onya.md`), glob, or '-' for stdin.
+        shapes: Where the `@Class` / `@Property` declarations are, as a filespec; by default, the input itself.
+        examples: How many example uses to show under each entry (0 for none).
+        encoding: Text encoding used to read input files (ignored for stdin).
+
+    Example:
+        onya inventory kg/ --shapes=shapes/
+    '''
+    from onya.shape import inventory as audit, load_shapes
+
+    sh = load_shapes(_load(shapes, encoding)) if shapes else None
+    print(audit(_load(filespec, encoding), sh, examples=examples))
 
 
 def project(filespec: str,
@@ -351,6 +376,7 @@ class _CLI:
     '''
     convert = staticmethod(convert)
     validate = staticmethod(validate)
+    inventory = staticmethod(inventory)
     project = staticmethod(project)
     catalog = staticmethod(catalog)
     version = staticmethod(version)

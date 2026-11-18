@@ -223,8 +223,6 @@ view.project(g, chuks, specs)
 # {'id': '.../Chuks', 'type': 'Person', 'title': 'Chukwuemeka Okafor',
 #  'fields': [('name', 'Chukwuemeka Okafor')],
 #  'knows': [{'id': '.../Ify', 'title': 'Ifeoma Obasi', 'fields': [('name', 'Ifeoma Obasi')]}]}
-# (Each item still carries a deprecated 'label' copy of 'title';
-#  pass legacy_label=False to drop it.)
 ```
 
 Stores offer the same lookup without loading a graph (`await store.search(name, 'chukwuemka',
@@ -234,7 +232,7 @@ fetches just the neighborhood a view needs, so "search → project" is a handful
 
 ## Shapes: what should a graph look like?
 
-A **shape** says what a class of node is expected to carry. Shapes are ordinary nodes in the same document: `# Person [@Class]` declares a class, and `# name [@Property]` declares a property label, with `@appliesTo` (which class), `@as` (how to read its values), `@cardinality` (`1`, `0..1`, `1..*`, `n..m`), `@range` (which class an edge points to) and `@oneOf` (a closed set). The label's declaration node has the label's own IRI as its id.
+A **shape** says what a class of node is expected to carry. Shapes are ordinary nodes in the same document: `# Person [@Class]` declares a class, and `# name [@Property]` declares a property label, with `@appliesTo` (which class), `@as` (how to read its values), `@cardinality` (`1`, `0..1`, `1..*`, `n..m`), `@range` (which class an edge points to), `@oneOf` (a closed set) and `@deprecated` (retire a term, with the guidance to follow, optionally `@replacedBy` its successor). The label's declaration node has the label's own IRI as its id.
 
 ```
 # Person [@Class]
@@ -257,7 +255,7 @@ for f in validate(g).findings:       # shapes in g itself, or validate(g, shapes
     print(f.severity, f.kind, f.node, f.label, f.detail)    # e.g. error cardinality ... has 0, declared 1
 ```
 
-Shapes only report: they never infer a type or change a value, and nothing runs until you ask (`onya validate kg/ --shapes=shapes/`). To check a proposed change before merging it, `validate(fragment, against=base)` resolves the fragment's types and cardinality through the base graph. Other layers read the same declarations, which is why the next section needs no column list. See [doc/design-shapes.md](doc/design-shapes.md).
+Shapes only report: they never infer a type or change a value, and nothing runs until you ask (`onya validate kg/ --shapes=shapes/`). A property declared `@sensitivity: partner` can be withheld per viewer with `onya.redact.redact(g, viewer, policy)`, which returns a lossy copy marked `@transient` (a store refuses to persist it). `onya inventory kg/` lists the labels and types in use that no shape declares, and the declarations nothing uses. To check a proposed change before merging it, `validate(fragment, against=base)` resolves the fragment's types and cardinality through the base graph. Other layers read the same declarations, which is why the next section needs no column list. See [doc/design-shapes.md](doc/design-shapes.md).
 
 ## Ordered values and the content digest
 

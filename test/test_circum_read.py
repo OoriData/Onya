@@ -15,6 +15,7 @@ import pytest
 from onya.circum import (CircumAccessDenied, CircumDerivedError, CircumError, Edge, Node, Registry, Text, augment,
                          catalog, check_persistable, emit, is_view, strip, view_findings)
 from onya.digest import digest
+from onya.graph import graph
 from onya.serial.literate import read, write
 from onya.shape import validate
 from onya.store.filesystem import FileStore
@@ -288,7 +289,7 @@ async def test_augmenting_a_view_again_leaves_one_marker(g, uni):
     twice = await augment(await augment(g, registry=uni.registry()), registry=uni.registry())
     assert digest(strip(twice)) == digest(g)
     sc = next(n for n in twice.nodes.values() if str(n.id).endswith('counsellor-assignments'))
-    assert len(list(sc.getprop('@asOf'))) == 1
+    assert len(list(sc.getprop('@transient'))) == 1
 
 
 @pytest.mark.asyncio
@@ -480,3 +481,34 @@ async def test_sqlite_store_refuses_a_view_too(g, uni, tmp_path):
         with pytest.raises(CircumDerivedError):
             await store.put('http://e.o/doc', view)
         await store.put('http://e.o/doc', strip(view))
+
+
+@pytest.mark.asyncio
+async def test_a_view_marks_itself_with_the_general_do_not_persist_marker(g, uni):
+    from onya.transient import TransientError, check_persistable as general_check, transient
+    view = await augment(g, registry=uni.registry())
+    marked = transient(view)
+    assert marked and all(why == ['circum view'] for why in marked.values())
+    assert NS + 'chuks' in marked and NS + 'counsellor-assignments' in marked  # an asked subject, and the sidecar
+    sc = view.nodes[NS + 'counsellor-assignments']
+    (mark,) = sc.getprop('@transient')
+    assert mark.value == 'true'
+    assert [str(m.target.id) for m in mark.getedge(METHOD)] == [NS + 'counsellor-assignments']  # as 0.6.0's @asOf was
+    assert len(list(mark.getprop(ASOF))) == 1
+    assert not list(sc.getprop('@asOf'))  # the node-level marks moved under @transient
+    assert is_view(view) and digest(strip(view)) == digest(g)  # and strip still takes them whole
+    assert not transient(strip(view))
+    with pytest.raises(TransientError):  # and the general check refuses it, with no help from the circum one
+        general_check(view)
+
+
+def test_a_view_written_before_0_7_0_is_still_a_view():
+    '''0.6.x marked a consulted sidecar with a node-level `@asOf` nested `@method`: still recognised and stripped.'''
+    legacy = graph()
+    read(DOC, legacy)
+    sc = legacy.nodes[NS + 'counsellor-assignments']
+    sc.add_property(ASOF, '2026-01-01T00:00:00Z').add_edge(METHOD, sc)
+    assert is_view(legacy)
+    with pytest.raises(CircumDerivedError):
+        check_persistable(legacy)
+    assert not list(strip(legacy).nodes[NS + 'counsellor-assignments'].getprop(ASOF))

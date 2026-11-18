@@ -273,7 +273,7 @@ def write(
     prefixes: dict[str, str] | None = None,
     bracket_curie: bool = False,
     bracket_types: bool = False,
-    strict_namespace_bases: bool = False,
+    strict_namespace_bases: bool = True,
     multiline: str = 'textref',
     placeholders: set | None = None,
     ordered=None,
@@ -287,8 +287,8 @@ def write(
     prefixes -- additional ``@iri`` prefix map (prefix name -> namespace base)
     bracket_curie -- if True, write labels as ``<prefix:local>`` instead of ``prefix:local``
     bracket_types -- if True, write types as ``[<prefix:Type>]`` with bracketed CURIEs
-    strict_namespace_bases -- if True, raise ``NamespaceBaseError`` when ``schema``/``nodebase``
-        lacks a trailing separator (`/`, `#`, or `?`) rather than normalizing + warning.
+    strict_namespace_bases -- raise ``NamespaceBaseError`` (the default) when ``schema``/``nodebase``
+        lacks a trailing separator (`/`, `#`, or `?`); False normalizes it (append ``/``) with a warning instead.
     multiline -- how to write multi-line property values: ``'textref'`` (default; a ``::`` text
         reference, robust for any content) or ``'indent'`` (indented continuation text under the
         bullet, SPEC § Long Text, falling back to a text reference for a value that form can't
@@ -308,8 +308,8 @@ def write(
     back to explicit ``<full-iri>`` form. The one precondition is that ``@schema``/``@nodebase``
     carry a trailing separator — bare names join by concatenation, so a separator-less base would
     mint mashed IRIs on reparse. ``write`` enforces this: a separator-less ``schema``/``nodebase``
-    is normalized (append ``/``) with a ``UserWarning`` (parity with the parser's read-side
-    check), or raises under ``strict_namespace_bases``.
+    raises ``NamespaceBaseError`` (parity with the parser's read-side check), or, under
+    ``strict_namespace_bases=False``, is normalized (append ``/``) with a ``UserWarning``.
     '''
     # Emit self-consistent, separator-terminated bases: compaction already treats the base as
     # separator-terminated (via namespace_for_curie), so the docheader directive must too.

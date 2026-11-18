@@ -133,8 +133,8 @@ node1.add_property('http://schema.org/name', 'Example')
 # Export to DOT
 with open('output.dot', 'w') as f:
     graphviz.write(g, out=f,
-                   base='http://example.org/',
-                   propertybase='http://schema.org/',
+                   nodebase='http://example.org/',
+                   schema='http://schema.org/',
                    rankdir='LR',
                    show_properties=True)
 ```
@@ -143,8 +143,8 @@ with open('output.dot', 'w') as f:
 
 The `graphviz.write()` function accepts many options:
 
-- **base** - Base IRI for abbreviating node IDs
-- **propertybase** - Base IRI for abbreviating property labels
+- **nodebase** - Base IRI for abbreviating node IDs
+- **schema** - Base IRI for abbreviating property labels
 - **rankdir** - Layout direction: 'TB', 'LR', 'BT', 'RL'
 - **show_properties** - Show node properties (default: True)
 - **show_types** - Show node types (default: True)

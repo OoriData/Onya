@@ -207,8 +207,8 @@ def _check_namespace_bases(doc: doc_info, *, strict: bool) -> None:
     trailing ``/``, ``#``, or ``?`` therefore mints mashed IRIs — e.g.
     ``@nodebase https://ex.org/g`` + ``Node`` -> ``https://ex.org/gNode``.
 
-    During the deprecation window (``strict=False``) this emits a ``DeprecationWarning``;
-    once ``strict`` is set it raises ``NamespaceBaseError``. Only explicitly-declared
+    Strict (the default since 0.7.0) raises ``NamespaceBaseError``; ``strict=False`` only emits a
+    ``DeprecationWarning`` and carries on with the mashing base. Only explicitly-declared
     bases are checked — the ``@nodebase`` -> ``@document`` fallback is out of scope, since
     ``@document`` is an identity IRI that conventionally carries no trailing separator.
     '''
@@ -226,7 +226,7 @@ def _check_namespace_bases(doc: doc_info, *, strict: bool) -> None:
         if strict:
             raise NamespaceBaseError(msg)
         warnings.warn(
-            msg + ' This will raise NamespaceBaseError in a future Onya release.',
+            msg + ' (accepted only because strict_namespace_bases=False.)',
             DeprecationWarning, stacklevel=2,
         )
 
@@ -256,6 +256,14 @@ def ensure_namespace_separator(name: str, base: str | None, *, strict: bool) -> 
         UserWarning, stacklevel=3,
     )
     return base + '/'
+
+
+def _warn_base_alias() -> None:
+    '''`@base` is the old spelling of `@nodebase`; FutureWarning so a file's author sees it by default.'''
+    warnings.warn(
+        '`@base` is deprecated; write `@nodebase` instead (same meaning). `@base` will be removed in Onya 0.8.0.',
+        FutureWarning, stacklevel=2,
+    )
 
 
 def _register_iri_prefix(doc: doc_info, prefix: str, uri: str | None) -> None:
@@ -433,7 +441,7 @@ class LiterateParser:
     but new behavior flags are supported via this class.
     '''
     def __init__(self, *, document_source_assertions: bool = False, encoding: str = 'utf-8',
-                 strict_namespace_bases: bool = False,
+                 strict_namespace_bases: bool = True,
                  warn_implicit_doc_ids: bool = False,
                  warn_empty_blocks: bool = True,
                  lenient_arrows: bool = False,
@@ -442,10 +450,9 @@ class LiterateParser:
         document_source_assertions -- if set, add @source sub-properties on created assertions,
             including nested assertions but excluding document header declarations
         encoding -- character encoding used in processing the input text (defaults to UTF-8)
-        strict_namespace_bases -- if set, raise NamespaceBaseError when an explicit
+        strict_namespace_bases -- raise NamespaceBaseError (the default) when an explicit
             @nodebase/@schema/@typebase lacks a trailing separator (`/`, `#`, or `?`).
-            Defaults to False during the deprecation window, which warns instead; a
-            future Onya release will flip this default to True.
+            Pass False to accept it with a DeprecationWarning instead (the pre-0.7.0 behavior).
         warn_implicit_doc_ids -- if set, emit a warning each time a
             relative node id is resolved off @document (the @nodebase fallback) using an
             implicit `#` separator. Off by default: that resolution is a silent
@@ -1420,7 +1427,8 @@ def process_docheader(props, graph_obj, doc, parser: LiterateParser | None = Non
                 doc.lang = prop.value.verbatim if prop.value else None
                 directive_owner = None
             elif key == '@nodebase' or key == '@base':
-                # @base is retained as a legacy alias, but @nodebase is preferred.
+                if key == '@base':
+                    _warn_base_alias()
                 doc.nodebase = prop.value.verbatim if prop.value else None
                 directive_owner = None
             elif key == '@schema':
@@ -1458,6 +1466,8 @@ def process_docheader(props, graph_obj, doc, parser: LiterateParser | None = Non
             if directive_owner == '@iri':
                 k, uri = prop.key, prop.value.verbatim if prop.value else None
                 if k == '@nodebase' or k == '@base':
+                    if k == '@base':
+                        _warn_base_alias()
                     doc.nodebase = uri
                 elif k == '@schema':
                     doc.schemabase = uri
@@ -1478,7 +1488,7 @@ def process_docheader(props, graph_obj, doc, parser: LiterateParser | None = Non
             # else: nested under a scalar directive (e.g. under @document) -> ignored
 
     _sync_schema_prefix(doc)
-    _check_namespace_bases(doc, strict=bool(parser and parser.strict_namespace_bases))
+    _check_namespace_bases(doc, strict=parser.strict_namespace_bases if parser else True)
     _resolve_interp_defaults(doc)
     if doc.ordered_raw:
         doc.ordered = frozenset(expand_iri(name, doc.schemabase, doc=doc) for name in doc.ordered_raw)

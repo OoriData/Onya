@@ -54,6 +54,9 @@ It is a layer in the sense of SPEC § Reserved vocabulary. The terms below are d
 | `@cardinality: m` | property | How many distinct values or targets a node has: `1`, `0..1`, `1..*`, `0..*`, `*` (= `0..*`) or `n..m`. |
 | `@ordered: true` | property | The label's values are ordered, and validation checks the `@ordering` stamps (the [ordering layer](design-ordering.md)). |
 | `@severity: s` | either | `error` (default) or `warning`: the severity of findings the declaration produces. |
+| `@deprecated: text` | either | The class or label is deprecated; the text is the guidance (what to use instead, and why). |
+| `@replacedBy -> X` | either | What supersedes it: a `@Class` or `@Property` (repeat for several). On its own, it also marks the declaration deprecated. |
+| `@sensitivity: level` | property | How sensitive its values are: a string from the application's own vocabulary (`partner`, `clinical`). Nothing in validation reads it; [`redact`](#withholding-sensitive-properties-redact) asks a policy about it. The same term the circum layer puts on a `@Sidecar`. |
 
 Other layers add terms to the same declarations. The circum layer reads `@circumQuery` (the values are held in a sidecar), `@qualifier` and `@attribute` (nested labels that tell a property's values apart, or ride along), and `@table` / `@column` (names); see [design-circum.md](design-circum.md). Shapes themselves ignore them.
 
@@ -64,6 +67,55 @@ Other layers add terms to the same declarations. The circum layer reads `@circum
 **One `@cardinality`, not `@cardinality` plus `@required`.** A boolean beside a multiplicity can contradict itself. Identical values count once, as they would after a merge. A minimum is enforced on every node of the class, including one that doesn't use the label at all; a property with no `@appliesTo` only has its maximum checked.
 
 **Ordering.** `@ordered: true` makes missing, non-integer and conflicting stamps findings. It does *not* number anything: parsing never reads shapes, so stamps still come from the docheader's `@ordered` stanza or by hand.
+
+## Deprecating a term
+
+A class or property that should no longer be used says so, with the guidance a person needs, so the guidance lives with the declaration instead of in a table beside it:
+
+```
+# nickname [@Property]
+* @appliesTo -> Person
+* @deprecated: Use preferredName instead; nickname loses the language.
+* @replacedBy -> preferredName
+```
+
+`validate` then gives each node that uses `nickname` one `deprecated` finding (however many values it has), and each node *typed* with a deprecated class likewise:
+
+```
+warning deprecated: http://e.o/ada http://e.o/nickname: label http://e.o/nickname is deprecated: Use preferredName instead; nickname loses the language. Replaced by http://e.o/preferredName. (at ...)
+```
+
+- It is always a **warning**, whatever `@severity` says: `@severity` is how serious the declaration's other findings are, and a term that is merely going away isn't an error. `onya validate` prints it with the other warnings, and `--strict` makes it fail the run.
+- Either term marks the declaration deprecated, so `@replacedBy` alone is enough, and `@deprecated` alone is too. More than one `@deprecated` is a `bad_shape`.
+- A subclass of a deprecated class is not itself deprecated: only nodes typed with the class are reported. Deprecating a subclass is the subclass's own declaration.
+- Nothing is changed or inferred: the deprecated term keeps validating exactly as before, and `@replacedBy` isn't checked to exist (a forward reference is normal in an open graph). Only a node's own assertions are checked, as elsewhere in this layer, so a deprecated label nested under an assertion isn't reported.
+- `Shapes` exposes it as `deprecated` (the guidance, `''` if only `@replacedBy` was given, `None` if not deprecated) and `replaced_by` on `PropertyShape` and `ClassShape`.
+
+## Withholding sensitive properties: `redact`
+
+A property can say how sensitive its values are, and a viewer-based filter can withhold them while they stay in the graph (a staged migration, or one graph served to several audiences):
+
+```
+# salary [@Property]
+* @appliesTo -> Person
+* @sensitivity: partner
+```
+
+```python
+from onya.redact import redact
+
+policy = lambda viewer, sensitivity: viewer.is_partner or sensitivity == 'public'   # true to allow
+shown = redact(g, viewer, policy)         # a new graph; shapes from g, or pass shapes=
+```
+
+The policy has the signature of a circum `Registry`'s, so one function answers "may this viewer read this sidecar?" and "may this viewer see this property?". `redact` asks it once per distinct `@sensitivity`, and returns a **new graph** (`g` is untouched):
+
+- Every assertion whose label is declared `@sensitivity` and refused is gone, with everything nested under it, at any depth: a sensitive label nested under an allowed value goes too. A label no `@Property` declares, or with no `@sensitivity`, is always kept.
+- A node left with only its id and types stays, so edges to it don't dangle.
+- **The copy is lossy, so it is marked.** Each node that lost an assertion gets `@transient` with `@reason: redacted`, and a store's `put` refuses it (see [the SPEC](../SPEC.md#do-not-persist-marker-transient-reason)). The mark says nothing about what was withheld, but it does say that something was: a viewer can tell a node was redacted.
+- **Validate the original.** A withheld value will look missing in the copy.
+- **The declarations stay in the copy**, `@sensitivity` included, since a viewer needs them to read the graph. If the schema itself is confidential, redact a graph that holds only the data, with `shapes=` given separately.
+- **Not a security boundary for everything.** `redact` filters one graph in memory. It does not cover search over a store, edges into the graph from other graphs, or a digest of the original. A property held in a sidecar is decided by the sidecar's own `@sensitivity` and the registry's policy, not here.
 
 ## Where declarations live, and what they match
 
@@ -90,6 +142,7 @@ for f in report.findings:
 | `as` | `age: "a year"` fails `@as: integer`; also an assertion's own `@as`, at any depth |
 | `ordering` | a missing, non-integer or conflicting `@ordering` on an `@ordered: true` label |
 | `undeclared_label` | on a node of a `@closed: true` class |
+| `deprecated` | a node uses a `@deprecated` label, or is typed with a `@deprecated` class (always a *warning*) |
 | `unknown_reserved_term` | `@Calss` (a *warning*) |
 | `dangling` | an edge target nothing declares (with `dangling=True`; `allow=` for external IRIs) |
 | `bad_shape` | a declaration that can't be read: `@cardinality: lots`, `@severity: loud` |
@@ -130,14 +183,49 @@ onya validate proposed.onya --against=kg/
 onya validate proposed.onya --store=sqlite:kg.db --graph=http://example.org/kg
 ```
 
+## Taking inventory of an open world
+
+Shapes are open, so a graph can use labels and types nobody declared, and `validate` stays quiet about them (an `undeclared_label` finding exists only for a class marked `@closed`). A periodic audit wants the opposite question: what is in use that nothing covers, and what is declared that nothing uses? That is not a violation, so it is a function and not a finding kind:
+
+```python
+from onya.shape import inventory
+
+inv = inventory(g, shapes=None, examples=3)   # shapes: a graph or Shapes; None means g itself
+inv.labels             # {label IRI: Entry(count, nodes, examples)}, node-level labels no @Property declares
+inv.types              # {type IRI: Entry(...)}, types no @Class declares
+inv.nested_labels      # {label IRI: Entry(...)}, undeclared labels nested under another assertion
+inv.declared_unused    # {'labels': [...], 'types': [...]}: declared, and nothing uses them
+```
+
+```
+$ onya inventory kg/ --shapes=shapes/
+undeclared labels:
+       7  http://e.o/nick  (3 nodes)
+          e.g. http://e.o/al Alfie
+          e.g. http://e.o/al Ally
+          e.g. http://e.o/bo B
+       1  http://e.o/tattoo  (1 node)
+          e.g. http://e.o/al none
+declared but unused types:
+  http://e.o/Spare
+```
+
+- **Counts.** `count` is the number of assertions using a label (for a type, the number of nodes typed with it); `nodes` is how many distinct nodes hold it (for a nested label, the node the assertion hangs from). `examples` are `(node id, value or target)` pairs, the first ones in node-id order.
+- **Stable.** Each table runs from most used to least, ties by IRI, and examples are sorted, so two runs over the same graph print the same text and the output diffs from week to week.
+- **What counts as declared.** A label is covered if any `@Property` declares it, whatever it applies to (a label on the wrong class is an `applies_to` finding, not an undeclared label), or, when nested, if some property lists it as a `@qualifier` or `@attribute`. A closed class's labels are inventoried too: `@closed` changes what `validate` reports, not what is in the graph.
+- **Not inventoried.** Reserved `@` terms, and nodes typed `@Class`, `@Property` or `@Document`, as `validate` does not check them either.
+- **Unused.** A class is used when some node's type is it or a subclass of it, so an abstract parent with only subclass instances is not reported. A label counts at any depth. A label held in a sidecar (`@circumQuery`) is never reported unused: its values aren't in the graph to find.
+- **Exit status.** `onya inventory` always exits 0 unless the input does not parse; it audits, it does not check. `--examples=0` omits the instances.
+
 ## The command line
 
 ```
 onya validate kg/                                    # shapes in the same files
 onya validate kg/ --shapes=shapes/ --dangling --allow=https://orcid.org/ --strict
+onya inventory kg/ --shapes=shapes/                  # what is used but undeclared, and the reverse
 ```
 
-Exit status is 2 when there are error findings (with `--strict`, warnings too) and 0 otherwise.
+Exit status of `validate` is 2 when there are error findings (with `--strict`, warnings too) and 0 otherwise.
 
 ## Migrating from other vocabularies
 
