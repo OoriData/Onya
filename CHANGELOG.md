@@ -6,7 +6,7 @@ For interim changes not yet earmarked for a particular release, can use this hea
 ## [Unreleased]
 -->
 
-## [0.7.0] 2026-11-18: Removal of deprecated (since 0.5.1) view `label` spellings. Remove deprecated (since 0.5.0) `onya.serial.{mermaid,graphviz,nx}` aliases. Fix Mermaid and Graphviz demos & READMEs.
+## [0.7.0] 2026-11-18: Removal of deprecated (since 0.5.1) view `label` spellings. Remove deprecated (since 0.5.0) `onya.serial.{mermaid,graphviz,nx}` aliases. Fix Mermaid and Graphviz demos & READMEs. Deprecate `@base` as a docheader directive. Data sensitivity markers on properties, and a redaction helper. Mark transient graph nodes (#84).
 
 ### Added
 
