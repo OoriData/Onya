@@ -367,6 +367,99 @@ def validate(g, shapes=None, *, registry: InterpretationRegistry = DEFAULT, dang
     return Report(out)
 
 
+@dataclass
+class Entry:
+    '''One undeclared label or type in an `Inventory`: how much it is used, by how many nodes, and a few instances.'''
+    count: int = 0  # assertions using the label (or nodes carrying the type)
+    nodes: int = 0  # distinct nodes holding it (for a nested label, the top-level node it hangs from)
+    examples: list = field(default_factory=list)  # (node id, value or target id) pairs; just node ids for a type
+
+
+@dataclass
+class Inventory:
+    '''
+    What a graph uses that its shapes don't declare, and what its shapes declare that the graph doesn't use.
+    Each table is ordered by count, then IRI, so two runs over the same graph print the same.
+    '''
+    labels: dict = field(default_factory=dict)  # label IRI (str) -> Entry, for node-level labels no @Property declares
+    types: dict = field(default_factory=dict)  # type IRI (str) -> Entry, for types no @Class declares
+    nested_labels: dict = field(default_factory=dict)  # as `labels`, for assertions nested under another assertion
+    declared_unused: dict = field(default_factory=lambda: {'labels': [], 'types': []})  # declared, never used
+
+    def __str__(self) -> str:
+        lines = []
+        for title, table in (('labels', self.labels), ('types', self.types), ('nested labels', self.nested_labels)):
+            if table:
+                lines.append(f'undeclared {title}:')
+            for iri, e in table.items():
+                lines.append(f'  {e.count:>6}  {iri}  ({e.nodes} node{"" if e.nodes == 1 else "s"})')
+                lines += [f'          e.g. {" ".join(ex) if isinstance(ex, tuple) else ex}' for ex in e.examples]
+        for title, iris in (('labels', self.declared_unused['labels']), ('types', self.declared_unused['types'])):
+            if iris:
+                lines.append(f'declared but unused {title}:')
+                lines += [f'  {iri}' for iri in iris]
+        return '\n'.join(lines) if lines else 'Inventory: nothing undeclared, nothing unused'
+
+
+def inventory(g, shapes=None, *, examples: int = 3) -> Inventory:
+    '''
+    List what `g` uses that no declaration covers, without making any class `@closed`: an open world has no
+    violations, only things worth knowing about. Never changes `g`, never raises for what it finds.
+
+    shapes -- where the declarations are: a graph, a `Shapes`, or None for `g` itself (as for `validate`).
+    examples -- how many instances to keep per entry (the first ones in node-id order).
+
+    A label is covered if some `@Property` declares it, whatever it applies to (a label on the wrong class is a
+    `validate` finding, not an undeclared one), or if it is nested under a value as a declared property's
+    `@qualifier` or `@attribute`. A type is covered if some `@Class` declares it. Reserved `@` terms, and nodes
+    typed `@Class` / `@Property` / `@Document`, are not inventoried, as `validate` does not check them.
+    `declared_unused` lists the declared labels and classes nothing uses: a class counts as used when a node's
+    type is it or a subclass of it, a label when it appears at any depth, and a label held in a sidecar
+    (`@circumQuery`) is never reported, since its values are not in the graph.
+    '''
+    sh = shapes if isinstance(shapes, Shapes) else load_shapes(g if shapes is None else shapes)
+    onya_ns = str(ONYA)
+    nested_ok = {str(q) for p in sh.properties.values() for q in (*p.qualifiers, *p.attributes)}
+    seen = {'labels': {}, 'types': {}, 'nested': {}}  # kind -> iri -> [Entry, set of node ids]
+    used_labels, used_types = set(), set()
+
+    def note(kind, iri, node_id, example):
+        entry, nodes = seen[kind].setdefault(iri, [Entry(), set()])
+        entry.count += 1
+        nodes.add(node_id)
+        entry.examples.append(example)
+
+    def walk(container, node_id, depth):
+        for a in (*container.properties, *container.edges):
+            label = str(a.label)
+            used_labels.add(label)
+            if not label.startswith(onya_ns) and label not in sh.properties and (depth == 0 or label not in nested_ok):
+                value = a.target.id if hasattr(a, 'target') else a.value
+                note('labels' if depth == 0 else 'nested', label, str(node_id), (str(node_id), str(value)))
+            walk(a, node_id, depth + 1)
+
+    for n in g.nodes.values():
+        if {str(t) for t in n.types} & _META:
+            continue
+        used_types |= sh.closure(n.types)
+        for t in map(str, n.types):
+            if not t.startswith(onya_ns) and t not in sh.classes:
+                note('types', t, str(n.id), str(n.id))
+        walk(n, n.id, 0)
+
+    def table(kind):
+        rows = []
+        for iri, (entry, nodes) in seen[kind].items():
+            entry.nodes = len(nodes)
+            entry.examples = sorted(entry.examples)[:max(examples, 0)]
+            rows.append((iri, entry))
+        return dict(sorted(rows, key=lambda r: (-r[1].count, r[0])))
+
+    unused = {'labels': sorted(pid for pid, p in sh.properties.items() if pid not in used_labels and not p.circum),
+              'types': sorted(c for c in sh.classes if c not in used_types)}
+    return Inventory(table('labels'), table('types'), table('nested'), unused)
+
+
 def _fragment_roots(fragment) -> set:
     '''The nodes whose base content matters: the ones the fragment names, and the targets of its edges (their types).'''
     return set(fragment.nodes) | {e.target.id for n in fragment.nodes.values() for e in n.edges

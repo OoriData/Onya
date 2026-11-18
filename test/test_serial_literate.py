@@ -628,17 +628,24 @@ _NO_SEP_NODEBASE = '''\
 '''
 
 
-def test_namespace_base_missing_separator_warns_by_default():
-    '''Deprecation window: a separator-less base warns but still parses (mashed IRI).'''
+def test_namespace_base_missing_separator_raises_by_default():
+    '''Strict since 0.7.0: a separator-less base is refused, by `read` and a bare `LiterateParser` alike.'''
+    for parse in (lambda g: read(_NO_SEP_NODEBASE, g), lambda g: LiterateParser().parse(_NO_SEP_NODEBASE, g)):
+        with pytest.raises(NamespaceBaseError, match='@nodebase'):
+            parse(graph())
+
+
+def test_namespace_base_missing_separator_opt_out_warns():
+    '''strict_namespace_bases=False is the old behavior: warn, but still parse (mashed IRI).'''
     g = graph()
     with pytest.warns(DeprecationWarning, match='@nodebase'):
-        LiterateParser().parse(_NO_SEP_NODEBASE, g)
+        LiterateParser(strict_namespace_bases=False).parse(_NO_SEP_NODEBASE, g)
     # Concatenation, not separator insertion: the id mashes onto the base.
     assert I('http://e.o/gMyNode') in g.nodes
 
 
 def test_namespace_base_missing_separator_strict_raises():
-    '''strict_namespace_bases=True rejects the same input with NamespaceBaseError.'''
+    '''Passing strict_namespace_bases=True explicitly still rejects it (same as the default).'''
     g = graph()
     with pytest.raises(NamespaceBaseError):
         LiterateParser(strict_namespace_bases=True).parse(_NO_SEP_NODEBASE, g)
@@ -928,14 +935,14 @@ def test_parse_result_exposes_docheader_namespaces():
 
 
 def test_write_separator_less_schema_warns_normalizes_and_roundtrips():
-    '''A separator-less @schema is normalized (append `/`) with a warning, and round-trips.'''
+    '''Opted out of strict, a separator-less @schema is normalized (append `/`) with a warning, and round-trips.'''
     g = graph()
     read(_RT_SRC, g)
     base = _ns_triples(g)
     buf = StringIO()
     with pytest.warns(UserWarning, match='does not end in a separator'):
         write(g, buf, document='https://example.org/kb/doc', nodebase='https://example.org/kb/',
-              schema='https://example.org/vocab')  # dropped trailing slash
+              schema='https://example.org/vocab', strict_namespace_bases=False)  # dropped trailing slash
     text = buf.getvalue()
     assert '* @schema: https://example.org/vocab/' in text  # normalized on emit
     g2 = graph()
@@ -951,18 +958,21 @@ def test_write_separator_less_nodebase_warns_and_roundtrips():
     buf = StringIO()
     with pytest.warns(UserWarning, match='@nodebase'):
         write(g, buf, document='https://example.org/kb/doc', nodebase='https://example.org/kb',
-              schema='https://example.org/vocab/')
+              schema='https://example.org/vocab/', strict_namespace_bases=False)
     g2 = graph()
     read(buf.getvalue(), g2)
     assert _ns_triples(g2) == base
 
 
-def test_write_strict_namespace_bases_raises():
-    '''strict_namespace_bases=True raises instead of normalizing (parity with the parser).'''
+def test_write_strict_namespace_bases_raises_by_default():
+    '''Strict since 0.7.0: a separator-less base raises instead of normalizing (parity with the parser).'''
     g = graph()
     read(_RT_SRC, g)
-    with pytest.raises(NamespaceBaseError):
-        write(g, StringIO(), schema='https://example.org/vocab', strict_namespace_bases=True)
+    for kw in ({}, {'strict_namespace_bases': True}):
+        with pytest.raises(NamespaceBaseError):
+            write(g, StringIO(), schema='https://example.org/vocab', **kw)
+    with pytest.raises(NamespaceBaseError, match='@nodebase'):
+        write(g, StringIO(), nodebase='https://example.org/kb')
 
 
 def test_write_faithful_under_mismatched_namespaces():

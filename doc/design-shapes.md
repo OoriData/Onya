@@ -156,14 +156,49 @@ onya validate proposed.onya --against=kg/
 onya validate proposed.onya --store=sqlite:kg.db --graph=http://example.org/kg
 ```
 
+## Taking inventory of an open world
+
+Shapes are open, so a graph can use labels and types nobody declared, and `validate` stays quiet about them (an `undeclared_label` finding exists only for a class marked `@closed`). A periodic audit wants the opposite question: what is in use that nothing covers, and what is declared that nothing uses? That is not a violation, so it is a function and not a finding kind:
+
+```python
+from onya.shape import inventory
+
+inv = inventory(g, shapes=None, examples=3)   # shapes: a graph or Shapes; None means g itself
+inv.labels             # {label IRI: Entry(count, nodes, examples)}, node-level labels no @Property declares
+inv.types              # {type IRI: Entry(...)}, types no @Class declares
+inv.nested_labels      # {label IRI: Entry(...)}, undeclared labels nested under another assertion
+inv.declared_unused    # {'labels': [...], 'types': [...]}: declared, and nothing uses them
+```
+
+```
+$ onya inventory kg/ --shapes=shapes/
+undeclared labels:
+       7  http://e.o/nick  (3 nodes)
+          e.g. http://e.o/al Alfie
+          e.g. http://e.o/al Ally
+          e.g. http://e.o/bo B
+       1  http://e.o/tattoo  (1 node)
+          e.g. http://e.o/al none
+declared but unused types:
+  http://e.o/Spare
+```
+
+- **Counts.** `count` is the number of assertions using a label (for a type, the number of nodes typed with it); `nodes` is how many distinct nodes hold it (for a nested label, the node the assertion hangs from). `examples` are `(node id, value or target)` pairs, the first ones in node-id order.
+- **Stable.** Each table runs from most used to least, ties by IRI, and examples are sorted, so two runs over the same graph print the same text and the output diffs from week to week.
+- **What counts as declared.** A label is covered if any `@Property` declares it, whatever it applies to (a label on the wrong class is an `applies_to` finding, not an undeclared label), or, when nested, if some property lists it as a `@qualifier` or `@attribute`. A closed class's labels are inventoried too: `@closed` changes what `validate` reports, not what is in the graph.
+- **Not inventoried.** Reserved `@` terms, and nodes typed `@Class`, `@Property` or `@Document`, as `validate` does not check them either.
+- **Unused.** A class is used when some node's type is it or a subclass of it, so an abstract parent with only subclass instances is not reported. A label counts at any depth. A label held in a sidecar (`@circumQuery`) is never reported unused: its values aren't in the graph to find.
+- **Exit status.** `onya inventory` always exits 0 unless the input does not parse; it audits, it does not check. `--examples=0` omits the instances.
+
 ## The command line
 
 ```
 onya validate kg/                                    # shapes in the same files
 onya validate kg/ --shapes=shapes/ --dangling --allow=https://orcid.org/ --strict
+onya inventory kg/ --shapes=shapes/                  # what is used but undeclared, and the reverse
 ```
 
-Exit status is 2 when there are error findings (with `--strict`, warnings too) and 0 otherwise.
+Exit status of `validate` is 2 when there are error findings (with `--strict`, warnings too) and 0 otherwise.
 
 ## Migrating from other vocabularies
 
