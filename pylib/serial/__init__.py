@@ -5,6 +5,5 @@
 '''
 Onya serializers and deserializers.
 
-Note: Mermaid/Graphviz/nx projections moved to `onya.viz`; `onya.serial.{mermaid,graphviz,nx}`
-remain as deprecated re-export aliases.
+Note: Mermaid/Graphviz/nx projections live in `onya.viz`, not here.
 '''

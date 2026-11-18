@@ -15,6 +15,7 @@ For interim changes not yet earmarked for a particular release, can use this hea
 ### Removed
 
 - **The deprecated view `label` spellings** (deprecated since 0.5.1; once promised for 0.6.0, then moved to 0.7.0). The display-string spec key `label =` (in a view or a follow) is now `title =` only, and `load` refuses `label =` with a message saying so. Projected items no longer carry the `'label'` copy of `'title'`, and `View.label_spec` and `Follow.label_spec` are gone, so `project`, `project_from_store` and `View`'s internals lose the `legacy_label` option (it was already `False` in the 0.6.0 shape; drop the argument). `label` is no longer a reserved output name, so a follow can be named `label`. In a spec, `label` still means an assertion label inside `fields`, `prefer` and the like; only the display-string meaning went. To migrate: change `label =` to `title =` on views and follows, and read `item['title']`.
+- **The `onya.serial.{mermaid,graphviz,nx}` aliases** (deprecated since the projections moved to `onya.viz`). `import onya.serial.mermaid` (and `graphviz`, `nx`) now raises `ModuleNotFoundError`. To migrate: `from onya.viz import mermaid` (or `graphviz`, `nx`); the functions are unchanged.
 
 ## [0.6.2] 2026-11-10: `PostgresStore.from_pool`, and a way to size the pool. Cheap change token: `await store.version(name)`. `validate(fragment, shapes=…, against=base)`. `drop_document_nodes(g)`: a helper to remove the document nodes, instead of a read flag. Qualifiers on circum values, and ledger-shaped sidecars.
 

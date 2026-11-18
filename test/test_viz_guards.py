@@ -9,8 +9,7 @@ pristine:
   ``onya.store``.
 - **Lazy networkx dependency**: ``onya.viz.nx`` imports fine without networkx installed (only
   calling ``to_networkx``/``write_back`` needs it), and never reaches into ``onya.store``.
-- **Legacy `onya.serial.{mermaid,graphviz,nx}` aliases**: still importable and functionally
-  equivalent, but emit ``DeprecationWarning`` pointing at the new ``onya.viz`` home.
+- **Removed `onya.serial.{mermaid,graphviz,nx}` aliases**: gone since 0.7.0; ``onya.viz`` is the only home.
 
     pytest -s test/test_viz_guards.py
 '''
@@ -78,54 +77,17 @@ def test_lazy_networkx_and_instructive_import_error():
     assert 'IMPORTERROR_OK' in r.stdout
 
 
-def test_legacy_serial_nx_alias_warns():
-    '''`onya.serial.nx` still imports (lazy, so this needs no networkx) but warns.'''
-    code = '''
-        import warnings
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter('always')
-            import onya.serial.nx  # noqa: F401
-        assert any(issubclass(w.category, DeprecationWarning) for w in caught), caught
-        assert any('onya.viz.nx' in str(w.message) for w in caught), caught
-        print('OK')
+@pytest.mark.parametrize('name', ['mermaid', 'graphviz', 'nx'])
+def test_legacy_serial_aliases_are_gone(name):
+    '''The deprecated `onya.serial.{mermaid,graphviz,nx}` aliases were removed; `onya.viz` is the only home.'''
+    code = f'''
+        try:
+            import onya.serial.{name}  # noqa: F401
+        except ModuleNotFoundError:
+            print('GONE')
+        else:
+            raise SystemExit(2)
     '''
     r = _run(code)
-    assert r.returncode == 0, r.stderr
-    assert 'OK' in r.stdout
-
-
-def test_legacy_serial_nx_alias_functionally_equivalent():
-    '''With networkx actually available, the alias behaves identically to `onya.viz.nx`.'''
-    pytest.importorskip('networkx')
-    code = '''
-        import warnings
-        from onya.graph import graph
-        with warnings.catch_warnings():
-            warnings.simplefilter('ignore', DeprecationWarning)
-            from onya.serial import nx as legacy_nx
-        assert legacy_nx.to_networkx(graph()).number_of_nodes() == 0
-        print('OK')
-    '''
-    r = _run(code)
-    assert r.returncode == 0, r.stderr
-    assert 'OK' in r.stdout
-
-
-def test_legacy_serial_mermaid_and_graphviz_aliases_warn():
-    code = '''
-        import warnings
-        from io import StringIO
-        from onya.graph import graph
-        with warnings.catch_warnings(record=True) as caught:
-            warnings.simplefilter('always')
-            from onya.serial import mermaid as legacy_mermaid
-            from onya.serial import graphviz as legacy_graphviz
-        assert sum(issubclass(w.category, DeprecationWarning) for w in caught) == 2, caught
-        out = StringIO()
-        legacy_mermaid.write(graph(), out=out)
-        legacy_graphviz.write(graph(), out=out)
-        print('OK')
-    '''
-    r = _run(code)
-    assert r.returncode == 0, r.stderr
-    assert 'OK' in r.stdout
+    assert r.returncode == 0, (r.stdout, r.stderr)
+    assert 'GONE' in r.stdout
