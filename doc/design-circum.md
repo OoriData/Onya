@@ -197,7 +197,8 @@ Some circumstances come in series: a person's compensation per period, a rate pe
 * @as: number
 * @cardinality: 0..*
 * @circumQuery -> payroll
-* @qualifier -> period                # tells values apart: part of the key
+* @qualifier -> period                # tells values apart: part of the key (the key's column order follows the
+                                      # qualifiers' `@ordering`; see design-shapes, "The order of a declaration's lists")
 * @attribute -> unit                  # rides along with each value: not part of the key
 
 # period [@Property]

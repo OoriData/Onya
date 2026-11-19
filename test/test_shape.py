@@ -268,7 +268,7 @@ def test_shapes_object_exposes_the_tables():
     assert isinstance(sh, Shapes)
     assert set(sh.classes) == {'http://e.o/Person', 'http://e.o/Student', 'http://e.o/Org'}
     assert sh.classes['http://e.o/Person'].label == 'Person'
-    assert sh.properties['http://e.o/status'].one_of == {'active', 'closed'}
+    assert sh.properties['http://e.o/status'].one_of == ('active', 'closed')
     assert sh.properties['http://e.o/knows'].range == {'http://e.o/Person'}
     assert sh.closure(['http://e.o/Student']) == {'http://e.o/Student', 'http://e.o/Person'}
 

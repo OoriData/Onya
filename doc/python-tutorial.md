@@ -352,7 +352,9 @@ report = validate(frag, against=base)                              # chuks is a 
 
 When the base lives in a store, `await validate_against_store(frag, store, name)` (from `onya.shape`) reads only the part of it the fragment touches, and `onya validate proposed.onya --against=kg/` (or `--store=sqlite:kg.db --graph=NAME`) does the same from the command line.
 
-To audit an **open world** instead, `inventory(g, shapes)` lists the labels and types in use that no declaration covers (with counts and a few examples each), and the declarations nothing uses, without making any class `@closed`; `onya inventory kg/ --shapes=shapes/` prints it, most used first.
+A declared property's `@range` and `@oneOf` (and deprecation) are checked wherever its label appears, including nested under another assertion; `@appliesTo` and `@cardinality` stay with a node's own assertions. The lists in a declaration (`@oneOf`, `@qualifier`, ...) come out sorted unless you stamp an order with `* @ordered: @oneOf @qualifier` in the docheader; see [design-shapes](https://github.com/OoriData/Onya/blob/main/doc/design-shapes.md#the-order-of-a-declarations-lists).
+
+To audit an **open world** instead, `inventory(g, shapes)` lists the labels and types in use that no declaration covers (with counts and a few examples each), and the declarations nothing uses, without making any class `@closed`; `onya inventory kg/ --shapes=shapes/` prints it, most used first. `uses(g, shapes, where=lambda p: p.sensitivity)` is the same report for declared labels (here: where sensitive data is held), nested uses included.
 
 Exit status is 2 on errors (warnings too with `--strict`). The vocabulary, rules, and a mapping to SHACL are in [doc/design-shapes.md](https://github.com/OoriData/Onya/blob/main/doc/design-shapes.md).
 

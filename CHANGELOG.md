@@ -6,6 +6,21 @@ For interim changes not yet earmarked for a particular release, can use this hea
 ## [Unreleased]
 -->
 
+## [0.7.1] 2026-11-18: Declaration lists (`@oneOf`, `@qualifier`, `@attribute`, `@replacedBy`) keep an author's order, via the ordering layer, instead of a set's arbitrary one. `@range`, `@oneOf` and deprecation checked on nested assertions. `uses()`: where declared labels are used.
+
+### Added
+
+- **`onya.shape.uses(g, shapes=None, *, where=None, examples=3)`: where declared labels are used** (#86). The other half of `inventory`: the same `Entry` tables (`count`, `nodes`, `examples`), node-level in `.labels` and nested in `.nested_labels`, for the declared labels whose `PropertyShape` a predicate accepts (`where=lambda p: p.sensitivity`, `lambda p: p.deprecated is not None`; none: all). No vocabulary of filters, and no CLI form.
+
+### Changed
+
+- **A declared property's `@range`, `@oneOf` and deprecation are checked for nested assertions** (#86). `validate` used to look only at a node's own assertions (apart from each assertion's `@as`), so `@range -> Role` on a label nested under another assertion was never checked, and a deprecated label there was never reported. Now `range`, `one_of` and `deprecated` findings cover a declared label wherever it appears, at any depth, with `nested under <parent label>:` at the start of the `detail`; a `deprecated` is still one finding per node per label. `@appliesTo` and `@cardinality` still speak only of a node's own assertions, and a declaration's default `@as` still applies only to a node's own values. A graph that nests a declared label with a bad target or value will now have findings it did not have before. A declaration that depends on its parent is not supported.
+- **`PropertyShape.one_of` is a tuple, not a set**, and the lists in a declaration follow the ordering layer (#86). With `* @ordered: @oneOf @qualifier @attribute @replacedBy` in the docheader (or `@ordering` nested by hand), `one_of`, `qualifiers`, `attributes` and `replaced_by` are in the order written (a lifecycle `lead / active / closed`), and a `one_of` finding lists the values in it. Unstamped they are sorted. A half-stamped list or a clash gives a `bad_shape` finding and sorted order. `in`, `sorted()` and truthiness work as before; code that used set operations on `one_of` needs `set(p.one_of)`.
+
+### Fixed
+
+- **A declaration's lists were in an arbitrary order, not "declaration order"** (#86). `@qualifier`, `@attribute` and `@replacedBy` were collected from a set, so a ledger's key columns (`PRIMARY KEY (person_id, period, ...)`) came out in whatever order the set yielded, not the order declared. They are now sorted unless the author stamps an order (see Changed), so they are stable from run to run. A projection with two or more qualifiers or attributes may have a different column order than before: it was never guaranteed, but if you materialized tables from one, compare `statements(p, dialect)` with the existing table (the primary key's column order, in particular) before upgrading. Stamp the order you already have (`* @ordered: @qualifier @attribute`) to keep it.
+
 ## [0.7.0] 2026-11-18: Removal of deprecated (since 0.5.1) view `label` spellings. Remove deprecated (since 0.5.0) `onya.serial.{mermaid,graphviz,nx}` aliases. Fix Mermaid and Graphviz demos & READMEs. Deprecate `@base` as a docheader directive. Data sensitivity markers on properties, and a redaction helper. Mark transient graph nodes (#84).
 
 ### Added
