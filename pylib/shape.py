@@ -34,7 +34,7 @@ from amara.iri import I
 
 from onya.interp import DEFAULT, InterpretationRegistry, validate as validate_interps
 from onya.locations import describe
-from onya.ordering import OrderingError, ordered
+from onya.ordering import OrderingError, ordered, stamps
 from onya.terms import (
     ONYA, ONYA_APPLIESTO, ONYA_AS, ONYA_ATTRIBUTE, ONYA_CARDINALITY, ONYA_CIRCUMQUERY, ONYA_CLASS, ONYA_CLOSED,
     ONYA_DEPRECATED, ONYA_DOCUMENT, ONYA_LABEL, ONYA_ONEOF, ONYA_ORDERED, ONYA_PROPERTY, ONYA_QUALIFIER, ONYA_RANGE,
@@ -121,11 +121,11 @@ class PropertyShape:
     range: set = field(default_factory=set)  # class ids; any of. Non-empty: the property is an edge
     interp: object = None  # the default interpretation (IRI) of its values, from `@as`
     cardinality: tuple | None = None  # (min, max or None), per node
-    one_of: set = field(default_factory=set)  # allowed values
+    one_of: tuple = ()  # allowed values; in `@ordering` order when stamped, else sorted (see `_listed`)
     ordered: bool = False
     severity: str = 'error'
     circum: bool = False  # its values are held in a sidecar (`@circumQuery`): see `onya.circum`
-    qualifiers: tuple = ()  # label IRIs (declaration order) nested under each value that tell values apart: the key
+    qualifiers: tuple = ()  # label IRIs nested under each value that tell values apart: the key, in `@ordering` order
     attributes: tuple = ()  # label IRIs nested under each value that ride along, and are not part of the key
     sensitivity: str | None = None  # `@sensitivity`: what `onya.redact` asks a policy about before showing its values
     deprecated: str | None = None  # `@deprecated`'s guidance ('' if only `@replacedBy` was given); None: not deprecated
@@ -161,9 +161,28 @@ def _targets(n, term) -> set:
     return {str(e.target.id) for e in n.getedge(term) if hasattr(e.target, 'types')}
 
 
-def _targets_in_order(n, term) -> tuple:
-    '''Like `_targets`, in declaration order and without repeats: for things where order is a column order.'''
-    return tuple(dict.fromkeys(str(e.target.id) for e in n.getedge(term) if hasattr(e.target, 'types')))
+def _listed(n, term, problem=None) -> tuple:
+    '''
+    The values (or edge targets) of `term` on `n`, as a tuple without repeats, for the lists in a declaration where
+    order matters (`@oneOf`, `@qualifier`, `@attribute`, `@replacedBy`). The graph keeps no declaration order, so the
+    order is the ordering layer's: the author stamps it (`* @ordered: @oneOf @qualifier` in the docheader, or an
+    `@ordering` nested under each). Unstamped, it is sorted, which is stable but is not the order written. Stamps
+    that can't give a sequence (a half-stamped list, a clash) go to `problem(n, label, detail)` and fall back to sorted.
+    '''
+    found = [*n.getprop(term), *(e for e in n.getedge(term) if hasattr(e.target, 'types'))]
+
+    def item(a):
+        return str(a.target.id) if hasattr(a, 'target') else a.value
+
+    if len(found) > 1 and any(stamps(a) for a in found):
+        try:
+            found = ordered(n, term, found)
+        except OrderingError as e:
+            if problem is not None:
+                problem(n, term, f'{e.problem}; using sorted order')
+            return tuple(sorted(dict.fromkeys(map(item, found))))
+        return tuple(dict.fromkeys(map(item, found)))
+    return tuple(sorted(dict.fromkeys(map(item, found))))
 
 
 def load_shapes(g) -> Shapes:
@@ -189,9 +208,12 @@ def load_shapes(g) -> Shapes:
             problem(n, 'bad_shape', term, f'{str(term)[len(str(ONYA)):]} must be true or false, not {found}')
         return found == ['true']
 
+    def bad(n, term, detail):  # for `_listed`: a list whose order stamps don't make a sequence
+        problem(n, 'bad_shape', term, detail)
+
     def deprecation(n) -> tuple:
         '''`(guidance or None, replacements)`: either term marks the declaration deprecated.'''
-        notes, replaced = n.values(ONYA_DEPRECATED), _targets_in_order(n, ONYA_REPLACEDBY)
+        notes, replaced = n.values(ONYA_DEPRECATED), _listed(n, ONYA_REPLACEDBY, bad)
         if len(notes) > 1:
             problem(n, 'bad_shape', ONYA_DEPRECATED, f'a declaration has at most one @deprecated, found {notes}')
         return (notes[0] if notes else '') if (notes or replaced) else None, replaced
@@ -205,10 +227,10 @@ def load_shapes(g) -> Shapes:
                 *deprecation(n))
         if str(ONYA_PROPERTY) in types:
             p = PropertyShape(n.id, labels[0] if labels else None, _targets(n, ONYA_APPLIESTO), _targets(n, ONYA_RANGE),
-                              severity=severity(n), ordered=flag(n, ONYA_ORDERED), one_of=set(n.values(ONYA_ONEOF)),
+                              severity=severity(n), ordered=flag(n, ONYA_ORDERED), one_of=_listed(n, ONYA_ONEOF, bad),
                               circum=any(True for _ in n.getedge(ONYA_CIRCUMQUERY)),
-                              qualifiers=_targets_in_order(n, ONYA_QUALIFIER),
-                              attributes=_targets_in_order(n, ONYA_ATTRIBUTE))
+                              qualifiers=_listed(n, ONYA_QUALIFIER, bad),
+                              attributes=_listed(n, ONYA_ATTRIBUTE, bad))
             p.deprecated, p.replaced_by = deprecation(n)
             sens = n.values(ONYA_SENSITIVITY)
             if len(sens) > 1:
@@ -307,6 +329,7 @@ def validate(g, shapes=None, *, registry: InterpretationRegistry = DEFAULT, dang
         used: dict = {}  # label -> its assertions on this node
         for a in (*n.properties, *n.edges):
             used.setdefault(a.label, []).append(a)
+        warned: set = set()  # deprecated labels already reported for this node
 
         # What a shape says about each label this node uses
         for label, found in used.items():
@@ -314,6 +337,7 @@ def validate(g, shapes=None, *, registry: InterpretationRegistry = DEFAULT, dang
             if p is None:
                 continue
             if p.deprecated is not None:  # always a warning: @severity speaks to the shape's other findings
+                warned.add(str(label))
                 add('warning', 'deprecated', n, label, _deprecation_detail(f'label {label}', p), found[0])
             if p.applies_to and not closure & p.applies_to:
                 add(p.severity, 'applies_to', n, label,
@@ -325,6 +349,19 @@ def validate(g, shapes=None, *, registry: InterpretationRegistry = DEFAULT, dang
                     ordered(n, label, found)
                 except OrderingError as e:
                     add(p.severity, 'ordering', n, label, e.problem, found[0])
+
+        # A declared label's value and deprecation checks hold wherever it appears, nested under an assertion included
+        # (`@appliesTo` and `@cardinality` speak of a node's own assertions, so they stay there)
+        for parent, a in _nested(n):
+            p = sh.properties.get(str(a.label))
+            if p is None:
+                continue
+            under = f'nested under {parent.label}: '
+            if p.deprecated is not None and str(a.label) not in warned:
+                warned.add(str(a.label))
+                add('warning', 'deprecated', n, a.label, under + _deprecation_detail(f'label {a.label}', p), a)
+            _check_value(sh, registry, p, n, a, lambda sev, kind, nd, lab, detail, assertion=None:
+                         add(sev, kind, nd, lab, under + detail, assertion), nested=True)
 
         # What the node's classes require of labels it may not use at all, and cardinality
         applicable = {str(p.id): p for c in closure for p in by_class.get(c, ())}
@@ -407,6 +444,78 @@ class Inventory:
         return '\n'.join(lines) if lines else 'Inventory: nothing undeclared, nothing unused'
 
 
+class _Tally:
+    '''Counts uses of IRIs by kind, and turns them into `Entry` tables ordered by count, then IRI.'''
+    def __init__(self):
+        self.seen: dict = {}  # kind -> iri -> [Entry, set of node ids]
+
+    def note(self, kind, iri, node_id, example) -> None:
+        entry, nodes = self.seen.setdefault(kind, {}).setdefault(iri, [Entry(), set()])
+        entry.count += 1
+        nodes.add(node_id)
+        entry.examples.append(example)
+
+    def table(self, kind, examples: int) -> dict:
+        rows = []
+        for iri, (entry, nodes) in self.seen.get(kind, {}).items():
+            entry.nodes = len(nodes)
+            entry.examples = sorted(entry.examples)[:max(examples, 0)]
+            rows.append((iri, entry))
+        return dict(sorted(rows, key=lambda r: (-r[1].count, r[0])))
+
+
+@dataclass
+class Uses:
+    '''Where the declared labels a `uses` filter selected are used: as `Inventory.labels` and `.nested_labels`.'''
+    labels: dict = field(default_factory=dict)  # label IRI (str) -> Entry, for the label on a node itself
+    nested_labels: dict = field(default_factory=dict)  # as `labels`, nested under another assertion (any depth)
+
+    def __str__(self) -> str:
+        lines = []
+        for title, table in (('labels', self.labels), ('nested labels', self.nested_labels)):
+            if table:
+                lines.append(f'{title}:')
+            for iri, e in table.items():
+                lines.append(f'  {e.count:>6}  {iri}  ({e.nodes} node{"" if e.nodes == 1 else "s"})')
+                lines += [f'          e.g. {" ".join(ex)}' for ex in e.examples]
+        return '\n'.join(lines) if lines else 'Uses: none'
+
+
+def uses(g, shapes=None, *, where=None, examples: int = 3) -> Uses:
+    '''
+    Where `g` uses the labels its shapes declare: the other half of `inventory`, which lists what is *not* declared.
+    Never changes `g`, never raises for what it finds.
+
+        uses(g, where=lambda p: p.sensitivity)                  # where partner-sensitive data is held
+        uses(g, where=lambda p: p.deprecated is not None)       # what still uses a deprecated label
+        uses(g, where=lambda p: p.sensitivity == 'partner')
+
+    where -- a predicate on the label's `PropertyShape`; only labels it is true for are listed (None: every declared
+        label). It can test anything a shape carries, so there is no vocabulary of filters.
+    shapes, examples -- as for `inventory`.
+
+    Uses on a node itself and nested under an assertion (at any depth) are tallied apart, as in `inventory`; a nested
+    entry's node is the node whose assertion holds it. Reserved `@` terms and declaration nodes are skipped.
+    A label held in a sidecar is not in the graph, so it is not found here.
+    '''
+    sh = shapes if isinstance(shapes, Shapes) else load_shapes(g if shapes is None else shapes)
+    chosen = {pid for pid, p in sh.properties.items() if where is None or where(p)}
+    tally = _Tally()
+
+    def walk(container, node_id, depth):
+        for a in (*container.properties, *container.edges):
+            label = str(a.label)
+            if label in chosen:
+                value = a.target.id if hasattr(a, 'target') else a.value
+                tally.note('labels' if depth == 0 else 'nested', label, str(node_id), (str(node_id), str(value)))
+            walk(a, node_id, depth + 1)
+
+    for n in g.nodes.values():
+        if not {str(t) for t in n.types} & _META:
+            walk(n, n.id, 0)
+    return Uses(tally.table('labels', examples), tally.table('nested', examples))
+
+
 def inventory(g, shapes=None, *, examples: int = 3) -> Inventory:
     '''
     List what `g` uses that no declaration covers, without making any class `@closed`: an open world has no
@@ -426,14 +535,9 @@ def inventory(g, shapes=None, *, examples: int = 3) -> Inventory:
     sh = shapes if isinstance(shapes, Shapes) else load_shapes(g if shapes is None else shapes)
     onya_ns = str(ONYA)
     nested_ok = {str(q) for p in sh.properties.values() for q in (*p.qualifiers, *p.attributes)}
-    seen = {'labels': {}, 'types': {}, 'nested': {}}  # kind -> iri -> [Entry, set of node ids]
+    tally = _Tally()
+    note = tally.note
     used_labels, used_types = set(), set()
-
-    def note(kind, iri, node_id, example):
-        entry, nodes = seen[kind].setdefault(iri, [Entry(), set()])
-        entry.count += 1
-        nodes.add(node_id)
-        entry.examples.append(example)
 
     def walk(container, node_id, depth):
         for a in (*container.properties, *container.edges):
@@ -453,14 +557,7 @@ def inventory(g, shapes=None, *, examples: int = 3) -> Inventory:
                 note('types', t, str(n.id), str(n.id))
         walk(n, n.id, 0)
 
-    def table(kind):
-        rows = []
-        for iri, (entry, nodes) in seen[kind].items():
-            entry.nodes = len(nodes)
-            entry.examples = sorted(entry.examples)[:max(examples, 0)]
-            rows.append((iri, entry))
-        return dict(sorted(rows, key=lambda r: (-r[1].count, r[0])))
-
+    table = lambda kind: tally.table(kind, examples)  # noqa: E731
     unused = {'labels': sorted(pid for pid, p in sh.properties.items() if pid not in used_labels and not p.circum),
               'types': sorted(c for c in sh.classes if c not in used_types)}
     return Inventory(table('labels'), table('types'), table('nested'), unused)
@@ -530,8 +627,21 @@ async def _stored_neighborhood(store, names, roots, hops, overlay_cls):
     return g
 
 
-def _check_value(sh, registry, p, n, a, add) -> None:
-    '''Value-level checks of one node-level assertion against its property's declaration.'''
+def _below(parent):
+    '''`(parent, assertion)` for every assertion nested under assertion `parent`, at any depth.'''
+    for a in (*parent.properties, *parent.edges):
+        yield parent, a
+        yield from _below(a)
+
+
+def _nested(container):
+    '''`(parent, assertion)` for every assertion nested under a node's own assertions, at any depth.'''
+    for parent in (*container.properties, *container.edges):
+        yield from _below(parent)
+
+
+def _check_value(sh, registry, p, n, a, add, *, nested: bool = False) -> None:
+    '''Value-level checks of one assertion against its property's declaration; `nested` leaves out the `@as` default.'''
     is_edge = hasattr(a, 'target')
     if is_edge:
         if p.interp is not None or p.one_of:
@@ -543,9 +653,9 @@ def _check_value(sh, registry, p, n, a, add) -> None:
     if p.range:
         add(p.severity, 'range', n, a.label, f'declared as an edge to {sorted(p.range)}, but this is a value', a)
     if p.one_of and a.value not in p.one_of:
-        add(p.severity, 'one_of', n, a.label, f'{a.value!r} is not one of {sorted(p.one_of)}', a)
+        add(p.severity, 'one_of', n, a.label, f'{a.value!r} is not one of {list(p.one_of)}', a)
     # The declaration is a default: an assertion's own @as wins, and is checked with the others below
-    if p.interp is not None and a.interp is None:
+    if p.interp is not None and a.interp is None and not nested:
         interp = registry.get(p.interp)
         if interp is not None and not interp.check(a.value):
             add(p.severity, 'as', n, a.label, f'{a.value!r} is not a valid {p.interp}', a)

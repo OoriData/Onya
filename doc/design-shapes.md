@@ -50,7 +50,7 @@ It is a layer in the sense of SPEC § Reserved vocabulary. The terms below are d
 | `@appliesTo -> C` | property | The property is for nodes of these classes (any of). Omitted: any node. |
 | `@range -> C` | property | The property is an **edge**, to a node of one of these classes (any of). |
 | `@as: interp` | property | The property is a **value** read as this interpretation. A default, as with `@interpretations`. |
-| `@oneOf: v` | property | An allowed value; repeat for each. |
+| `@oneOf: v` | property | An allowed value; repeat for each. Their order is [the author's, if stamped](#the-order-of-a-declarations-lists). |
 | `@cardinality: m` | property | How many distinct values or targets a node has: `1`, `0..1`, `1..*`, `0..*`, `*` (= `0..*`) or `n..m`. |
 | `@ordered: true` | property | The label's values are ordered, and validation checks the `@ordering` stamps (the [ordering layer](design-ordering.md)). |
 | `@severity: s` | either | `error` (default) or `warning`: the severity of findings the declaration produces. |
@@ -67,6 +67,30 @@ Other layers add terms to the same declarations. The circum layer reads `@circum
 **One `@cardinality`, not `@cardinality` plus `@required`.** A boolean beside a multiplicity can contradict itself. Identical values count once, as they would after a merge. A minimum is enforced on every node of the class, including one that doesn't use the label at all; a property with no `@appliesTo` only has its maximum checked.
 
 **Ordering.** `@ordered: true` makes missing, non-integer and conflicting stamps findings. It does *not* number anything: parsing never reads shapes, so stamps still come from the docheader's `@ordered` stanza or by hand.
+
+## Nested assertions
+
+Onya labels mean one thing wherever they appear, so a declared property's value checks hold when its label is nested under another assertion:
+
+```
+# role [@Property]
+* @range -> Role              # a nested `role` must target a Role, as a node's own would
+
+# roleName [@Property]
+* @oneOf: lead
+* @oneOf: member
+```
+
+```
+# ada [Person]
+* assigned: team
+    * role -> editor          # checked: editor must be a Role
+    * roleName: boss          # a `one_of` finding: 'boss' is not one of ['lead', 'member']
+```
+
+- **What is checked nested:** `@range` and `@oneOf` (findings `range` and `one_of`, with `nested under <parent label>: ` at the start of `detail`, the offending line, and the node whose assertion holds it), and deprecation (above). An assertion's own `@as` was already checked at every depth. A declaration's *default* `@as` still applies only to a node's own values.
+- **What is not:** `@appliesTo` and `@cardinality` speak of a node and its class, and a nested assertion has neither, so they stay with a node's own assertions. A property declared `@appliesTo -> Person` with `@cardinality: 1` is still required on each Person node, and a nested use of it neither satisfies nor breaks that. For a label that is only ever nested, declare it without them.
+- **Not supported:** a declaration that depends on its parent (`role` is a Role only under `assigned`, and something else under `owner`). A label has one declaration. If you need context-dependent shapes, give the labels different names.
 
 ## Deprecating a term
 
@@ -88,7 +112,7 @@ warning deprecated: http://e.o/ada http://e.o/nickname: label http://e.o/nicknam
 - It is always a **warning**, whatever `@severity` says: `@severity` is how serious the declaration's other findings are, and a term that is merely going away isn't an error. `onya validate` prints it with the other warnings, and `--strict` makes it fail the run.
 - Either term marks the declaration deprecated, so `@replacedBy` alone is enough, and `@deprecated` alone is too. More than one `@deprecated` is a `bad_shape`.
 - A subclass of a deprecated class is not itself deprecated: only nodes typed with the class are reported. Deprecating a subclass is the subclass's own declaration.
-- Nothing is changed or inferred: the deprecated term keeps validating exactly as before, and `@replacedBy` isn't checked to exist (a forward reference is normal in an open graph). Only a node's own assertions are checked, as elsewhere in this layer, so a deprecated label nested under an assertion isn't reported.
+- Nothing is changed or inferred: the deprecated term keeps validating exactly as before, and `@replacedBy` isn't checked to exist (a forward reference is normal in an open graph). A deprecated label is reported wherever it is used, nested under an assertion included (one finding per node per label, the node's own use first; a nested one says `nested under <label>:` in its `detail`).
 - `Shapes` exposes it as `deprecated` (the guidance, `''` if only `@replacedBy` was given, `None` if not deprecated) and `replaced_by` on `PropertyShape` and `ClassShape`.
 
 ## Withholding sensitive properties: `redact`
@@ -147,7 +171,7 @@ for f in report.findings:
 | `dangling` | an edge target nothing declares (with `dangling=True`; `allow=` for external IRIs) |
 | `bad_shape` | a declaration that can't be read: `@cardinality: lots`, `@severity: loud` |
 
-`Report` has `findings`, `ok`, `errors` and `warnings`. Findings are data: validation never raises for one, never runs implicitly, and never changes parsing. They carry a `location` when the read tracked locations (the CLI always does). Nodes typed `@Class`, `@Property` or `@Document` are declarations, not data, and are not checked. Shapes apply to a node's own assertions; nested assertions are checked only for their own `@as`.
+`Report` has `findings`, `ok`, `errors` and `warnings`. Findings are data: validation never raises for one, never runs implicitly, and never changes parsing. They carry a `location` when the read tracked locations (the CLI always does). Nodes typed `@Class`, `@Property` or `@Document` are declarations, not data, and are not checked. A node's own assertions meet all of a declaration; assertions nested under them are checked too, as described under [Nested assertions](#nested-assertions).
 
 ## Validating a change: `against=`
 
@@ -183,6 +207,22 @@ onya validate proposed.onya --against=kg/
 onya validate proposed.onya --store=sqlite:kg.db --graph=http://example.org/kg
 ```
 
+## The order of a declaration's lists
+
+The graph keeps assertions in sets, so `@oneOf`, `@qualifier`, `@attribute` and `@replacedBy` have no order of their own. When the order matters (a lifecycle `lead / active / closed`, the columns of a ledger's key), ask for it with the [ordering layer](design-ordering.md): list the labels in the shapes file's docheader and the parser stamps them from document order.
+
+```
+# @docheader
+* @ordered: @oneOf @qualifier @attribute @replacedBy
+
+# status [@Property]
+* @oneOf: lead
+* @oneOf: active
+* @oneOf: closed
+```
+
+`PropertyShape.one_of`, `.qualifiers`, `.attributes` and `.replaced_by` are then tuples in that order (`('lead', 'active', 'closed')`), and `one_of` findings list the values in it. Without stamps the order is **sorted**: stable from run to run, but not the order written. A half-stamped list, or stamps that clash, give a `bad_shape` finding and sorted order. A ledger's key columns follow `@qualifier`'s order, so stamp it if the order of the key matters to you. (Before 0.7.1 these tuples came out in an arbitrary order: a set's.)
+
 ## Taking inventory of an open world
 
 Shapes are open, so a graph can use labels and types nobody declared, and `validate` stays quiet about them (an `undeclared_label` finding exists only for a class marked `@closed`). A periodic audit wants the opposite question: what is in use that nothing covers, and what is declared that nothing uses? That is not a violation, so it is a function and not a finding kind:
@@ -215,6 +255,7 @@ declared but unused types:
 - **What counts as declared.** A label is covered if any `@Property` declares it, whatever it applies to (a label on the wrong class is an `applies_to` finding, not an undeclared label), or, when nested, if some property lists it as a `@qualifier` or `@attribute`. A closed class's labels are inventoried too: `@closed` changes what `validate` reports, not what is in the graph.
 - **Not inventoried.** Reserved `@` terms, and nodes typed `@Class`, `@Property` or `@Document`, as `validate` does not check them either.
 - **Unused.** A class is used when some node's type is it or a subclass of it, so an abstract parent with only subclass instances is not reported. A label counts at any depth. A label held in a sidecar (`@circumQuery`) is never reported unused: its values aren't in the graph to find.
+- **Declared labels: `uses`.** `inventory` is about what is undeclared. For where *declared* labels are used (the nested ones included), `uses(g, shapes, where=pred, examples=3)` returns the same entries, node-level in `.labels` and nested in `.nested_labels`, for the labels whose `PropertyShape` the predicate accepts (none: all). It tests anything a shape carries, so there is no vocabulary of filters: `uses(g, where=lambda p: p.sensitivity)` is where sensitive data is held, `uses(g, where=lambda p: p.deprecated is not None)` is what still uses a deprecated term. It has no CLI form.
 - **Exit status.** `onya inventory` always exits 0 unless the input does not parse; it audits, it does not check. `--examples=0` omits the instances.
 
 ## The command line
