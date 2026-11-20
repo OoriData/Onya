@@ -125,6 +125,7 @@ class PropertyShape:
     ordered: bool = False
     severity: str = 'error'
     circum: bool = False  # its values are held in a sidecar (`@circumQuery`): see `onya.circum`
+    sidecar: str | None = None  # id of the node `@circumQuery` points at, if it points at one (declared or not)
     qualifiers: tuple = ()  # label IRIs nested under each value that tell values apart: the key, in `@ordering` order
     attributes: tuple = ()  # label IRIs nested under each value that ride along, and are not part of the key
     sensitivity: str | None = None  # `@sensitivity`: what `onya.redact` asks a policy about before showing its values
@@ -229,6 +230,8 @@ def load_shapes(g) -> Shapes:
             p = PropertyShape(n.id, labels[0] if labels else None, _targets(n, ONYA_APPLIESTO), _targets(n, ONYA_RANGE),
                               severity=severity(n), ordered=flag(n, ONYA_ORDERED), one_of=_listed(n, ONYA_ONEOF, bad),
                               circum=any(True for _ in n.getedge(ONYA_CIRCUMQUERY)),
+                              sidecar=next((str(e.target.id) for e in n.getedge(ONYA_CIRCUMQUERY)
+                                            if hasattr(e.target, 'types')), None),
                               qualifiers=_listed(n, ONYA_QUALIFIER, bad),
                               attributes=_listed(n, ONYA_ATTRIBUTE, bad))
             p.deprecated, p.replaced_by = deprecation(n)
@@ -305,9 +308,9 @@ def validate(g, shapes=None, *, registry: InterpretationRegistry = DEFAULT, dang
         out.extend(declarations(src, sh).problems)
     is_view, sidecar_of, asked, failed = False, {}, None, set()
     if hasattr(g, 'nodes') and any(p.circum for p in sh.properties.values()):
-        from onya.circum import asked, declarations as _decl, is_view as _is_view, view_findings  # from `augment`
+        from onya.circum import asked, is_view as _is_view, view_findings  # from `augment`
         is_view = _is_view(g)
-        sidecar_of = {pid: str(cp.sidecar.id) for pid, cp in _decl(src, sh).properties.items()}
+        sidecar_of = {pid: p.sidecar for pid, p in sh.properties.items() if p.sidecar}  # from the shapes alone
         failed = {str(f.label) for f in view_findings(g)}  # a resolver that failed: its values aren't "missing"
     onya_ns = str(ONYA)
 
