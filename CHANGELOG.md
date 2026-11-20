@@ -6,6 +6,12 @@ For interim changes not yet earmarked for a particular release, can use this hea
 ## [Unreleased]
 -->
 
+## [0.7.2] 2026-11-20: Fix `validate(..., against=base)` and `validate(g, shapes=<compiled Shapes>)` crashing when a `@Property` declares `@circumQuery`.
+
+### Fixed
+
+- **`validate(fragment, against=base)` and `validate(g, shapes=load_shapes(...))` raised `AttributeError: 'Shapes' object has no attribute 'nodes'` whenever a `@Property` in the shapes declared `@circumQuery`** (#88). `validate` looked up each circum property's sidecar by reading the declarations again from the shapes' graph, which a compiled `Shapes` (what `against=` always passes along, and what you get from `load_shapes`) is not. `PropertyShape` now records the sidecar it points at (`sidecar`, an id, or `None`), so the view-only `@cardinality` check of a circum property (a missing value is a gap on a view, and not on a graph) works from the shapes alone. A circum declaration that is itself broken (a `@circumQuery` naming no `@Sidecar`) is still reported when the shapes are a graph; with a compiled `Shapes` there are no sidecar nodes to check, so it is skipped, as `validate` already did for the declaration problems.
+
 ## [0.7.1] 2026-11-18: Declaration lists (`@oneOf`, `@qualifier`, `@attribute`, `@replacedBy`) keep an author's order, via the ordering layer, instead of a set's arbitrary one. `@range`, `@oneOf` and deprecation checked on nested assertions. `uses()`: where declared labels are used.
 
 ### Added
