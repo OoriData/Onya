@@ -357,6 +357,14 @@ search; PostgreSQL computes the tiers in SQL and scores the fuzzy tier with
 `pg_trgm` when it is installed, so fuzzy *scores* can differ. The details are
 in the protocol's docstring. Offered by all three backends.
 
+**Where `pg_trgm` lives (#90, #92).** The store looks for `pg_trgm` once, when it opens, and `has_trgm` says what it found:
+
+- **On the connection's `search_path`** (the default install): the indexed SQL names `%`, `<%`, `similarity()` and `word_similarity()` unqualified, and the index uses `gin_trgm_ops`.
+- **Installed in another schema, which the role may use** (Supabase's `extensions`, with a role whose path is just its own schema): `has_trgm` is still true, and the same SQL qualifies every `pg_trgm` name with that schema (`OPERATOR(extensions.%)`, `extensions.similarity(...)`, `extensions.gin_trgm_ops`). The schema is read from the catalog and quoted as an identifier, never taken from the caller. The index is the same index: the planner matches the operator class, not how it was spelled. Scores equal those of the unqualified form.
+- **Neither** (`pg_trgm` is not installed, the role has no `USAGE` on its schema, or `onya_normalize` is missing): `has_trgm` is false and `search` ranks in process, with a log line saying which. Results are the same; only the index is missing.
+
+The schema is read when the store opens, so after `ALTER EXTENSION pg_trgm SET SCHEMA ...` reopen the store.
+
 ### Capability: `VersionedStore` (#77)
 
 A cache in another process (a service holding a materialized graph, a second

@@ -6,6 +6,12 @@ For interim changes not yet earmarked for a particular release, can use this hea
 ## [Unreleased]
 -->
 
+## [0.7.3] 2026-11-21: `PostgresStore` uses `pg_trgm` from the schema it is installed in.
+
+### Changed
+
+- **`PostgresStore` uses `pg_trgm` from the schema it is installed in, so indexed search works when that schema is not on the role's `search_path`** (#92). #90 made such a store fall back to in-process ranking, which is correct but scans every property value in Python. Now, when `pg_trgm` is in another schema (Supabase puts it in `extensions`) that the role may use (`USAGE`), the store qualifies every `pg_trgm` name with that schema: `OPERATOR(extensions.%)` and `OPERATOR(extensions.<%)`, `extensions.similarity()` and `extensions.word_similarity()` in the search query, and `extensions.gin_trgm_ops` for the index, so `has_trgm` stays true and `search` is served by the GIN index (same hits and scores as the unqualified form; an index built with the unqualified class is the same index). The schema is read from the catalog when the store opens and quoted as an identifier, so after moving the extension, reopen the store. A role with no `USAGE` on the schema, or no `pg_trgm` anywhere, still gets in-process search, and the log line says which. The details are in `doc/design-persistence-architecture.md`.
+
 ## [0.7.2] 2026-11-20: Fix `validate(…, against=base)` and `validate(g, shapes=<compiled Shapes>)` crashing when a `@Property` declares `@circumQuery`. Fix `has_trgm` being true when `pg_trgm`'s operators aren't on the connection's `search_path`.
 
 ### Fixed
