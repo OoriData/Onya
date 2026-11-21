@@ -51,11 +51,15 @@ class PostgresStore:
 
     dialect = POSTGRES
 
-    def __init__(self, pool, server_major: int, *, has_trgm: bool = False, owns_pool: bool = True):
+    def __init__(self, pool, server_major: int, *, has_trgm: bool = False, owns_pool: bool = True,
+                 trgm_schema: str | None = None):
         self._pool = pool
         self._owns_pool = owns_pool  # closing the store closes the pool only if the store made it
         self.server_major = server_major
         self.has_trgm = has_trgm  # pg_trgm available -> indexed search; else in-process fallback
+        # How search names pg_trgm: '' when it is on the connection's search_path, else the (quoted) schema it is
+        # installed in, which the indexed SQL then qualifies. Only meaningful when `has_trgm`.
+        self._trgm_schema = (trgm_schema or '') if has_trgm else None
         # Fast path (INSERT ... ON CONFLICT DO SELECT) is a PG19 feature; feature-detected by
         # version, not try/except. Currently the portable case-analysis path is used on every
         # version pending PG19-final verification (see the filed follow-up); the flag is kept so
@@ -106,14 +110,14 @@ class PostgresStore:
             if ensure:
                 async with conn.transaction():
                     await _ensure_schema(conn)
-                    has_trgm = await _ensure_search(conn)
+                    trgm = await _ensure_search(conn)
                     has_pgq = await _ensure_pgq(conn) if major >= 19 else False
             else:
                 await _check_schema(conn)
-                has_trgm = await _detect_search(conn)
+                trgm = await _detect_search(conn)
                 has_pgq = major >= 19 and not await _missing_relations(conn, ['onya_base', 'onya_reified'])
         store_cls = PostgresGraphQueryStore if has_pgq else cls
-        return store_cls(pool, major, has_trgm=has_trgm, owns_pool=owns_pool)
+        return store_cls(pool, major, has_trgm=trgm is not None, owns_pool=owns_pool, trgm_schema=trgm)
 
     async def __aenter__(self) -> 'PostgresStore':
         return self
@@ -345,7 +349,7 @@ class PostgresStore:
                                         normalize=normalize or query_normalize, similarity=similarity)
                 return rank(hits, per_node=per_node, limit=limit)
             async with conn.transaction():
-                rows = await _search_trgm(conn, gpk, query, lbls, typs, min_score)
+                rows = await _search_trgm(conn, gpk, query, lbls, typs, min_score, self._trgm_schema)
         hits = (SearchHit(I(r['node_id']), I(r['label']), r['value'], r['tier'], float(r['score']))
                 for r in rows if r['tier'] != 'fuzzy' or r['score'] >= min_score)
         return rank(hits, per_node=per_node, limit=limit)
@@ -452,27 +456,52 @@ async def _check_schema(conn) -> None:
             raise UnknownSchemaVersion(found=val, expected=expected)
 
 
-async def _trgm_usable(conn) -> bool:
+async def _trgm_mode(conn) -> str | None:
     '''
-    Can this connection run indexed search: `onya_normalize` and the trigram operators `search` uses (`%` and `<%`)
-    all resolve **on its own `search_path`**? `pg_extension` isn't the question: `pg_trgm` can be installed in
-    another schema (Supabase's `extensions`) that the role's path excludes, and then the operators don't exist
-    here, `gin_trgm_ops` can't be named, and a `search` on the indexed path fails.
+    How this connection can use `pg_trgm` for indexed search, or None if it can't:
+
+    - `''`: `onya_normalize` and the trigram operators `search` uses (`%` and `<%`) resolve on the connection's own
+      `search_path`, and the SQL names them unqualified.
+    - a quoted schema name: `pg_trgm` is installed in a schema the path excludes (Supabase's `extensions`) that
+      this role may use, so the SQL qualifies every `pg_trgm` name with it.
+    - None: `onya_normalize` is missing, `pg_trgm` isn't installed, or the role has no USAGE on its schema.
+
+    `pg_extension` alone isn't the question: an extension in a schema the path excludes has no operators *here*,
+    `gin_trgm_ops` can't be named unqualified, and an unqualified `search` fails.
     '''
-    return bool(await conn.fetchval(
-        "SELECT to_regprocedure('onya_normalize(text)') IS NOT NULL "
-        "AND to_regoperator('%(text,text)') IS NOT NULL AND to_regoperator('<%(text,text)') IS NOT NULL"))
+    if not await conn.fetchval("SELECT to_regprocedure('onya_normalize(text)') IS NOT NULL"):
+        return None
+    if await conn.fetchval("SELECT to_regoperator('%(text,text)') IS NOT NULL "
+                           "AND to_regoperator('<%(text,text)') IS NOT NULL"):
+        return ''
+    row = await conn.fetchrow("SELECT quote_ident(n.nspname) AS schema, has_schema_privilege(n.oid, 'USAGE') AS usable "
+                              "FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace "
+                              "WHERE e.extname = 'pg_trgm'")
+    return row['schema'] if row is not None and row['usable'] else None
 
 
-async def _trgm_schema(conn) -> str | None:
-    '''The schema `pg_trgm` is installed in, if it is installed at all (for saying why it isn't reachable).'''
-    return await conn.fetchval("SELECT n.nspname FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace "
-                               "WHERE e.extname = 'pg_trgm'")
+async def _trgm_unavailable_why(conn) -> str:
+    '''Why `_trgm_mode` said no, for the log (the extension's schema, or its absence).'''
+    row = await conn.fetchrow("SELECT n.nspname AS schema FROM pg_extension e JOIN pg_namespace n "
+                              "ON n.oid = e.extnamespace WHERE e.extname = 'pg_trgm'")
+    if row is None:
+        return 'pg_trgm unavailable'
+    return (f"pg_trgm is installed in schema {row['schema']!r}, but this role has no USAGE on it (and it is not on "
+            "the search_path)")
 
 
-async def _detect_search(conn) -> bool:
-    '''`_ensure_search` without the DDL: is indexed search usable on this connection?'''
-    return await _trgm_usable(conn)
+def _trgm_names(schema: str) -> dict:
+    '''The `pg_trgm` names `search` and the index use, qualified with `schema` unless that is `''` (on the path).'''
+    if not schema:
+        return {'sim_op': '%', 'word_op': '<%', 'sim': 'similarity', 'word_sim': 'word_similarity',
+                'ops': 'gin_trgm_ops'}
+    return {'sim_op': f'OPERATOR({schema}.%)', 'word_op': f'OPERATOR({schema}.<%)', 'sim': f'{schema}.similarity',
+            'word_sim': f'{schema}.word_similarity', 'ops': f'{schema}.gin_trgm_ops'}
+
+
+async def _detect_search(conn) -> str | None:
+    '''`_ensure_search` without the DDL: how can this connection use indexed search (see `_trgm_mode`)?'''
+    return await _trgm_mode(conn)
 
 
 # Mirror of `onya.query.normalize` in SQL: lowercase, collapse non-alphanumeric runs to one
@@ -489,11 +518,11 @@ async def _ensure_search(conn) -> bool:
     '''
     Bootstrap search support, creating only what's missing: the ``onya_normalize`` function,
     the ``pg_trgm`` extension (stock PostgreSQL and the usual hosted offerings ship it), and a
-    GIN trigram index over normalized property values. Returns whether indexed-path search is
-    usable *on this connection*: the function and the trigram operators resolve on its ``search_path``
-    (an extension installed in a schema the path excludes does not count). Search is optional, so nothing
-    here fails the open: each step runs in a savepoint, and a role that can't create a missing object just
-    gets a logged notice and, at worst, in-process ranking.
+    GIN trigram index over normalized property values. Returns how indexed-path search can use ``pg_trgm`` on
+    this connection (``_trgm_mode``: unqualified, qualified with the extension's schema when the path excludes
+    it, or None for in-process ranking). Search is optional, so nothing here fails the open: each
+    step runs in a savepoint, and a role that can't create a missing object just gets a logged
+    notice and, at worst, in-process ranking.
 
     An existing ``onya_normalize`` is left as is (not ``CREATE OR REPLACE``d, which would need
     ownership); if its definition ever changes, this must compare definitions before skipping.
@@ -508,20 +537,19 @@ async def _ensure_search(conn) -> bool:
         logger.info('onya_normalize() could not be created (%s); onya search will rank in-process', err)
     if not await has_ext() and (err := await _try_ddl(conn, 'CREATE EXTENSION IF NOT EXISTS pg_trgm')) is not None:
         logger.info('pg_trgm could not be enabled (%s); onya search will rank in-process', err)
-    if not await _trgm_usable(conn):
-        if (where := await _trgm_schema(conn)) is not None:  # installed, but not where this connection looks
-            logger.info('pg_trgm is installed in schema %r, which is not on this connection\'s search_path; add it '
-                        'to the role\'s search_path for indexed search. onya search will rank in-process (unindexed)',
-                        where)
-        else:
-            logger.info('pg_trgm unavailable; onya search will rank in-process (unindexed)')
-        return False
+    mode = await _trgm_mode(conn)
+    if mode is None:
+        logger.info('%s; onya search will rank in-process (unindexed)', await _trgm_unavailable_why(conn))
+        return None
+    if mode:
+        logger.info('pg_trgm is installed in schema %s, which is not on this connection\'s search_path; onya search '
+                    'qualifies its names with it', mode)
     if await _missing_relations(conn, ['onya_assertion_value_trgm']):
         err = await _try_ddl(conn, 'CREATE INDEX IF NOT EXISTS onya_assertion_value_trgm ON onya_assertion'
-                                   " USING gin (onya_normalize(value) gin_trgm_ops) WHERE kind = 'P'")
+                                   f" USING gin (onya_normalize(value) {_trgm_names(mode)['ops']}) WHERE kind = 'P'")
         if err is not None:
             logger.info('onya search trigram index could not be created (%s); trigram search runs unindexed', err)
-    return True
+    return mode
 
 
 def _search_filters(args: list, labels, types) -> str:
@@ -552,8 +580,12 @@ async def _search_candidates(conn, gpk: int, labels, types) -> list:
     return await conn.fetch(sql, *args)
 
 
-async def _search_trgm(conn, gpk: int, query: str, labels, types, min_score: float) -> list:
-    '''Indexed search (call inside a transaction: the trigram thresholds are ``SET LOCAL``).'''
+async def _search_trgm(conn, gpk: int, query: str, labels, types, min_score: float, schema: str = '') -> list:
+    '''
+    Indexed search (call inside a transaction: the trigram thresholds are ``SET LOCAL``). `schema` is how
+    `pg_trgm` is named (see `_trgm_mode`): '' for unqualified, else the quoted schema it lives in.
+    '''
+    n = _trgm_names(schema)
     q = await conn.fetchval('SELECT onya_normalize($1)', query)  # same normalization as the index
     if not q:
         return []
@@ -572,8 +604,8 @@ async def _search_trgm(conn, gpk: int, query: str, labels, types, min_score: flo
             JOIN onya_ident i ON i.ident_pk = n.ident_pk
             WHERE a.graph_pk = $1 AND a.kind = 'P'{filters}
               AND (onya_normalize(a.value) LIKE $3
-                   OR $2 % onya_normalize(a.value)
-                   OR $2 <% onya_normalize(a.value))
+                   OR $2 {n['sim_op']} onya_normalize(a.value)
+                   OR $2 {n['word_op']} onya_normalize(a.value))
         ), t AS (
             SELECT node_id, label, value, nv,
                    CASE WHEN nv = $2 THEN 'exact'
@@ -584,8 +616,8 @@ async def _search_trgm(conn, gpk: int, query: str, labels, types, min_score: flo
         )
         SELECT node_id, label, value, tier,
                CASE tier WHEN 'exact' THEN 1.0
-                         WHEN 'fuzzy' THEN greatest(similarity($2, nv), word_similarity($2, nv))
-                         ELSE similarity($2, nv) END AS score
+                         WHEN 'fuzzy' THEN greatest({n['sim']}($2, nv), {n['word_sim']}($2, nv))
+                         ELSE {n['sim']}($2, nv) END AS score
         FROM t
     '''
     return await conn.fetch(sql, *args)
