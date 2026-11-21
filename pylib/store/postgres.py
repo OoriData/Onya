@@ -452,11 +452,27 @@ async def _check_schema(conn) -> None:
             raise UnknownSchemaVersion(found=val, expected=expected)
 
 
-async def _detect_search(conn) -> bool:
-    '''`_ensure_search` without the DDL: is indexed search usable (the extension and the function)?'''
+async def _trgm_usable(conn) -> bool:
+    '''
+    Can this connection run indexed search: `onya_normalize` and the trigram operators `search` uses (`%` and `<%`)
+    all resolve **on its own `search_path`**? `pg_extension` isn't the question: `pg_trgm` can be installed in
+    another schema (Supabase's `extensions`) that the role's path excludes, and then the operators don't exist
+    here, `gin_trgm_ops` can't be named, and a `search` on the indexed path fails.
+    '''
     return bool(await conn.fetchval(
         "SELECT to_regprocedure('onya_normalize(text)') IS NOT NULL "
-        "AND EXISTS (SELECT 1 FROM pg_extension WHERE extname = 'pg_trgm')"))
+        "AND to_regoperator('%(text,text)') IS NOT NULL AND to_regoperator('<%(text,text)') IS NOT NULL"))
+
+
+async def _trgm_schema(conn) -> str | None:
+    '''The schema `pg_trgm` is installed in, if it is installed at all (for saying why it isn't reachable).'''
+    return await conn.fetchval("SELECT n.nspname FROM pg_extension e JOIN pg_namespace n ON n.oid = e.extnamespace "
+                               "WHERE e.extname = 'pg_trgm'")
+
+
+async def _detect_search(conn) -> bool:
+    '''`_ensure_search` without the DDL: is indexed search usable on this connection?'''
+    return await _trgm_usable(conn)
 
 
 # Mirror of `onya.query.normalize` in SQL: lowercase, collapse non-alphanumeric runs to one
@@ -474,9 +490,10 @@ async def _ensure_search(conn) -> bool:
     Bootstrap search support, creating only what's missing: the ``onya_normalize`` function,
     the ``pg_trgm`` extension (stock PostgreSQL and the usual hosted offerings ship it), and a
     GIN trigram index over normalized property values. Returns whether indexed-path search is
-    usable (extension + function). Search is optional, so nothing here fails the open: each
-    step runs in a savepoint, and a role that can't create a missing object just gets a logged
-    notice and, at worst, in-process ranking.
+    usable *on this connection*: the function and the trigram operators resolve on its ``search_path``
+    (an extension installed in a schema the path excludes does not count). Search is optional, so nothing
+    here fails the open: each step runs in a savepoint, and a role that can't create a missing object just
+    gets a logged notice and, at worst, in-process ranking.
 
     An existing ``onya_normalize`` is left as is (not ``CREATE OR REPLACE``d, which would need
     ownership); if its definition ever changes, this must compare definitions before skipping.
@@ -491,9 +508,13 @@ async def _ensure_search(conn) -> bool:
         logger.info('onya_normalize() could not be created (%s); onya search will rank in-process', err)
     if not await has_ext() and (err := await _try_ddl(conn, 'CREATE EXTENSION IF NOT EXISTS pg_trgm')) is not None:
         logger.info('pg_trgm could not be enabled (%s); onya search will rank in-process', err)
-    usable = await has_ext() and await has_fn()
-    if not usable:
-        logger.info('pg_trgm unavailable; onya search will rank in-process (unindexed)')
+    if not await _trgm_usable(conn):
+        if (where := await _trgm_schema(conn)) is not None:  # installed, but not where this connection looks
+            logger.info('pg_trgm is installed in schema %r, which is not on this connection\'s search_path; add it '
+                        'to the role\'s search_path for indexed search. onya search will rank in-process (unindexed)',
+                        where)
+        else:
+            logger.info('pg_trgm unavailable; onya search will rank in-process (unindexed)')
         return False
     if await _missing_relations(conn, ['onya_assertion_value_trgm']):
         err = await _try_ddl(conn, 'CREATE INDEX IF NOT EXISTS onya_assertion_value_trgm ON onya_assertion'
