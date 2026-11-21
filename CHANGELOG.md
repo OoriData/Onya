@@ -6,11 +6,12 @@ For interim changes not yet earmarked for a particular release, can use this hea
 ## [Unreleased]
 -->
 
-## [0.7.2] 2026-11-20: Fix `validate(..., against=base)` and `validate(g, shapes=<compiled Shapes>)` crashing when a `@Property` declares `@circumQuery`.
+## [0.7.2] 2026-11-20: Fix `validate(…, against=base)` and `validate(g, shapes=<compiled Shapes>)` crashing when a `@Property` declares `@circumQuery`. Fix `has_trgm` being true when `pg_trgm`'s operators aren't on the connection's `search_path`.
 
 ### Fixed
 
 - **`validate(fragment, against=base)` and `validate(g, shapes=load_shapes(...))` raised `AttributeError: 'Shapes' object has no attribute 'nodes'` whenever a `@Property` in the shapes declared `@circumQuery`** (#88). `validate` looked up each circum property's sidecar by reading the declarations again from the shapes' graph, which a compiled `Shapes` (what `against=` always passes along, and what you get from `load_shapes`) is not. `PropertyShape` now records the sidecar it points at (`sidecar`, an id, or `None`), so the view-only `@cardinality` check of a circum property (a missing value is a gap on a view, and not on a graph) works from the shapes alone. A circum declaration that is itself broken (a `@circumQuery` naming no `@Sidecar`) is still reported when the shapes are a graph; with a compiled `Shapes` there are no sidecar nodes to check, so it is skipped, as `validate` already did for the declaration problems.
+- **`PostgresStore` said search was indexed when `pg_trgm`'s operators weren't reachable, and `search` then raised** (#90). Detection asked whether `pg_trgm` exists anywhere in the database, so with it installed in another schema (Supabase puts it in `extensions`) and a role whose `search_path` excludes that schema, `has_trgm` was true, the trigram index silently wasn't created (`gin_trgm_ops` couldn't be named), and `store.search` failed with `operator does not exist: unknown % text`. Both `from_pool(ensure=True)` and `ensure=False` (so `connect`) now ask whether `onya_normalize` and the `%` and `<%` operators resolve **on the connection's own path**. If not, `has_trgm` is false and search ranks in-process, with a log line saying which schema `pg_trgm` is in and that adding it to the role's `search_path` gives indexed search. Qualifying the operators with the extension's schema, so that indexed search works without changing the path, is not part of this.
 
 ## [0.7.1] 2026-11-18: Declaration lists (`@oneOf`, `@qualifier`, `@attribute`, `@replacedBy`) keep an author's order, via the ordering layer, instead of a set's arbitrary one. `@range`, `@oneOf` and deprecation checked on nested assertions. `uses()`: where declared labels are used.
 
