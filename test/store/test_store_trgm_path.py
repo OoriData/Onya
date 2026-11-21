@@ -12,7 +12,6 @@ import logging
 import os
 import uuid
 
-import asyncpg
 import pytest
 
 from onya.store.postgres import PostgresStore
@@ -38,6 +37,7 @@ NAME = 'http://e.o/doc'
 @pytest.fixture
 async def db():
     '''A fresh database with `pg_trgm` in schema `extensions`, and an empty `tenant` schema.'''
+    import asyncpg  # lazy, like the other PostgreSQL tests: the default install doesn't have it
     dsn, name = os.environ['ONYA_TEST_PG_DSN'], 'onya_trgm_' + uuid.uuid4().hex[:8]
     admin = await asyncpg.connect(dsn)
     try:
@@ -59,6 +59,7 @@ async def db():
 
 
 async def store_on(db, search_path, **kw):
+    import asyncpg
     dsn, name = db
     pool = await asyncpg.create_pool(dsn, database=name, min_size=1, max_size=2,
                                      server_settings={'search_path': search_path})
@@ -66,6 +67,7 @@ async def store_on(db, search_path, **kw):
 
 
 async def trgm_indexes(db):
+    import asyncpg
     dsn, name = db
     c = await asyncpg.connect(dsn, database=name)
     try:
